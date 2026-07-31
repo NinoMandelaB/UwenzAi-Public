@@ -1,0 +1,82 @@
+# --- Core Django ---
+Django==6.0.7
+
+# --- API ---
+djangorestframework==3.16.1
+djangorestframework-simplejwt==5.5.1
+django-cors-headers==4.9.0
+django-filter==25.2
+
+# --- Database ---
+psycopg2-binary==2.9.11
+dj-database-url==3.1.2
+
+# --- Env & Utilities ---
+python-dotenv==1.2.2
+pytz==2026.1.post1
+python-slugify==8.0.4
+Pillow==12.3.0
+
+# --- Static files ---
+whitenoise==6.12.0
+
+# --- Media storage (Railway S3-compatible Bucket via django-storages) ---
+django-storages[s3]==1.14.6
+boto3==1.43.54
+
+# --- Async / Background ---
+redis==7.3.0
+celery==5.6.2
+
+# --- WebSockets (Django Channels) ---
+channels==4.3.2
+channels-redis==4.3.0
+
+# --- ASGI Server (with WebSocket support) ---
+uvicorn[standard]==0.42.0
+
+# --- Optional ---
+gunicorn==25.1.0
+
+# --- Auth Providers ---
+google-auth==2.29.0
+
+# --- HTTP ---
+requests==2.33.0
+
+cryptography==46.0.7
+
+# --- Mistral ---
+mistral-common>=1.5.0,<1.6.0
+langdetect==1.0.9
+
+# pgvector Python adapter for PostgreSQL vector operations
+pgvector
+
+# --- Cortecs ---
+openai>=1.50.0
+
+# --- Tokenizers ---
+tiktoken>=0.9.0
+
+#---fal.ai----
+fal-client==1.0.0
+
+# --- Error Monitoring (opt-in via SENTRY_DSN) ---
+sentry-sdk==2.20.0
+
+# --- Development & Code Quality ---
+black==26.5.1
+flake8==7.1.2
+autoflake==2.3.1
+
+# --- Security floors for transitive dependencies ---
+# Not imported directly. Each is pinned to the lowest patched release that clears
+# a known advisory so pip-compile can never resolve back to a vulnerable version.
+# Drop a floor only once no dependency can select below it.
+click>=8.3.3          # PYSEC-2026-2132
+idna>=3.15            # PYSEC-2026-215
+msgpack>=1.2.1        # GHSA-6v7p-g79w-8964
+pyasn1>=0.6.4         # PYSEC-2026-3455, PYSEC-2026-3456, PYSEC-2026-3457
+PyJWT>=2.13.0         # PYSEC-2026-175 .. PYSEC-2026-179
+urllib3>=2.7.0        # PYSEC-2026-141, PYSEC-2026-142

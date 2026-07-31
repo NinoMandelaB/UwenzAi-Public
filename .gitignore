@@ -1,0 +1,235 @@
+# =============================================================================
+# UwenzAi — public source release .gitignore
+#
+# This repository is a curated source release. Anything that could carry a
+# secret, customer data, production state, or internal-only documentation must
+# never be committed here.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Secrets and credentials — highest priority
+# -----------------------------------------------------------------------------
+.env
+.env.*
+*.env
+!.env.example
+secrets/
+secrets.*
+credentials.*
+*credential*
+*secret*
+*.secret
+service-account*.json
+gcp-*.json
+aws-credentials
+.aws/
+.netrc
+.npmrc
+.pypirc
+
+# Private keys, certificates, keystores
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.crt
+*.cer
+*.der
+*.asc
+*.gpg
+*.kdbx
+id_rsa*
+id_ecdsa*
+id_ed25519*
+*.ppk
+
+# -----------------------------------------------------------------------------
+# CI/CD and internal automation (maintained privately, never published here)
+# -----------------------------------------------------------------------------
+.github/workflows/
+.gitlab-ci.yml
+.circleci/
+
+# -----------------------------------------------------------------------------
+# Internal documentation and product material
+# -----------------------------------------------------------------------------
+Backend/docs/
+project documents/
+/project documents/character_picker_images
+Frontend/src/i18n/legal/README.md
+
+# Development-only privacy/legal notice modules
+Frontend/src/i18n/legal/devNotice.*.js
+Frontend/src/pages/terms/DevServerPrivacyNotice.jsx
+
+# SEO-only files
+frontend/public/robots.txt
+frontend/public/sitemap.xml
+frontend/public/llm.txt
+
+# -----------------------------------------------------------------------------
+# Databases, dumps and data exports
+# -----------------------------------------------------------------------------
+*.sqlite
+*.sqlite3
+*.sqlite3-journal
+*.db
+db.sqlite3
+db.sqlite3-journal
+*.sql
+*.dump
+*.bak
+*.rdb
+dump.rdb
+*.csv
+*.tsv
+*.parquet
+fixtures/*.json
+!Backend/**/migrations/*.py
+
+# -----------------------------------------------------------------------------
+# Uploads, media and user content
+# -----------------------------------------------------------------------------
+media/
+uploads/
+staticfiles/
+static_root/
+Backend/media/
+Backend/staticfiles/
+
+# -----------------------------------------------------------------------------
+# Logs and crash artefacts
+# -----------------------------------------------------------------------------
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+celerybeat-schedule
+celerybeat.pid
+*.pid
+*.sock
+core
+*.stackdump
+
+# -----------------------------------------------------------------------------
+# Caches
+# -----------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.tox/
+.nox/
+.cache/
+.parcel-cache/
+.eslintcache
+.stylelintcache
+.vite/
+node_modules/
+.npm/
+.yarn/
+.pnp.*
+
+# -----------------------------------------------------------------------------
+# Build outputs and source maps
+# -----------------------------------------------------------------------------
+build/
+dist/
+out/
+*.egg-info/
+*.egg
+*.whl
+*.map
+*.js.map
+*.css.map
+coverage/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+.nyc_output/
+
+# -----------------------------------------------------------------------------
+# Archives (keep large/opaque blobs out of a source repo)
+# -----------------------------------------------------------------------------
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.tar.bz2
+*.tar.xz
+*.rar
+*.7z
+*.gz
+*.bz2
+*.xz
+
+# -----------------------------------------------------------------------------
+# Virtual environments
+# -----------------------------------------------------------------------------
+venv/
+env/
+ENV/
+.venv/
+virtualenv/
+
+# -----------------------------------------------------------------------------
+# Editors, IDEs and workspace files
+# -----------------------------------------------------------------------------
+.vscode/
+.idea/
+*.iml
+*.code-workspace
+*.sublime-project
+*.sublime-workspace
+.history/
+.direnv/
+
+# -----------------------------------------------------------------------------
+# OS noise
+# -----------------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# -----------------------------------------------------------------------------
+# Local platform / deployment scratch state
+# -----------------------------------------------------------------------------
+.railway/
+railway.json
+.vercel/
+.netlify/
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+.serverless/
+docker-compose.override.yml
+
+# -----------------------------------------------------------------------------
+# Scratch and temporary files
+# -----------------------------------------------------------------------------
+temp_script.py
+tmp/
+temp/
+scratch/
+*.tmp
+*.temp
+*.orig
+*.rej
+*.swp
+*.swo
+*~
+TODO.local.md
+NOTES.local.md

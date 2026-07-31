@@ -1,0 +1,4 @@
+web: uvicorn eaaicproject.asgi:application --host 0.0.0.0 --port $PORT
+worker: celery -A eaaicproject worker -Q general --concurrency=${GENERAL_WORKER_CONCURRENCY:-2} --loglevel=info
+imageworker: celery -A eaaicproject worker -Q images --concurrency=${IMAGE_WORKER_CONCURRENCY:-2} --loglevel=info
+beat: celery -A eaaicproject beat --loglevel=info --scheduler celery.beat.PersistentScheduler

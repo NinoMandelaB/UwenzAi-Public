@@ -1,0 +1,156 @@
+UwenzAi Source-Available License v1.0 
+
+Copyright (c) 2026
+UwenzAi Limited
+Nairobi, Kenya
+P.O. Box 13583 - 00800
+https://www.uwenzai.com
+All rights reserved.
+
+
+1. Definitions
+--------------
+
+1.1. "Company" means UwenzAi Limited, a company organized under the laws of Kenya.
+
+1.2. "Owner" means the original owner of the primary GitHub repository for the Software, identified by the GitHub username "NinoMandelaB". For the purposes of this License, the Owner is granted certain rights as described herein but does not assume any obligations toward you and is not a contracting party to this License.
+
+1.3. "Software" means the UwenzAi AI-Companion application and all associated source code, configuration files, and documentation that are made available by the Company under this License, together with any modifications or derivative works you create, to the extent they are based on the Software.
+
+1.4. "You" (or "your") means any individual or entity exercising permissions granted by this License, other than the Company and the Owner.
+
+1.5. "Non-Commercial Use" means any use of the Software that is not Commercial Use. Non-Commercial Use includes personal, educational, research, experimentation, evaluation, and internal use within an organization where the Software is not used to provide a product or service to third parties for any form of compensation or commercial advantage.
+
+1.6. "Commercial Use" means any use of the Software or a derivative work of the Software:
+(a) to provide, operate, or enable a product or service for which you or a third party receive, expect to receive, or intend to receive any form of payment, fee, subscription, salary, sponsorship, commission, or other commercial benefit; or
+(b) that is supported, funded, or monetized directly or indirectly by advertising, affiliate programs, lead generation, sale of user data, or similar revenue-related mechanisms; or
+(c) to provide functionality that competes with, substitutes for, or materially replicates services offered by the Company.
+
+1.7. "Hosted Service" means making the Software or a derivative work of the Software available for remote access over a network (including but not limited to web applications, APIs, or backend services), where third parties can interact with the Software or obtain results produced by the Software.
+
+
+2. Grant of Rights for Non-Commercial Use
+-----------------------------------------
+
+2.1. Subject to your continued compliance with this License, the Company grants you a personal, worldwide, royalty-free, non-exclusive, non-transferable, and non-sublicensable license to:
+(a) access, use, and run the Software for Non-Commercial Use;
+(b) copy the Software in source form for backup, archival, educational, or testing purposes;
+(c) modify the Software and create derivative works for Non-Commercial Use; and
+(d) redistribute the Software and your derivative works in source form to others, provided that:
+(i) such redistribution is solely for Non-Commercial Use;
+(ii) you include this License in full with every copy;
+(iii) you do not remove or alter any copyright, trademark, or notice lines; and
+(iv) you clearly indicate the changes you have made.
+
+2.2. You may operate the Software as a Hosted Service solely for Non-Commercial Use (for example, for personal experimentation, educational demonstrations, or internal evaluation), provided that no fees or other commercial benefits are derived from or linked to that Hosted Service.
+
+
+3. Restrictions
+---------------
+
+3.1. Except as expressly permitted in Section 2, you shall not, and shall not permit any third party to:
+(a) make any Commercial Use of the Software or any derivative work of the Software;
+(b) offer the Software or a derivative work of the Software as a Hosted Service to any third party as part of a commercial product, platform, or service;
+(c) sell, license, sublicense, rent, lease, or otherwise make the Software or any derivative work of the Software available to third parties in exchange for money or any other consideration;
+(d) use the Software or a derivative work of the Software to provide services to third parties if such services are paid or otherwise monetized, directly or indirectly;
+(e) circumvent, disable, or work around technical or contractual measures designed to enforce the non-commercial nature of this License; or
+(f) remove or obscure any proprietary notices, trademarks, or attributions of the Company.
+
+3.2. Commercial licensing of the Software or any derivative work to you (or any other third party) requires a separate written agreement with the Company. Only the Company may grant such commercial licenses; the Owner does not grant commercial licenses to third parties under this License. Absent a written commercial agreement with the Company, all Commercial Use by you is expressly prohibited.
+
+3.3. Notwithstanding Section 3.2, the Owner personally retains an irrevocable, perpetual, worldwide, royalty-free, non-exclusive right to use, modify, host, and otherwise make Commercial Use of the Software and derivative works of the Software for the Owner's own purposes, including without limitation in connection with the Company or any other venture controlled by or associated with the Owner. This right is held by the Owner in their personal capacity and does not require permission from, or any further agreement with, the Company. The Owner may not, however, grant commercial licenses to third parties under this License; that right is reserved exclusively to the Company under Section 3.2.
+
+
+4. Third-Party Software and Services
+------------------------------------
+
+4.1. The Software may interface, integrate, or interoperate with third-party software, libraries, models, APIs, platforms, or services (collectively, "Third-Party Components").
+
+4.2. Third-Party Components are governed by their respective license terms and conditions, which are independent of this License. Nothing in this License grants you any rights to Third-Party Components, and you are solely responsible for obtaining and complying with any necessary rights, permissions, or licenses for such Third-Party Components.
+
+4.3. The Company makes no representations or warranties regarding Third-Party Components and disclaims any responsibility or liability arising from your use of them.
+
+
+5. Future Conversion to GNU AGPL-3.0
+------------------------------------
+
+5.1. For each distinct version of the Software released by the Company under this License, a "Version Release Date" is the date on which that version is first made publicly available under this License.
+
+5.2. On the seventh (7th) anniversary of the Version Release Date for a given version of the Software, that version of the Software (including the corresponding state of its source code as of that date) will automatically and irrevocably become licensed under the terms of the GNU Affero General Public License version 3.0 (AGPL-3.0), as published by the Free Software Foundation at https://www.gnu.org/licenses/agpl-3.0.html (or any successor URL).
+
+5.3. Upon such conversion, your rights to that version of the Software shall be governed by the AGPL-3.0 for all future uses of that version. This License will cease to apply to that version as of the conversion date, except to the extent necessary to enforce any prior breach of this License.
+
+5.4. The seven (7) year period described in this Section 5 runs separately for each version of the Software. The conversion of one version to AGPL-3.0 does not affect the licensing or conversion schedule of any other version.
+
+5.5. For the avoidance of doubt, conversion under this Section 5 applies only to the Software as licensed under this License. It does not apply to:
+(a) the hosted Service operated by the Company (which remains governed by the Terms of Use in Part C and the Privacy Policy in Part B);
+(b) any trademarks, logos, brand names, or service marks of the Company; or
+(c) any Third-Party Components, which remain subject to their own terms.
+
+
+6. Term and Termination
+-----------------------
+
+6.1. This License is effective from the date you first access or use the Software and will remain in effect unless terminated in accordance with this Section.
+
+6.2. The Company may terminate this License immediately upon written notice to you if you materially breach any provision of this License and fail to cure such breach (if curable) within thirty (30) days after receiving notice of the breach.
+
+6.3. Upon termination of this License, you must immediately cease all use of the Software and destroy all copies of the Software in your possession or control. Sections 3, 4, 6.3, 7, 8, 9, and 10 shall survive termination.
+
+6.4. Termination of this License does not affect any rights you may have under AGPL-3.0 for any version of the Software that has already converted in accordance with Section 5.
+
+
+7. Disclaimer of Warranties
+---------------------------
+
+7.1. THE SOFTWARE IS PROVIDED "AS IS" AND "AS AVAILABLE", WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, WHETHER EXPRESS, IMPLIED, OR STATUTORY.
+
+7.2. WITHOUT LIMITING THE FOREGOING, THE COMPANY SPECIFICALLY DISCLAIMS ALL IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT, AS WELL AS ANY WARRANTIES ARISING OUT OF COURSE OF DEALING OR USAGE OF TRADE.
+
+7.3. THE COMPANY DOES NOT WARRANT THAT THE SOFTWARE WILL BE UNINTERRUPTED, ERROR-FREE, SECURE, OR COMPATIBLE WITH ANY PARTICULAR SYSTEM, ENVIRONMENT, OR THIRD-PARTY COMPONENT.
+
+
+8. Limitation of Liability
+--------------------------
+
+8.1. TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL THE COMPANY OR ITS DIRECTORS, OFFICERS, EMPLOYEES, CONTRACTORS, OR AFFILIATES BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, EXEMPLARY, OR PUNITIVE DAMAGES, OR FOR ANY LOSS OF PROFITS, REVENUE, DATA, GOODWILL, OR BUSINESS OPPORTUNITIES, ARISING OUT OF OR IN CONNECTION WITH THIS LICENSE OR THE USE OF OR INABILITY TO USE THE SOFTWARE, WHETHER BASED ON CONTRACT, TORT, STRICT LIABILITY, OR ANY OTHER LEGAL THEORY, EVEN IF THE COMPANY HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+
+8.2. TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, THE COMPANY'S TOTAL AGGREGATE LIABILITY UNDER OR IN CONNECTION WITH THIS LICENSE SHALL BE LIMITED TO THE LOWEST AMOUNT PERMITTED UNDER APPLICABLE LAW.
+
+8.3. NOTHING IN THIS LICENSE EXCLUDES OR LIMITS LIABILITY THAT CANNOT BE EXCLUDED OR LIMITED UNDER APPLICABLE LAW (FOR EXAMPLE, LIABILITY FOR DEATH, PERSONAL INJURY, FRAUD, OR WILLFUL MISCONDUCT, WHERE NON-EXCLUDABLE).
+
+
+9. Indemnity
+------------
+
+9.1. You agree to indemnify, defend, and hold harmless the Company from and against any and all claims, damages, liabilities, losses, costs, and expenses (including reasonable attorneys' fees) arising out of or relating to: (a) your use of the Software; (b) your violation of this License; or (c) your violation of any applicable law or rights of a third party.
+
+
+10. Reserved Rights of Company and Owner
+----------------------------------------
+
+10.1. Nothing in this License shall be construed to limit or restrict any rights of the Company or the Owner to use, modify, host, or otherwise make Commercial Use of the Software (including under proprietary or different source-available or open-source terms) in any manner, subject to Section 3.2 with respect to commercial licensing of the Software to third parties.
+
+10.2. For the avoidance of doubt, both the Company and the Owner may make Commercial Use of the Software and derivative works of the Software for their own purposes without being subject to the non-commercial restrictions of Sections 2 and 3.
+
+10.3. Only the Company may grant commercial licenses of the Software (or derivative works of the Software) to third parties; the Owner shall not grant such third-party commercial licenses under this License. The Owner's rights under Section 3.3 are personal to the Owner and do not include the right to sublicense the Software commercially to third parties.
+
+10.4. This License creates rights and obligations only between you and the Company. The Owner is not liable to you under this License, and you shall not bring any claim, action, or proceeding against the Owner arising out of or relating to this License or the Software. Any such claim must be directed exclusively against the Company.
+
+
+11. General
+-----------
+
+11.1. This License is governed by and construed in accordance with the laws of Kenya, without regard to its conflict-of-laws principles.
+
+11.2. Any dispute, controversy, or claim arising out of or relating to this License or the use of the Software shall be brought exclusively against the Company and shall be subject to the exclusive jurisdiction of the courts of Kenya. You agree and consent to personal jurisdiction and venue in those courts. You waive any right to bring or join the Owner as a party to any such dispute, controversy, or claim.
+
+11.3. If any provision of this License is held to be invalid, illegal, or unenforceable, the remaining provisions shall remain in full force and effect, and the invalid, illegal, or unenforceable provision shall be deemed modified to the minimum extent necessary to make it valid and enforceable.
+
+11.4. This License constitutes the entire agreement between you and the Company with respect to the Software and supersedes all prior or contemporaneous understandings, whether written or oral, relating to the Software.
+
+11.5. The Company may publish updated versions of this License from time to time for future releases of the Software. Such updated versions will not retroactively change the terms applicable to a version of the Software already released under this License, except as provided in Section 5.
+
+11.6. Contact for License-related notices: info@uwenzai.com.
+
+

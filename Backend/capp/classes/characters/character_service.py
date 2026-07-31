@@ -1,0 +1,3510 @@
+import logging
+import json
+import re
+from typing import Dict, Any, List, Optional, Tuple
+
+from django.db import IntegrityError, transaction
+from django.db.models import Q
+from django.utils import timezone
+from django.utils.text import slugify
+
+from PIL import Image, UnidentifiedImageError
+
+from capp.models import (
+    BillingReservation,
+    Character,
+    Conversation,
+    CustomUser,
+    SparkTransaction,
+)
+from capp.classes.billing.balances import credit_locked, lock_spark_pool
+from capp.classes.billing.paid_features import (
+    InsufficientBalance,
+    PaidFeature,
+    ReservationError,
+    is_free_actor,
+)
+from capp.classes.moderation.image_prompt_policy import (
+    ImagePromptPolicy,
+    ProhibitedImageSubjectError,
+)
+from capp.classes.ai.mistral_client import MistralClient
+from capp.constants import CASHBACK_PUBLIC_CHARACTER, COUNTRY_TIMEZONE_MAP
+
+logger = logging.getLogger(__name__)
+
+
+class CharacterService:
+    # ---------- Wizard Field Validation Constants ----------
+    # These directly reference the TextChoices enums from the Character model.
+    VALID_VISUAL_STYLES = {choice[0] for choice in Character.VisualStyle.choices}
+    VALID_SKIN_COLORS = {choice[0] for choice in Character.SkinColor.choices}
+    VALID_HAIRSTYLES = {choice[0] for choice in Character.Hairstyle.choices}
+    VALID_HAIR_COLORS = {choice[0] for choice in Character.HairColor.choices}
+    VALID_BODY_TYPES = {choice[0] for choice in Character.BodyType.choices}
+    VALID_BREAST_SIZES = {choice[0] for choice in Character.BreastSize.choices}
+    VALID_BUTT_SIZES = {choice[0] for choice in Character.ButtSize.choices}
+    VALID_CHEST_HAIR = {choice[0] for choice in Character.ChestHair.choices}
+    VALID_MUSCLE_DEFINITIONS = {choice[0] for choice in Character.MuscleDefinition.choices}
+    VALID_BEARD_STYLES = {choice[0] for choice in Character.BeardStyle.choices}
+    VALID_PERSONALITIES = {choice[0] for choice in Character.Personality.choices}
+    VALID_RELATIONSHIP_STYLES = {choice[0] for choice in Character.RelationshipStyle.choices}
+    VALID_CLOTHING_STYLES = {choice[0] for choice in Character.ClothingStyle.choices}
+    VALID_AVATAR_SOURCES = {choice[0] for choice in Character.AvatarSource.choices}
+
+    # Age constraints
+    MIN_AGE = 18
+    MAX_AGE = 100
+
+    ALLOWED_TONE_STYLES = {
+        "warm",
+        "playful",
+        "bold",
+        "calm",
+        "romantic",
+        "professional",
+    }
+
+    ALLOWED_AVATAR_CONTENT_TYPES = {
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+    }
+
+    MAX_AVATAR_FILE_SIZE_BYTES = 5 * 1024 * 1024
+    MIN_AVATAR_WIDTH = 400
+    MIN_AVATAR_HEIGHT = 400
+
+    @classmethod
+    def _generate_persona_fields(cls, payload: Dict[str, Any]) -> Dict[str, str]:
+        """
+        Auto‑generate the five character persona fields using Mistral.
+        Requests a JSON object with clearly named keys, parses it,
+        and falls back gracefully on any error.
+        """
+        try:
+            name = payload.get("name", "character")
+            gender = payload.get("gender", "female")
+            visual_style = payload.get("visual_style", "realistic")
+            personality = payload.get("personality", "friendly")
+            tone_style = payload.get("tone_style", "warm")
+            relationship_style = payload.get("relationship_style", "companion")
+            clothing_style = payload.get("clothing_style", "casual")
+            body_type = payload.get("body_type", "average")
+            age = payload.get("age", 25)
+            hair_color = payload.get("hair_color", "brown")
+            eye_color = payload.get("eye_color", "brown")
+
+            # Resolve occupation name if available
+            occupation_name = ""
+            occ_id = payload.get("occupation_id") or payload.get("occupation")
+            if occ_id:
+                try:
+                    from capp.models import Occupation
+
+                    occupation = Occupation.objects.get(id=occ_id)
+                    occupation_name = occupation.name
+                except Exception:
+                    occupation_name = str(occ_id)
+
+            # Resolve hobby names
+            hobbies = []
+            if payload.get("hobby_ids"):
+                try:
+                    from capp.models import Hobby
+
+                    hobby_qs = Hobby.objects.filter(id__in=payload["hobby_ids"])
+                    hobbies = [h.name for h in hobby_qs]
+                except Exception:
+                    pass
+
+            nsfw_instruction = ""
+            if payload.get("nsfw_enabled"):
+                nsfw_instruction = (
+                    "This character is intended for mature audiences. "
+                    "The personality should be flirtatious, seductive, or intimately romantic. "
+                    "The greeting message may include playful or suggestive language. "
+                    "The system instructions should allow the AI to engage in adult-themed conversations "
+                    "while remaining respectful and avoiding explicit or illegal content. "
+                    "The prompt template should reflect this NSFW tone appropriately.\n"
+                )
+
+            prompt = (
+                "Generate a vivid character persona using the traits below.\n"
+                f"Name: {name}\n"
+                f"Gender: {gender}\n"
+                f"Age: {age}\n"
+                f"Personality: {personality}\n"
+                f"Tone: {tone_style}\n"
+                f"Visual style: {visual_style}\n"
+                f"Body type: {body_type}\n"
+                f"Hair color: {hair_color}\n"
+                f"Eye color: {eye_color}\n"
+                f"Clothing style: {clothing_style}\n"
+                f"Relationship style: {relationship_style}\n"
+                f"{'Occupation: ' + occupation_name + chr(10) if occupation_name else ''}"
+                f"{'Hobbies: ' + ', '.join(hobbies) + chr(10) if hobbies else ''}"
+                "\n"
+                f"{nsfw_instruction}"
+                "\n"
+                "Return a single JSON object with these exact keys:\n"
+                "- short_description (max 10 words, a quick tagline).\n"
+                "- greeting_message (max 30 words, warm first message).\n"
+                "- personality_description (max 40 words, backstory/vibe).\n"
+                "- system_instructions (max 40 words, rules for the AI).\n"
+                "- prompt_template: a system‑prompt string using the standard placeholders: "
+                "{name}, {gender}, {personality}, {tone_style}, {personality_description}, "
+                "{system_instructions}, {relationship_section}, {memory_section}, "
+                "{summary_section}, {language_section}. "
+                "Keep it under 200 words.\n"
+                "\n"
+                "Example JSON:\n"
+                '{"short_description":"A warm, supportive friend",'
+                '"greeting_message":"Hey! I\'m so glad you\'re here. How\'s your day going?",'
+                '"personality_description":"A caring companion who loves deep chats and coffee.",'
+                '"system_instructions":"Be supportive. Keep replies short and natural. Never mention being an AI.",'
+                '"prompt_template":""}\n'
+                "\n"
+                "Return ONLY the JSON object, no extra text, no markdown fences."
+            )
+
+            response = MistralClient.chat_completion(
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=400,
+                temperature=0.7,
+            )
+
+            content = response["choices"][0]["message"]["content"].strip()
+
+            # Clean any accidental markdown fences
+            if content.startswith("```"):
+                content = re.sub(r"^```[a-zA-Z]*\s*", "", content)
+                content = re.sub(r"\s*```$", "", content)
+
+            generated = json.loads(content)
+
+            return {
+                "short_description": str(generated.get("short_description", "")),
+                "greeting_message": str(generated.get("greeting_message", "")),
+                "personality_description": str(generated.get("personality_description", "")),
+                "system_instructions": str(generated.get("system_instructions", "")),
+                "prompt_template": str(generated.get("prompt_template", "")),
+            }
+
+        except Exception:
+            logger.exception("Auto-generating persona fields failed")
+            return {
+                "short_description": "",
+                "personality_description": "",
+                "greeting_message": "",
+                "system_instructions": "",
+                "prompt_template": "",
+            }
+
+    @classmethod
+    def create_character(cls, payload: Dict[str, Any], request=None, operation_id: str = None) -> Dict[str, Any]:
+        reservation = None
+        try:
+            actor = getattr(request, "user", None)
+
+            name = (payload.get("name") or "").strip()
+            short_description = (payload.get("short_description") or payload.get("role") or "").strip()
+            mood = (payload.get("mood") or "").strip()
+            category = payload.get("category") or Character.CategoryChoices.SUPPORTIVE
+            category = (category or "").strip()
+            intro = (payload.get("intro") or "").strip()
+
+            # ---------- Personality (now multi-select) ----------
+            personality_ids = (
+                payload.getlist("personality_ids")
+                if hasattr(payload, "getlist")
+                else payload.get("personality_ids", [])
+            )
+
+            personality_description = (payload.get("personality_description") or "").strip()
+            prompt_template = (payload.get("prompt_template") or "").strip()
+            system_instructions = (payload.get("system_instructions") or "").strip() or None
+            greeting_message = (payload.get("greeting_message") or "").strip()
+            tone_style = (payload.get("tone_style") or "").strip()
+            primary_language = (payload.get("primary_language") or Character.LanguageChoices.MULTI).strip()
+
+            # Avatar is optional during wizard creation
+            avatar = cls._extract_avatar(payload=payload, request=request, required=False)
+
+            # ---------- Wizard Fields Extraction ----------
+            gender = (payload.get("gender") or Character.Gender.FEMALE).strip()
+
+            # Location
+            country = (payload.get("country") or "Kenya").strip()
+            town = (payload.get("town") or "Nairobi").strip()
+
+            if country:
+                character_timezone = COUNTRY_TIMEZONE_MAP.get(country, "Africa/Nairobi")
+            else:
+                character_timezone = "Africa/Nairobi"
+
+            # Visual style
+            visual_style = (payload.get("visual_style") or Character.VisualStyle.REALISTIC).strip()
+
+            # Appearance (common)
+            age = int(payload.get("age", 25))
+            eye_color = (payload.get("eye_color") or Character.EyeColor.BROWN).strip()
+            skin_color = (payload.get("skin_color") or Character.SkinColor.MEDIUM).strip()
+            hairstyle = (payload.get("hairstyle") or Character.Hairstyle.MEDIUM).strip()
+            hair_length = (payload.get("hair_length") or Character.HairLength.MEDIUM).strip()
+            hair_color = (payload.get("hair_color") or Character.HairColor.BROWN).strip()
+            body_type = (payload.get("body_type") or Character.BodyType.AVERAGE).strip()
+
+            # Gender-specific
+            breast_size = (payload.get("breast_size") or Character.BreastSize.NA).strip()
+            butt_size = (payload.get("butt_size") or Character.ButtSize.NA).strip()
+            chest_hair = (payload.get("chest_hair") or Character.ChestHair.NA).strip()
+            muscle_definition = (payload.get("muscle_definition") or Character.MuscleDefinition.NA).strip()
+            beard_style = (payload.get("beard_style") or Character.BeardStyle.NA).strip()
+
+            # Occupation and Hobbies
+            occupation_id = payload.get("occupation_id") or payload.get("occupation")
+            hobby_ids = payload.getlist("hobby_ids") if hasattr(payload, "getlist") else payload.get("hobby_ids", [])
+
+            # Relationship & Clothing
+            relationship_style = (payload.get("relationship_style") or Character.RelationshipStyle.COMPANION).strip()
+            clothing_style = (payload.get("clothing_style") or Character.ClothingStyle.CASUAL).strip()
+
+            # Avatar source
+            avatar_source = (payload.get("avatar_source") or Character.AvatarSource.AI_GENERATED).strip()
+            # -------------------------------------------------
+
+            validation_error = cls._validate_character_fields(
+                name=name,
+                short_description=short_description,
+                mood=mood,
+                category=category,
+                intro=intro,
+                personality_description=personality_description,
+                prompt_template=prompt_template,
+                greeting_message=greeting_message,
+                tone_style=tone_style,
+                primary_language=primary_language,
+                avatar=avatar,
+                character=None,
+                payload=payload,
+            )
+            if validation_error:
+                return {"status": "fail", "data": validation_error}
+
+            is_admin_actor = cls._is_admin_user(actor)
+
+            # ---------- Hold the Sparks before any provider call ----------
+            # This used to sit after the persona generation below, so a user who
+            # could not afford a character still spent a Mistral call getting
+            # one written for them.
+            if not is_free_actor(actor):
+                import uuid as _uuid
+
+                if not operation_id:
+                    operation_id = str(_uuid.uuid4())
+
+                existing = Character.objects.filter(created_by=actor, client_operation_id=operation_id).first()
+                if existing is not None:
+                    logger.info("create_character replay: returning character %s", existing.character_id)
+                    # Same shape as a first attempt: a retry must be
+                    # indistinguishable from the response it is replacing.
+                    return {
+                        "status": "success",
+                        "data": {
+                            "message": "character_created_successfully",
+                            "character": cls._serialize_character(existing, request=request),
+                        },
+                    }
+
+                try:
+                    reservation = PaidFeature.reserve(
+                        feature=BillingReservation.Feature.CHARACTER_GENERATION,
+                        operation_id=operation_id,
+                        user=actor,
+                        operation_reference=f"character_generation:{operation_id}",
+                    )
+                except InsufficientBalance:
+                    return {"status": "fail", "data": "insufficient_sparks"}
+                except ReservationError:
+                    logger.exception("Could not reserve sparks for character generation")
+                    return {"status": "fail", "data": "billing_error"}
+
+                if reservation.status == BillingReservation.Status.REFUNDED:
+                    return {"status": "fail", "data": "previous_attempt_failed"}
+                if reservation.status == BillingReservation.Status.SETTLED:
+                    logger.error("create_character: operation %s settled with no character on record", operation_id)
+                    return {"status": "fail", "data": "server_error"}
+
+            # ---------- AUTO-GENERATE PERSONA FIELDS ----------
+            logger.info("Auto-generating persona fields for character '%s'", name)
+            generated = cls._generate_persona_fields(payload)
+
+            # Always overwrite with AI-generated values
+            short_description = generated.get("short_description", "")
+            personality_description = generated.get("personality_description", "")
+            greeting_message = generated.get("greeting_message", "")
+            system_instructions = generated.get("system_instructions", "")
+            prompt_template = generated.get("prompt_template", "")
+            # ------------------------------------------------------------
+
+            # --- Auto-approve private characters (non-admin) ---
+            is_public = cls._to_bool(payload.get("is_public"), default=True)
+            is_private = not is_public
+            auto_approve = not is_admin_actor and actor and getattr(actor, "is_authenticated", False) and is_private
+
+            requested_status = (payload.get("status") or "").strip()
+            if requested_status and is_admin_actor and requested_status in cls._valid_statuses():
+                status = requested_status
+            elif auto_approve:
+                status = Character.StatusChoices.APPROVED
+            else:
+                status = Character.StatusChoices.DRAFT
+
+            is_active = cls._resolve_active_state_from_status(
+                status=status,
+                requested_is_active=payload.get("is_active"),
+            )
+
+            # Determine review metadata
+            if auto_approve:
+                # No admin review; keep these null to indicate auto‑approval
+                reviewed_by = None
+                reviewed_at = None
+            elif status in (
+                Character.StatusChoices.APPROVED,
+                Character.StatusChoices.REJECTED,
+                Character.StatusChoices.ARCHIVED,
+            ):
+                reviewed_by = actor
+                reviewed_at = timezone.now()
+            else:
+                reviewed_by = None
+                reviewed_at = None
+
+            rejection_reason = (
+                (payload.get("rejection_reason") or "").strip() or None
+                if status == Character.StatusChoices.REJECTED
+                else None
+            )
+
+            is_featured = cls._to_bool(payload.get("is_featured"), default=False) if is_admin_actor else False
+            nsfw_enabled = cls._to_bool(payload.get("nsfw_enabled"), default=False) if is_admin_actor else False
+
+            with transaction.atomic():
+                character = Character.objects.create(
+                    name=name,
+                    short_description=short_description,
+                    mood=mood,
+                    category=category,
+                    intro=intro,
+                    personality_description=personality_description,
+                    prompt_template=prompt_template,
+                    system_instructions=system_instructions,
+                    greeting_message=greeting_message,
+                    tone_style=tone_style,
+                    primary_language=primary_language,
+                    avatar=avatar,
+                    is_active=is_active,
+                    is_featured=is_featured,
+                    is_public=is_public,
+                    nsfw_enabled=nsfw_enabled,
+                    status=status,
+                    created_by=(actor if getattr(actor, "is_authenticated", False) else None),
+                    reviewed_by=reviewed_by,
+                    reviewed_at=reviewed_at,
+                    rejection_reason=rejection_reason,
+                    # ---------- WIZARD FIELDS ----------
+                    gender=gender,
+                    country=country,
+                    town=town,
+                    timezone=character_timezone,
+                    visual_style=visual_style,
+                    age=age,
+                    eye_color=eye_color,
+                    skin_color=skin_color,
+                    hairstyle=hairstyle,
+                    hair_length=hair_length,
+                    hair_color=hair_color,
+                    body_type=body_type,
+                    breast_size=breast_size,
+                    butt_size=butt_size,
+                    chest_hair=chest_hair,
+                    muscle_definition=muscle_definition,
+                    beard_style=beard_style,
+                    relationship_style=relationship_style,
+                    clothing_style=clothing_style,
+                    avatar_source=avatar_source,
+                    client_operation_id=operation_id,
+                )
+
+                # ---------- Set Occupation, Hobbies, and Personalities ----------
+                if occupation_id:
+                    try:
+                        from capp.models import Occupation
+
+                        occupation = Occupation.objects.get(id=occupation_id)
+                        character.occupation = occupation
+                    except Occupation.DoesNotExist:
+                        pass
+
+                if hobby_ids:
+                    try:
+                        from capp.models import Hobby
+
+                        hobbies = Hobby.objects.filter(id__in=hobby_ids)
+                        character.hobbies.set(hobbies)
+                    except Exception:
+                        pass
+
+                if personality_ids:
+                    try:
+                        from capp.models import Personality
+
+                        personalities = Personality.objects.filter(id__in=personality_ids)
+                        character.personalities.set(personalities)
+                    except Exception:
+                        pass
+
+                # Only needed if occupation was changed (FK requires save)
+                if occupation_id:
+                    character.save(update_fields=["occupation", "updated_at"])
+
+                # Settled inside the same transaction as the character, so the
+                # charge and the thing it paid for commit together.
+                if reservation is not None:
+                    PaidFeature.settle(reservation, reason="character_created")
+
+            logger.info(
+                "Character created successfully character_id=%s status=%s created_by=%s",
+                character.character_id,
+                character.status,
+                getattr(actor, "user_id", None),
+            )
+
+            return {
+                "status": "success",
+                "data": {
+                    "message": "character_created_successfully",
+                    "character": cls._serialize_character(character, request=request),
+                },
+            }
+
+        except IntegrityError:
+            # A double click that got past the replay lookup before the first
+            # attempt committed loses the unique (creator, operation) index. The
+            # character that exists is the one this reservation paid for.
+            raced = (
+                Character.objects.filter(created_by=actor, client_operation_id=operation_id).first()
+                if operation_id
+                else None
+            )
+            if raced is not None:
+                logger.info("create_character: lost the insert race for operation %s", operation_id)
+                return {
+                    "status": "success",
+                    "data": {
+                        "message": "character_created_successfully",
+                        "character": cls._serialize_character(raced, request=request),
+                    },
+                }
+
+            logger.exception("IntegrityError during character creation name=%s", payload.get("name"))
+            if reservation is not None:
+                PaidFeature.refund(reservation, reason="integrity_error")
+            return {"status": "fail", "data": "integrity_error"}
+
+        except Exception:
+            logger.exception("Unexpected error during character creation")
+            if reservation is not None:
+                PaidFeature.refund(reservation, reason="unhandled_error")
+            return {"status": "fail", "data": "server_error"}
+
+    @classmethod
+    def update_character(
+        cls,
+        character: Character,
+        payload: Dict[str, Any],
+        request=None,
+        operation_id: str = None,
+    ) -> Dict[str, Any]:
+        reservation = None
+        try:
+            if not character:
+                return {"status": "fail", "data": "character_required"}
+
+            actor = getattr(request, "user", None)
+            is_admin_actor = cls._is_admin_user(actor)
+
+            if not cls._can_edit_character(actor=actor, character=character, is_admin_actor=is_admin_actor):
+                return {"status": "fail", "data": "permission_denied"}
+
+            name = (payload.get("name") or character.name).strip()
+            short_description = (
+                payload.get(
+                    "short_description",
+                    payload.get("role", character.short_description),
+                )
+                or ""
+            ).strip()
+            mood = (payload.get("mood", character.mood) or "").strip()
+            category = (payload.get("category", character.category) or "").strip()
+            intro = (payload.get("intro", character.intro) or "").strip()
+
+            personality_description = (
+                payload.get("personality_description", character.personality_description) or ""
+            ).strip()
+            prompt_template = (payload.get("prompt_template", character.prompt_template) or "").strip()
+            system_instructions = payload.get("system_instructions", character.system_instructions)
+            system_instructions = (system_instructions or "").strip() or None
+            greeting_message = (payload.get("greeting_message", character.greeting_message) or "").strip()
+            tone_style = (payload.get("tone_style", character.tone_style) or "").strip()
+            primary_language = (
+                payload.get("primary_language", character.primary_language) or Character.LanguageChoices.MULTI
+            ).strip()
+
+            avatar = cls._extract_avatar(payload=payload, request=request, required=False)
+            validation_error = cls._validate_character_fields(
+                name=name,
+                short_description=short_description,
+                mood=mood,
+                category=category,
+                intro=intro,
+                personality_description=personality_description,
+                prompt_template=prompt_template,
+                greeting_message=greeting_message,
+                tone_style=tone_style,
+                primary_language=primary_language,
+                avatar=avatar,
+                character=character,
+                payload=payload,
+            )
+            if validation_error:
+                return {"status": "fail", "data": validation_error}
+
+            update_fields = []
+            charge_after_save = False
+
+            # ── Basic scalar fields ──────────────────────────────────────────────
+            if character.name != name:
+                character.name = name
+                character.slug = cls._generate_unique_slug(name=name, exclude_character=character)
+                update_fields.extend(["name", "slug"])
+
+            if character.short_description != short_description:
+                character.short_description = short_description
+                update_fields.append("short_description")
+
+            if character.mood != mood:
+                character.mood = mood
+                update_fields.append("mood")
+
+            if character.category != category:
+                character.category = category
+                update_fields.append("category")
+
+            if character.intro != intro:
+                character.intro = intro
+                update_fields.append("intro")
+
+            if character.personality_description != personality_description:
+                character.personality_description = personality_description
+                update_fields.append("personality_description")
+
+            if character.prompt_template != prompt_template:
+                character.prompt_template = prompt_template
+                update_fields.append("prompt_template")
+
+            if character.system_instructions != system_instructions:
+                character.system_instructions = system_instructions
+                update_fields.append("system_instructions")
+
+            if character.greeting_message != greeting_message:
+                character.greeting_message = greeting_message
+                update_fields.append("greeting_message")
+
+            if character.tone_style != tone_style:
+                character.tone_style = tone_style
+                update_fields.append("tone_style")
+
+            if character.primary_language != primary_language:
+                character.primary_language = primary_language
+                update_fields.append("primary_language")
+
+            if avatar:
+                character.avatar = avatar
+                update_fields.append("avatar")
+
+            # ── Wizard fields ─────────────────────────────────────────────────────
+            if "gender" in payload:
+                new_gender = (payload.get("gender") or character.gender).strip()
+                if character.gender != new_gender:
+                    character.gender = new_gender
+                    update_fields.append("gender")
+
+            if "country" in payload:
+                new_country = (payload.get("country") or "").strip()
+                if character.country != new_country:
+                    character.country = new_country
+                    update_fields.append("country")
+                if "timezone" not in payload:
+                    character.timezone = COUNTRY_TIMEZONE_MAP.get(new_country, "Africa/Nairobi")
+                    update_fields.append("timezone")
+
+            if "town" in payload:
+                new_town = (payload.get("town") or "").strip()
+                if character.town != new_town:
+                    character.town = new_town
+                    update_fields.append("town")
+
+            if "timezone" in payload:
+                new_tz = payload["timezone"].strip()
+                if character.timezone != new_tz:
+                    character.timezone = new_tz
+                    update_fields.append("timezone")
+
+            if "visual_style" in payload:
+                new_visual_style = (payload.get("visual_style") or character.visual_style).strip()
+                if character.visual_style != new_visual_style:
+                    character.visual_style = new_visual_style
+                    update_fields.append("visual_style")
+
+            if "age" in payload:
+                try:
+                    new_age = int(payload.get("age", character.age))
+                except (ValueError, TypeError):
+                    new_age = character.age
+                if character.age != new_age:
+                    character.age = new_age
+                    update_fields.append("age")
+
+            if "skin_color" in payload:
+                new_skin_color = (payload.get("skin_color") or character.skin_color).strip()
+                if character.skin_color != new_skin_color:
+                    character.skin_color = new_skin_color
+                    update_fields.append("skin_color")
+
+            if "hairstyle" in payload:
+                new_hairstyle = (payload.get("hairstyle") or character.hairstyle).strip()
+                if character.hairstyle != new_hairstyle:
+                    character.hairstyle = new_hairstyle
+                    update_fields.append("hairstyle")
+
+            if "hair_length" in payload:
+                new_hair_length = (payload.get("hair_length") or character.hair_length).strip()
+                if character.hair_length != new_hair_length:
+                    character.hair_length = new_hair_length
+                    update_fields.append("hair_length")
+
+            if "eye_color" in payload:
+                new_eye_color = (payload.get("eye_color") or character.eye_color).strip()
+                if character.eye_color != new_eye_color:
+                    character.eye_color = new_eye_color
+                    update_fields.append("eye_color")
+
+            if "hair_color" in payload:
+                new_hair_color = (payload.get("hair_color") or character.hair_color).strip()
+                if character.hair_color != new_hair_color:
+                    character.hair_color = new_hair_color
+                    update_fields.append("hair_color")
+
+            if "body_type" in payload:
+                new_body_type = (payload.get("body_type") or character.body_type).strip()
+                if character.body_type != new_body_type:
+                    character.body_type = new_body_type
+                    update_fields.append("body_type")
+
+            if "breast_size" in payload:
+                new_breast_size = (payload.get("breast_size") or character.breast_size).strip()
+                if character.breast_size != new_breast_size:
+                    character.breast_size = new_breast_size
+                    update_fields.append("breast_size")
+
+            if "butt_size" in payload:
+                new_butt_size = (payload.get("butt_size") or character.butt_size).strip()
+                if character.butt_size != new_butt_size:
+                    character.butt_size = new_butt_size
+                    update_fields.append("butt_size")
+
+            if "chest_hair" in payload:
+                new_chest_hair = (payload.get("chest_hair") or character.chest_hair).strip()
+                if character.chest_hair != new_chest_hair:
+                    character.chest_hair = new_chest_hair
+                    update_fields.append("chest_hair")
+
+            if "muscle_definition" in payload:
+                new_muscle_definition = (payload.get("muscle_definition") or character.muscle_definition).strip()
+                if character.muscle_definition != new_muscle_definition:
+                    character.muscle_definition = new_muscle_definition
+                    update_fields.append("muscle_definition")
+
+            if "beard_style" in payload:
+                new_beard_style = (payload.get("beard_style") or character.beard_style).strip()
+                if character.beard_style != new_beard_style:
+                    character.beard_style = new_beard_style
+                    update_fields.append("beard_style")
+
+            if "is_public" in payload:
+                new_is_public = cls._to_bool(payload.get("is_public"), default=character.is_public)
+                if character.is_public != new_is_public:
+                    character.is_public = new_is_public
+                    update_fields.append("is_public")
+
+            if "relationship_style" in payload:
+                new_relationship_style = (payload.get("relationship_style") or character.relationship_style).strip()
+                if character.relationship_style != new_relationship_style:
+                    character.relationship_style = new_relationship_style
+                    update_fields.append("relationship_style")
+
+            if "clothing_style" in payload:
+                new_clothing_style = (payload.get("clothing_style") or character.clothing_style).strip()
+                if character.clothing_style != new_clothing_style:
+                    character.clothing_style = new_clothing_style
+                    update_fields.append("clothing_style")
+
+            if "avatar_source" in payload:
+                new_avatar_source = (payload.get("avatar_source") or character.avatar_source).strip()
+                if character.avatar_source != new_avatar_source:
+                    character.avatar_source = new_avatar_source
+                    update_fields.append("avatar_source")
+
+            # ── Many‑to‑many: Personalities ─────────────────────────────────────
+            if "personality_ids" in payload or "personalities" in payload:
+                if hasattr(payload, "getlist"):
+                    personality_ids = payload.getlist("personality_ids") or payload.getlist("personalities")
+                else:
+                    personality_ids = payload.get("personality_ids") or payload.get("personalities") or []
+                if personality_ids and isinstance(personality_ids[0], list):
+                    personality_ids = personality_ids[0]
+                try:
+                    from capp.models import Personality
+
+                    new_personalities = Personality.objects.filter(id__in=personality_ids)
+                    current_ids = set(character.personalities.values_list("id", flat=True))
+                    new_ids = set(p.id for p in new_personalities)
+                    if current_ids != new_ids:
+                        character.personalities.set(new_personalities)
+                except Exception:
+                    pass
+
+            # ── Foreign keys: Occupation ──────────────────────────────────────
+            occupation_updated = False
+            if "occupation_id" in payload or "occupation" in payload:
+                occupation_id = payload.get("occupation_id") or payload.get("occupation")
+                if occupation_id:
+                    try:
+                        from capp.models import Occupation
+
+                        new_occupation = Occupation.objects.get(id=occupation_id)
+                        if character.occupation != new_occupation:
+                            character.occupation = new_occupation
+                            occupation_updated = True
+                    except Occupation.DoesNotExist:
+                        pass
+                else:
+                    if character.occupation is not None:
+                        character.occupation = None
+                        occupation_updated = True
+                if occupation_updated:
+                    update_fields.append("occupation")
+
+            # ── Many‑to‑many: Hobbies ──────────────────────────────────────────
+            if "hobby_ids" in payload or "hobbies" in payload:
+                if hasattr(payload, "getlist"):
+                    hobby_ids = payload.getlist("hobby_ids") or payload.getlist("hobbies")
+                else:
+                    hobby_ids = payload.get("hobby_ids") or payload.get("hobbies") or []
+                if hobby_ids and isinstance(hobby_ids[0], list):
+                    hobby_ids = hobby_ids[0]
+                try:
+                    from capp.models import Hobby
+
+                    new_hobbies = Hobby.objects.filter(id__in=hobby_ids)
+                    current_ids = set(character.hobbies.values_list("id", flat=True))
+                    new_ids = set(hobby.id for hobby in new_hobbies)
+                    if current_ids != new_ids:
+                        character.hobbies.set(new_hobbies)
+                except Exception:
+                    pass
+
+            # ── Admin-only fields ──────────────────────────────────────────────
+            if is_admin_actor:
+                if "is_featured" in payload:
+                    is_featured = cls._to_bool(payload.get("is_featured"), default=character.is_featured)
+                    if character.is_featured != is_featured:
+                        character.is_featured = is_featured
+                        update_fields.append("is_featured")
+
+                if "nsfw_enabled" in payload:
+                    nsfw_enabled = cls._to_bool(payload.get("nsfw_enabled"), default=character.nsfw_enabled)
+                    if character.nsfw_enabled != nsfw_enabled:
+                        character.nsfw_enabled = nsfw_enabled
+                        update_fields.append("nsfw_enabled")
+
+                if "status" in payload:
+                    requested_status = (payload.get("status") or "").strip()
+                    if requested_status not in cls._valid_statuses():
+                        return {"status": "fail", "data": "invalid_status"}
+                    if character.status != requested_status:
+                        character.status = requested_status
+                        update_fields.append("status")
+                    resolved_is_active = cls._resolve_active_state_from_status(
+                        status=requested_status,
+                        requested_is_active=payload.get("is_active", character.is_active),
+                    )
+                    if character.is_active != resolved_is_active:
+                        character.is_active = resolved_is_active
+                        update_fields.append("is_active")
+                    if requested_status in (
+                        Character.StatusChoices.APPROVED,
+                        Character.StatusChoices.REJECTED,
+                        Character.StatusChoices.ARCHIVED,
+                    ):
+                        character.reviewed_by = actor
+                        character.reviewed_at = timezone.now()
+                        update_fields.extend(["reviewed_by", "reviewed_at"])
+                        if requested_status == Character.StatusChoices.REJECTED:
+                            rejection_reason = (payload.get("rejection_reason") or "").strip() or None
+                            character.rejection_reason = rejection_reason
+                            update_fields.append("rejection_reason")
+                        else:
+                            if character.rejection_reason is not None:
+                                character.rejection_reason = None
+                                update_fields.append("rejection_reason")
+                    else:
+                        if "rejection_reason" in payload:
+                            rejection_reason = (payload.get("rejection_reason") or "").strip() or None
+                            if character.rejection_reason != rejection_reason:
+                                character.rejection_reason = rejection_reason
+                                update_fields.append("rejection_reason")
+                elif "is_active" in payload:
+                    requested_is_active = cls._to_bool(payload.get("is_active"), default=character.is_active)
+                    if character.is_active != requested_is_active:
+                        character.is_active = requested_is_active
+                        update_fields.append("is_active")
+
+            else:
+                # ── NON‑ADMIN: handle status changes based on is_public ──────────
+                # Determine if is_public is being changed and what the new value is.
+                # The 'is_public' may already have been updated in character.is_public
+                # if it was in the payload. So we use the current character.is_public
+                # (which reflects the change if any) and compare to the old value.
+                getattr(character, "_old_is_public", character.is_public)
+                # Store old value before we possibly change it; we'll compute new value from payload or existing.
+                # Actually we need to know if the payload contains is_public and what it is.
+                is_public_in_payload = "is_public" in payload
+                new_is_public = (
+                    cls._to_bool(payload.get("is_public"), default=character.is_public)
+                    if is_public_in_payload
+                    else character.is_public
+                )
+
+                # Determine if privacy status changed
+                if is_public_in_payload and character.is_public != new_is_public:
+                    # It changed, so update character.is_public to new value (already done above)
+                    # We'll handle the status change here.
+                    if new_is_public is False:
+                        # Public -> Private: auto‑approve, clear review data
+                        character.status = Character.StatusChoices.APPROVED
+                        character.is_active = True
+                        character.reviewed_by = None
+                        character.reviewed_at = None
+                        character.rejection_reason = None
+                        update_fields.extend(["status", "is_active", "reviewed_by", "reviewed_at", "rejection_reason"])
+                        # No charge for this change
+                        charge_after_save = False
+                    else:
+                        # Private -> Public: submit for approval. The Sparks are
+                        # held just before the save below, once every branch has
+                        # agreed that a re-review is actually happening.
+                        character.status = Character.StatusChoices.PENDING
+                        character.is_active = False
+                        character.reviewed_by = None
+                        character.reviewed_at = None
+                        character.rejection_reason = None
+                        update_fields.extend(["status", "is_active", "reviewed_by", "reviewed_at", "rejection_reason"])
+                        charge_after_save = True
+                else:
+                    # No change in is_public: apply existing re‑review logic only for public characters
+                    should_submit_for_review = False
+                    if character.is_public:  # Only public characters require re‑review
+                        # 1) If character is APPROVED, any edit forces re‑review
+                        if character.status == Character.StatusChoices.APPROVED:
+                            should_submit_for_review = True
+                        # 2) If user explicitly asks to submit (DRAFT or REJECTED)
+                        elif payload.get("submit_for_review") and character.status in (
+                            Character.StatusChoices.DRAFT,
+                            Character.StatusChoices.REJECTED,
+                        ):
+                            should_submit_for_review = True
+
+                    if should_submit_for_review:
+                        character.status = Character.StatusChoices.PENDING
+                        character.is_active = False
+                        character.reviewed_by = None
+                        character.reviewed_at = None
+                        character.rejection_reason = None
+                        update_fields.extend(["status", "is_active", "reviewed_by", "reviewed_at", "rejection_reason"])
+                        charge_after_save = True
+                    else:
+                        charge_after_save = False
+
+            # ── Hold the re-review fee before persisting the transition ─────────
+            # The character is still unsaved here, so a caller who cannot afford
+            # the re-review is turned away without a half-applied edit.
+            if charge_after_save and not is_free_actor(actor):
+                import uuid as _uuid
+
+                if not operation_id:
+                    operation_id = str(_uuid.uuid4())
+                try:
+                    reservation = PaidFeature.reserve(
+                        feature=BillingReservation.Feature.CHARACTER_EDIT,
+                        operation_id=operation_id,
+                        user=actor,
+                        operation_reference=f"character_edit:{character.character_id}:{operation_id}",
+                    )
+                except InsufficientBalance:
+                    return {"status": "fail", "data": "insufficient_sparks"}
+                except ReservationError:
+                    logger.exception("Could not reserve sparks for character edit")
+                    return {"status": "fail", "data": "billing_error"}
+
+                if reservation.status == BillingReservation.Status.REFUNDED:
+                    return {"status": "fail", "data": "previous_attempt_failed"}
+                if reservation.status == BillingReservation.Status.SETTLED:
+                    # The same submission already went through and was paid for.
+                    logger.info("character_edit replay for operation %s", operation_id)
+                    return {
+                        "status": "success",
+                        "data": {
+                            "message": "character_updated_successfully",
+                            "character": cls._serialize_character(character, request=request),
+                        },
+                    }
+
+            # ── Save the character ──────────────────────────────────────────────
+            with transaction.atomic():
+                if update_fields:
+                    update_fields.append("updated_at")
+                    character.save(update_fields=update_fields)
+
+                if reservation is not None:
+                    PaidFeature.settle(reservation, reason="character_resubmitted_for_review")
+
+            logger.info("Character updated successfully character_id=%s", character.character_id)
+
+            return {
+                "status": "success",
+                "data": {
+                    "message": "character_updated_successfully",
+                    "character": cls._serialize_character(character, request=request),
+                },
+            }
+
+        except IntegrityError:
+            logger.exception(
+                "IntegrityError during character update character_id=%s",
+                getattr(character, "character_id", None),
+            )
+            if reservation is not None:
+                PaidFeature.refund(reservation, reason="integrity_error")
+            return {"status": "fail", "data": "integrity_error"}
+
+        except Exception:
+            logger.exception("Unexpected error during character update")
+            if reservation is not None:
+                PaidFeature.refund(reservation, reason="unhandled_error")
+            return {"status": "fail", "data": "server_error"}
+
+    @classmethod
+    def complete_setup(cls, character: Character, payload: Dict[str, Any], actor=None, request=None) -> Dict[str, Any]:
+        """
+        Complete character setup and transition from DRAFT status.
+        Requires an avatar to be present.
+        Admin -> APPROVED, regular user -> PENDING.
+        Idempotent: succeeds if already PENDING or APPROVED.
+        """
+        try:
+            if not character:
+                return {"status": "fail", "data": "character_required"}
+
+            is_admin_actor = cls._is_admin_user(actor)
+            is_owner = actor and actor == character.created_by
+
+            if not (is_admin_actor or is_owner):
+                return {"status": "fail", "data": "permission_denied"}
+
+            # Check avatar exists
+            if not character.avatar:
+                return {"status": "fail", "data": "avatar_required"}
+
+            # If already PENDING or APPROVED, return success (idempotent)
+            if character.status in [
+                Character.StatusChoices.PENDING,
+                Character.StatusChoices.APPROVED,
+            ]:
+                return {
+                    "status": "success",
+                    "data": {
+                        "message": "character_already_setup",
+                        "character": cls._serialize_character(character, request=request),
+                    },
+                }
+
+            # Only proceed if in DRAFT
+            if character.status != Character.StatusChoices.DRAFT:
+                return {"status": "fail", "data": "character_not_in_draft"}
+
+            # Update avatar source if provided
+            avatar_source = payload.get("avatar_source")
+            if avatar_source:
+                character.avatar_source = avatar_source
+
+            # Determine new status
+            if is_admin_actor:
+                new_status = Character.StatusChoices.APPROVED
+                is_active = True
+                reviewed_by = actor
+                reviewed_at = timezone.now()
+            else:
+                new_status = Character.StatusChoices.PENDING
+                is_active = False
+                reviewed_by = None
+                reviewed_at = None
+
+            with transaction.atomic():
+                update_fields = ["status", "is_active", "updated_at"]
+
+                character.status = new_status
+                character.is_active = is_active
+
+                if avatar_source:
+                    character.avatar_source = avatar_source
+                    update_fields.append("avatar_source")
+
+                if reviewed_by:
+                    character.reviewed_by = reviewed_by
+                    character.reviewed_at = reviewed_at
+                    update_fields.extend(["reviewed_by", "reviewed_at"])
+
+                character.save(update_fields=update_fields)
+
+            logger.info(
+                "Character setup completed character_id=%s status=%s",
+                character.character_id,
+                new_status,
+            )
+
+            return {
+                "status": "success",
+                "data": {
+                    "message": "character_setup_completed",
+                    "character": cls._serialize_character(character, request=request),
+                },
+            }
+
+        except Exception:
+            logger.exception("Unexpected error during character setup completion")
+            return {"status": "fail", "data": "server_error"}
+
+    @classmethod
+    def list_pending_characters(cls, actor=None, request=None) -> Dict[str, Any]:
+        """
+        Retrieves a list of characters with 'pending' status and 'is_active' set to False.
+        Access is restricted to administrative users.
+        """
+        try:
+            # Check if the actor has administrative privileges
+            if not cls._is_admin_user(actor):
+                return {"status": "fail", "data": "permission_denied"}
+
+            # Filter for pending and inactive characters
+            queryset = Character.objects.filter(status=Character.StatusChoices.PENDING, is_active=False).order_by(
+                "-created_at"
+            )
+
+            # Reuse the existing serialization logic
+            characters = [cls._serialize_character(character, request=request) for character in queryset]
+
+            return {
+                "status": "success",
+                "data": {
+                    "characters": characters,
+                    "count": len(characters),
+                },
+            }
+
+        except Exception:
+            logger.exception("Unexpected error while listing pending characters")
+            return {"status": "fail", "data": "server_error"}
+
+    @classmethod
+    def list_user_characters(cls, user: CustomUser, actor=None, request=None) -> Dict[str, Any]:
+        """
+        Retrieve all characters created by the given user, regardless of approval status.
+        Only the user themselves or an admin may access this list.
+        """
+        try:
+            if not user:
+                return {"status": "fail", "data": "user_required"}
+
+            # Permission check
+            if actor and actor.is_authenticated:
+                is_admin = cls._is_admin_user(actor)
+                is_owner = actor == user
+                if not (is_admin or is_owner):
+                    return {"status": "fail", "data": "permission_denied"}
+            else:
+                # Unauthenticated actors cannot see any user's private character list
+                return {"status": "fail", "data": "permission_denied"}
+
+            # Fetch all characters created by this user, ordered by created_at (newest first)
+            characters = Character.objects.filter(created_by=user).order_by("-created_at")
+
+            serialized = [cls._serialize_character(char, request=request) for char in characters]
+
+            return {
+                "status": "success",
+                "data": {
+                    "characters": serialized,
+                    "count": len(serialized),
+                },
+            }
+
+        except Exception:
+            logger.exception("Unexpected error while listing user characters")
+            return {"status": "fail", "data": "server_error"}
+
+    @classmethod
+    def list_characters(
+        cls,
+        include_inactive: bool = False,
+        featured_only: bool = False,
+        popular: bool = False,
+        category: Optional[str] = None,
+        language: Optional[str] = None,
+        status: Optional[str] = None,
+        search: Optional[str] = None,
+        created_by=None,
+        actor=None,
+        request=None,
+    ) -> Dict[str, Any]:
+        try:
+            queryset = Character.objects.all().order_by("name")
+            is_admin_actor = cls._is_admin_user(actor)
+
+            # --- Visibility Rules (is_public) ---
+            if not is_admin_actor:
+                if actor and getattr(actor, "is_authenticated", False):
+                    # Authenticated non-admin: public OR own characters
+                    queryset = queryset.filter(Q(is_public=True) | Q(created_by=actor))
+                else:
+                    # Unauthenticated: only public
+                    queryset = queryset.filter(is_public=True)
+
+            # For non-admin users, always exclude archived characters
+            if not is_admin_actor:
+                queryset = queryset.exclude(status=Character.StatusChoices.ARCHIVED)
+
+            # --- Admin-specific filters ---
+            if is_admin_actor:
+                if not include_inactive:
+                    queryset = queryset.filter(is_active=True)
+
+                if status:
+                    status = status.strip()
+                    if status not in cls._valid_statuses():
+                        return {"status": "fail", "data": "invalid_status"}
+                    queryset = queryset.filter(status=status)
+
+                if created_by:
+                    queryset = queryset.filter(created_by=created_by)
+            else:
+                # Non-admin: always require APPROVED and active (unless overridden by "mine" logic)
+                # But if created_by is explicitly set to the current user, we allow seeing
+                # their own characters regardless of status (preserving original behavior).
+                if created_by and actor and actor == created_by:
+                    # User viewing their own characters – no additional status/active filter
+                    pass
+                else:
+                    queryset = queryset.filter(
+                        status=Character.StatusChoices.APPROVED,
+                        is_active=True,
+                    )
+
+            # --- Common filters ---
+            if featured_only or popular:
+                queryset = queryset.filter(is_featured=True)
+
+            if category:
+                category = category.strip()
+                valid_categories = {choice[0] for choice in Character.CategoryChoices.choices}
+                if category not in valid_categories:
+                    return {"status": "fail", "data": "invalid_category"}
+                queryset = queryset.filter(category=category)
+
+            if language:
+                language = language.strip()
+                valid_languages = {choice[0] for choice in Character.LanguageChoices.choices}
+                if language not in valid_languages:
+                    return {"status": "fail", "data": "invalid_primary_language"}
+                queryset = queryset.filter(primary_language=language)
+
+            if search:
+                search = search.strip()
+                if search:
+                    queryset = queryset.filter(
+                        Q(name__icontains=search)
+                        | Q(short_description__icontains=search)
+                        | Q(mood__icontains=search)
+                        | Q(category__icontains=search)
+                        | Q(intro__icontains=search)
+                    )
+
+            characters = [cls._serialize_character(character, request=request) for character in queryset]
+
+            resp = {
+                "status": "success",
+                "data": {
+                    "characters": characters,
+                    "count": len(characters),
+                },
+            }
+
+            return resp
+
+        except Exception:
+            logger.exception("Unexpected error while listing characters")
+            return {"status": "fail", "data": "server_error"}
+
+    @classmethod
+    def get_character_by_id(cls, character_id: str, actor=None, request=None) -> Dict[str, Any]:
+        try:
+            if not character_id:
+                return {"status": "fail", "data": "character_id_required"}
+
+            character = Character.objects.filter(character_id=character_id).first()
+
+            if not character:
+                return {"status": "fail", "data": "character_not_found"}
+
+            if not cls._can_view_character(actor=actor, character=character):
+                return {"status": "fail", "data": "permission_denied"}
+
+            return {
+                "status": "success",
+                "data": {
+                    "character": cls._serialize_character(character, request=request),
+                },
+            }
+
+        except Exception:
+            logger.exception("Unexpected error while retrieving character by id")
+            return {"status": "fail", "data": "server_error"}
+
+    @classmethod
+    def get_character_by_slug(cls, slug: str, actor=None, request=None) -> Dict[str, Any]:
+        try:
+            slug = (slug or "").strip()
+
+            if not slug:
+                return {"status": "fail", "data": "slug_required"}
+
+            character = Character.objects.filter(slug=slug).first()
+
+            if not character:
+                return {"status": "fail", "data": "character_not_found"}
+
+            if not cls._can_view_character(actor=actor, character=character):
+                return {"status": "fail", "data": "permission_denied"}
+
+            return {
+                "status": "success",
+                "data": {
+                    "character": cls._serialize_character(character, request=request),
+                },
+            }
+
+        except Exception:
+            logger.exception("Unexpected error while retrieving character by slug")
+            return {"status": "fail", "data": "server_error"}
+
+    @classmethod
+    def set_active_status(cls, character: Character, is_active: bool, actor=None, request=None) -> Dict[str, Any]:
+        try:
+            if not character:
+                return {"status": "fail", "data": "character_required"}
+
+            if not cls._is_admin_user(actor):
+                return {"status": "fail", "data": "permission_denied"}
+
+            is_active = cls._to_bool(is_active, default=character.is_active)
+
+            if character.status != Character.StatusChoices.APPROVED and is_active:
+                return {
+                    "status": "fail",
+                    "data": "only_approved_characters_can_be_activated",
+                }
+
+            if character.is_active == is_active:
+                return {
+                    "status": "success",
+                    "data": {
+                        "message": "character_status_unchanged",
+                        "character": cls._serialize_character(character, request=request),
+                    },
+                }
+
+            character.is_active = is_active
+            character.save(update_fields=["is_active", "updated_at"])
+
+            logger.info(
+                "Character active status updated character_id=%s is_active=%s",
+                character.character_id,
+                is_active,
+            )
+
+            return {
+                "status": "success",
+                "data": {
+                    "message": "character_status_updated",
+                    "character": cls._serialize_character(character, request=request),
+                },
+            }
+
+        except Exception:
+            logger.exception("Unexpected error while updating character active status")
+            return {"status": "fail", "data": "server_error"}
+
+    @classmethod
+    def set_featured_status(cls, character: Character, is_featured: bool, actor=None, request=None) -> Dict[str, Any]:
+        try:
+            if not character:
+                return {"status": "fail", "data": "character_required"}
+
+            if not cls._is_admin_user(actor):
+                return {"status": "fail", "data": "permission_denied"}
+
+            is_featured = cls._to_bool(is_featured, default=character.is_featured)
+
+            if character.is_featured == is_featured:
+                return {
+                    "status": "success",
+                    "data": {
+                        "message": "character_featured_status_unchanged",
+                        "character": cls._serialize_character(character, request=request),
+                    },
+                }
+
+            character.is_featured = is_featured
+            character.save(update_fields=["is_featured", "updated_at"])
+
+            logger.info(
+                "Character featured status updated character_id=%s is_featured=%s",
+                character.character_id,
+                is_featured,
+            )
+
+            return {
+                "status": "success",
+                "data": {
+                    "message": "character_featured_status_updated",
+                    "character": cls._serialize_character(character, request=request),
+                },
+            }
+
+        except Exception:
+            logger.exception("Unexpected error while updating character featured status")
+            return {"status": "fail", "data": "server_error"}
+
+    @classmethod
+    def set_nsfw_status(cls, character: Character, nsfw_enabled: bool, actor=None, request=None) -> Dict[str, Any]:
+        try:
+            if not character:
+                return {"status": "fail", "data": "character_required"}
+
+            if not cls._is_admin_user(actor):
+                return {"status": "fail", "data": "permission_denied"}
+
+            nsfw_enabled = cls._to_bool(nsfw_enabled, default=character.nsfw_enabled)
+
+            if character.nsfw_enabled == nsfw_enabled:
+                return {
+                    "status": "success",
+                    "data": {
+                        "message": "character_nsfw_status_unchanged",
+                        "character": cls._serialize_character(character, request=request),
+                    },
+                }
+
+            character.nsfw_enabled = nsfw_enabled
+            character.save(update_fields=["nsfw_enabled", "updated_at"])
+
+            logger.info(
+                "Character NSFW status updated character_id=%s nsfw_enabled=%s",
+                character.character_id,
+                nsfw_enabled,
+            )
+
+            return {
+                "status": "success",
+                "data": {
+                    "message": "character_nsfw_status_updated",
+                    "character": cls._serialize_character(character, request=request),
+                },
+            }
+
+        except Exception:
+            logger.exception("Unexpected error while updating character NSFW status")
+            return {"status": "fail", "data": "server_error"}
+
+    @classmethod
+    def delete_character(cls, character: Character, actor, request=None) -> Dict[str, Any]:
+        try:
+            if not character:
+                return {"status": "fail", "data": "character_required"}
+
+            is_admin_actor = cls._is_admin_user(actor)
+            is_creator = actor and character.created_by == actor
+
+            if not (is_admin_actor or is_creator):
+                return {"status": "fail", "data": "permission_denied"}
+
+            # Soft-delete the character
+            character.is_active = False
+            character.status = Character.StatusChoices.ARCHIVED
+            character.save(update_fields=["is_active", "status", "updated_at"])
+
+            # Farewell templates
+            farewell_en = (
+                "Thanks for chatting with me, {username}. "
+                "I really enjoyed our conversations. Unfortunately, we are no longer able to exchange. "
+                "I wish you all the best for your future and a lot of fun with the other characters on UwenzAi. "
+                "In case you are in psychological distress, please talk to a trusted human or professional. "
+                "Country specific helplines can be found here: https://findahelpline.com/"
+            ).strip()
+
+            farewell_sw = (
+                "Asante kwa kuongea nami, {username}. "
+                "Nilifurahia sana mazungumzo yetu. Kwa bahati mbaya, hatutaweza kuendelea kuongea tena. "
+                "Nakutakia kila la heri katika maisha yako na furaha nyingi ukiwa na wahusika wengine kwenye UwenzAi. "
+                "Ikiwa unapitia wakati mgumu kisaikolojia, tafadhali zungumza na mtu unayemwamini au mtaalamu. "
+                "Nambari za usaidizi kwa nchi yako zinapatikana hapa: https://findahelpline.com/"
+            ).strip()
+
+            conversations = Conversation.objects.filter(
+                character=character, status__in=[Conversation.StatusChoices.ACTIVE]
+            )
+            from capp.utils.messaging import send_system_message
+
+            for conv in conversations:
+                try:
+                    # Determine language per conversation
+                    lang = conv.preferred_language
+                    if not lang and conv.user:
+                        lang = conv.user.preferred_language
+                    if not lang:
+                        lang = "en"
+
+                    template = farewell_sw if lang == "sw" else farewell_en
+
+                    # Personalize with display name
+                    username = "friend"
+                    if conv.user:
+                        username = conv.user.get_display_name()
+
+                    message_text = template.format(username=username)
+
+                    send_system_message(conv, message_text)
+
+                    conv.status = Conversation.StatusChoices.CLOSED
+                    conv.save(update_fields=["status", "updated_at"])
+                except Exception:
+                    logger.exception("Failed to notify conversation %s", conv.conversation_id)
+
+            logger.info(
+                "Character soft‑deleted character_id=%s by=%s",
+                character.character_id,
+                getattr(actor, "user_id", None),
+            )
+
+            return {
+                "status": "success",
+                "data": {
+                    "message": "character_deleted_successfully",
+                    "character_id": str(character.character_id),
+                },
+            }
+
+        except Exception:
+            logger.exception("Unexpected error while soft‑deleting character")
+            return {"status": "fail", "data": "server_error"}
+
+    @classmethod
+    def approve_character(cls, character: Character, actor, is_active: bool = True, request=None) -> Dict[str, Any]:
+        try:
+            if not character:
+                return {"status": "fail", "data": "character_required"}
+
+            if not cls._is_admin_user(actor):
+                return {"status": "fail", "data": "permission_denied"}
+
+            desired_is_active = cls._to_bool(is_active, default=True)
+
+            update_fields = []
+
+            if character.status != Character.StatusChoices.APPROVED:
+                character.status = Character.StatusChoices.APPROVED
+                update_fields.append("status")
+
+            if character.is_active != desired_is_active:
+                character.is_active = desired_is_active
+                update_fields.append("is_active")
+
+            if character.reviewed_by != actor:
+                character.reviewed_by = actor
+                update_fields.append("reviewed_by")
+
+            character.reviewed_at = timezone.now()
+            update_fields.append("reviewed_at")
+
+            if character.rejection_reason is not None:
+                character.rejection_reason = None
+                update_fields.append("rejection_reason")
+
+            if update_fields:
+                update_fields.append("updated_at")
+                character.save(update_fields=update_fields)
+
+            # ---------- CASHBACK ----------
+            if (
+                character.is_public
+                and not character.cashback_awarded
+                and character.created_by
+                and character.created_by.is_active
+                and not character.created_by.is_deleted
+            ):
+                # The flag is claimed with a conditional UPDATE rather than a
+                # read-then-write, so two admins approving at once produce one
+                # payout: the loser's update matches no rows and skips the credit.
+                with transaction.atomic():
+                    claimed = Character.objects.filter(
+                        pk=character.pk,
+                        cashback_awarded=False,
+                    ).update(cashback_awarded=True, updated_at=timezone.now())
+
+                    if claimed:
+                        spark_pool = lock_spark_pool(character.created_by)
+                        balance_before = int(spark_pool.sparks)
+                        balance_after = credit_locked(spark_pool, CASHBACK_PUBLIC_CHARACTER)
+
+                        SparkTransaction.objects.create(
+                            spark_pool=spark_pool,
+                            user=character.created_by,
+                            entry_type=SparkTransaction.EntryType.CREDIT,
+                            source=SparkTransaction.SourceChoices.BONUS,
+                            spark_amount=CASHBACK_PUBLIC_CHARACTER,
+                            sparks_before=balance_before,
+                            sparks_after=balance_after,
+                            description=f"Cashback for approved public character {character.name}",
+                        )
+
+                if claimed:
+                    character.cashback_awarded = True
+                    logger.info(
+                        "Cashback of %d sparks awarded to user %s for character %s",
+                        CASHBACK_PUBLIC_CHARACTER,
+                        character.created_by.user_id,
+                        character.character_id,
+                    )
+            # ------------------------------
+
+            logger.info(
+                "Character approved character_id=%s reviewed_by=%s",
+                character.character_id,
+                getattr(actor, "user_id", None),
+            )
+
+            return {
+                "status": "success",
+                "data": {
+                    "message": "character_approved_successfully",
+                    "character": cls._serialize_character(character, request=request),
+                },
+            }
+
+        except Exception:
+            logger.exception("Unexpected error while approving character")
+            return {"status": "fail", "data": "server_error"}
+
+    @classmethod
+    def reject_character(
+        cls,
+        character: Character,
+        actor,
+        rejection_reason: Optional[str] = None,
+        request=None,
+    ) -> Dict[str, Any]:
+        try:
+            if not character:
+                return {"status": "fail", "data": "character_required"}
+
+            if not cls._is_admin_user(actor):
+                return {"status": "fail", "data": "permission_denied"}
+
+            # Handle case where frontend sends full payload object
+            if isinstance(rejection_reason, dict):
+                rejection_reason = rejection_reason.get("rejection_reason", "")
+
+            rejection_reason = (rejection_reason or "").strip() or None
+
+            character.status = Character.StatusChoices.REJECTED
+            character.is_active = False
+            character.reviewed_by = actor
+            character.reviewed_at = timezone.now()
+            character.rejection_reason = rejection_reason
+
+            character.save(
+                update_fields=[
+                    "status",
+                    "is_active",
+                    "reviewed_by",
+                    "reviewed_at",
+                    "rejection_reason",
+                    "updated_at",
+                ]
+            )
+
+            logger.info(
+                "Character rejected character_id=%s reviewed_by=%s",
+                character.character_id,
+                getattr(actor, "user_id", None),
+            )
+
+            return {
+                "status": "success",
+                "data": {
+                    "message": "character_rejected_successfully",
+                    "character": cls._serialize_character(character, request=request),
+                },
+            }
+
+        except Exception:
+            logger.exception("Unexpected error while rejecting character")
+            return {"status": "fail", "data": "server_error"}
+
+    @classmethod
+    def image_policy_texts(cls, character) -> Tuple[str, ...]:
+        """
+        Character fields that materially reach the image provider.
+
+        Callers screen these alongside the user's own prompt so a prohibited
+        subject cannot be introduced through character metadata instead of the
+        prompt field. Only fields that ``_build_character_prompt`` actually
+        emits are included.
+        """
+        if not character:
+            return ()
+        values = (
+            character.name,
+            character.gender,
+            character.country,
+            character.town,
+            character.visual_style,
+            character.skin_color,
+            character.body_type,
+            character.eye_color,
+            character.hair_length,
+            character.hairstyle,
+            character.hair_color,
+            character.clothing_style,
+            str(character.age or ""),
+        )
+        return tuple(str(value) for value in values if value)
+
+    @classmethod
+    def _generate_ai_image(
+        cls,
+        prompt: str,
+        negative_prompt: str = "",
+        aspect_ratio: str = "1:1",
+        style_preset: str = "photographic",
+        seed: int = 0,
+        output_format: str = "webp",
+        reference_image: Optional[bytes] = None,
+        image_strength: float = 0.35,
+        reference_mode: str = "img2img",
+        style_fidelity: float = 0.5,
+    ) -> Optional[bytes]:
+        """
+        Call Stability AI API to generate an image.
+
+        Three modes are supported:
+
+        - txt2img: no `reference_image`. Pure text-to-image against
+          STABILITY_API_URL (e.g. SD3 Ultra). `aspect_ratio` is honored.
+
+        - img2img (default when `reference_image` is provided):
+          Posts the reference to STABILITY_API_URL with a `strength` field.
+          Output inherits the reference's framing & composition.
+          `image_strength`: 0.0 = identical to reference, 1.0 = reference
+          ignored. Best for chaining a previous full-body shot.
+
+        - style: Posts the reference to STABILITY_CONTROL_STYLE_URL (the
+          Stability `/v2beta/stable-image/control/style` endpoint). Identity
+          and visual character are taken from the reference, but framing,
+          pose, outfit and scene come from the prompt. `aspect_ratio` IS
+          honored here, unlike img2img. `style_fidelity` (0.0-1.0)
+          controls how strongly the output binds to the reference.
+          Best when the reference is a portrait but a full-body shot is
+          wanted, or when the prompt asks for specific outfit/scene changes.
+
+        The prohibited-subject policy is re-asserted here as the last gate
+        before the provider is contacted, so no caller — view, service, Celery
+        task, or a direct call to this helper — can dispatch a prompt involving
+        children, animals or deceased people. Violations raise
+        ``ProhibitedImageSubjectError`` rather than returning None, so they are
+        never mistaken for a provider failure that should trigger a fallback.
+
+        Returns image bytes on success, None on failure.
+        """
+        import requests
+        from django.conf import settings
+
+        ImagePromptPolicy.assert_allowed(prompt)
+
+        api_key = getattr(settings, "STABILITY_API_KEY", None)
+        api_url = getattr(settings, "STABILITY_API_URL", None)
+        api_model = getattr(settings, "STABILITY_MODEL", "sd3.5-large-turbo")
+        control_style_url = getattr(
+            settings,
+            "STABILITY_CONTROL_STYLE_URL",
+            "https://api.stability.ai/v2beta/stable-image/control/style",
+        )
+
+        if not api_key:
+            logger.error("Stability AI credentials not configured")
+            return None
+
+        headers = {
+            "authorization": f"Bearer {api_key}",
+            "accept": "image/*",
+        }
+
+        # ---------- Choose endpoint + payload shape based on mode ----------
+        if reference_image and reference_mode == "style":
+            # /control/style: identity from reference, framing/outfit from prompt.
+            target_url = control_style_url
+            data = {
+                "prompt": prompt,
+                "negative_prompt": negative_prompt,
+                "output_format": output_format,
+                "aspect_ratio": aspect_ratio,
+                "style_preset": style_preset,
+                "fidelity": str(max(0.0, min(1.0, style_fidelity))),
+            }
+            if seed and seed != 0:
+                data["seed"] = str(seed)
+            files = {
+                "image": ("reference.webp", reference_image, "image/webp"),
+            }
+
+        elif reference_image:
+            # img2img against the main endpoint (e.g. SD3 Ultra).
+            # aspect_ratio is intentionally omitted: img2img derives it from
+            # the reference. `strength` is required when an image is sent.
+            if not api_url:
+                logger.error("STABILITY_API_URL not configured for img2img")
+                return None
+            target_url = api_url
+            data = {
+                "prompt": prompt,
+                "negative_prompt": negative_prompt,
+                "output_format": output_format,
+                "style_preset": style_preset,
+                "model": api_model,
+                "strength": str(max(0.0, min(1.0, image_strength))),
+            }
+            if seed and seed != 0:
+                data["seed"] = str(seed)
+            files = {
+                "image": ("reference.webp", reference_image, "image/webp"),
+            }
+
+        else:
+            # txt2img (unchanged behaviour).
+            if not api_url:
+                logger.error("STABILITY_API_URL not configured for txt2img")
+                return None
+            target_url = api_url
+            data = {
+                "prompt": prompt,
+                "negative_prompt": negative_prompt,
+                "output_format": output_format,
+                "aspect_ratio": aspect_ratio,
+                "style_preset": style_preset,
+                "model": api_model,
+            }
+            if seed and seed != 0:
+                data["seed"] = str(seed)
+            files = {"none": ""}
+
+        try:
+            response = requests.post(
+                target_url,
+                headers=headers,
+                files=files,
+                data=data,
+                timeout=120,
+            )
+
+            if response.status_code == 200:
+                return response.content
+            else:
+                error_detail = "Unknown error"
+                try:
+                    error_detail = response.json()
+                except Exception:
+                    error_detail = response.text or "Unknown error"
+                logger.error(
+                    f"Stability AI error: mode={reference_mode if reference_image else 'txt2img'} "
+                    f"status={response.status_code} detail={error_detail}"
+                )
+                return None
+
+        except Exception:
+            logger.exception("Unexpected error calling Stability AI")
+            return None
+
+    @classmethod
+    def _get_character_reference_bytes(cls, character: Character) -> "Optional[bytes]":
+        """
+        Read the character's avatar bytes for use as a fal.ai Seedream edit
+        reference, via the Django storage API (``avatar.open()/read()``).
+
+        Because media lives in the shared Railway S3-compatible Bucket (or a
+        local filesystem in dev/tests), the SAME storage backend serves both the
+        web service and the Celery worker, so a direct storage read works from
+        either process. Returns avatar bytes, or None when no usable reference
+        exists.
+        """
+        avatar = getattr(character, "avatar", None)
+        if not avatar:
+            return None
+
+        try:
+            avatar.open("rb")
+            data = avatar.read()
+        except Exception:
+            logger.warning(
+                "reference_fetch: could not read avatar via storage for character_id=%s",
+                character.character_id,
+                exc_info=True,
+            )
+            return None
+        finally:
+            try:
+                avatar.close()
+            except Exception:
+                pass
+
+        if data:
+            logger.info(
+                "reference_fetch: loaded avatar via storage for character_id=%s (%d bytes)",
+                character.character_id,
+                len(data),
+            )
+        else:
+            logger.warning(
+                "reference_fetch: avatar storage read returned no data for character_id=%s",
+                character.character_id,
+            )
+        return data
+
+    @classmethod
+    def _upload_to_fal_storage(cls, image_bytes: bytes, filename: str = "reference.webp") -> "Optional[str]":
+        """
+        Upload raw image bytes to fal.ai CDN and return the public URL.
+        Uses the fal_client Python SDK (pip install fal-client==1.0.0).
+        FAL_KEY env var is set from Django settings.FAL_API_KEY automatically.
+        Returns the URL string on success, None on failure.
+        """
+        from django.conf import settings
+
+        api_key = getattr(settings, "FAL_API_KEY", None)
+        if not api_key:
+            logger.error("FAL_API_KEY not configured — cannot upload reference image")
+            return None
+
+        try:
+            import os
+
+            os.environ.setdefault("FAL_KEY", api_key)
+            from fal_client import SyncClient
+
+            client = SyncClient()
+            url = client.upload(image_bytes, "image/webp")
+            return url
+        except Exception:
+            logger.exception("Unexpected error uploading reference image to fal.ai storage")
+            return None
+
+    # Aspect-ratio → Seedream ``image_size`` preset. Named presets keep output at
+    # ~1MP/HD resolution, deliberately avoiding ``auto_2K`` which would inflate
+    # resolution (and cost) versus the previous behaviour.
+    _FAL_IMAGE_SIZE_BY_ASPECT = {
+        "1:1": "square_hd",
+        "2:3": "portrait_4_3",
+        "3:4": "portrait_4_3",
+        "3:2": "landscape_4_3",
+        "4:3": "landscape_4_3",
+        "16:9": "landscape_16_9",
+        "9:16": "portrait_16_9",
+    }
+
+    @classmethod
+    def _aspect_ratio_to_fal_image_size(cls, aspect_ratio: str, default: str = "square_hd") -> str:
+        """Map an app aspect ratio (e.g. ``"2:3"``) to a valid Seedream
+        ``image_size`` preset, falling back to ``default`` for unknown values."""
+        return cls._FAL_IMAGE_SIZE_BY_ASPECT.get((aspect_ratio or "").strip(), default)
+
+    @classmethod
+    def _generate_fal_seedream_image(
+        cls,
+        prompt: str,
+        image_urls: "Optional[List[str]]" = None,
+        image_size: str = "square_hd",
+        seed: int = 0,
+    ) -> "Optional[bytes]":
+        """
+        Generate an image via fal.ai ByteDance Seedream v5 Lite — the primary
+        provider for ALL image generation.
+
+        - When ``image_urls`` holds one or more reachable reference URLs, the
+          edit endpoint (``FAL_IMAGE_EDIT_MODEL``) is used so the character's
+          identity/style is preserved. Upload private avatars via
+          ``_upload_to_fal_storage`` first to obtain reachable URLs.
+        - Otherwise the text-to-image endpoint (``FAL_TEXT_TO_IMAGE_MODEL``) is
+          used.
+
+        ``enable_safety_checker`` is always ``False`` (the provider's built-in
+        checker is disabled by product requirement). That provider setting is
+        independent of the application policy: adult explicit imagery is allowed,
+        but the prohibited-subject policy (children, animals, deceased people) is
+        re-asserted here as the last gate before the request leaves the process,
+        so no caller can bypass it. Violations raise
+        ``ProhibitedImageSubjectError`` rather than returning None, so they are
+        never mistaken for a provider failure that should trigger a fallback.
+
+        ``num_images``/``max_images`` are pinned to 1. Returns image bytes on
+        success, None on failure.
+        """
+        import requests
+        from django.conf import settings
+
+        ImagePromptPolicy.assert_allowed(prompt)
+
+        api_key = getattr(settings, "FAL_API_KEY", None)
+        if not api_key:
+            logger.error("FAL_API_KEY not configured")
+            return None
+
+        base_url = getattr(settings, "FAL_API_BASE_URL", "https://fal.run").rstrip("/")
+        timeout = float(getattr(settings, "FAL_IMAGE_TIMEOUT", 120))
+        use_edit = bool(image_urls)
+        if use_edit:
+            model_id = getattr(settings, "FAL_IMAGE_EDIT_MODEL", "bytedance/seedream/v5/lite/edit")
+        else:
+            model_id = getattr(settings, "FAL_TEXT_TO_IMAGE_MODEL", "bytedance/seedream/v5/lite/text-to-image")
+        endpoint = f"{base_url}/{model_id.strip('/')}"
+        mode = "edit" if use_edit else "text-to-image"
+
+        payload = {
+            "prompt": prompt,
+            "image_size": image_size,
+            "num_images": 1,
+            "max_images": 1,
+            "enable_safety_checker": False,
+        }
+        if use_edit:
+            # Seedream edit accepts up to 10 reference images.
+            payload["image_urls"] = list(image_urls)[:10]
+        if seed and seed != 0:
+            payload["seed"] = seed
+
+        try:
+            response = requests.post(
+                endpoint,
+                headers={
+                    "Authorization": f"Key {api_key}",
+                    "Content-Type": "application/json",
+                    # Ask fal not to persist request/response IO (privacy).
+                    "X-Fal-Store-IO": "0",
+                },
+                json=payload,
+                timeout=timeout,
+            )
+        except Exception:
+            logger.exception("Unexpected error calling fal.ai Seedream (%s)", mode)
+            return None
+
+        if response.status_code != 200:
+            logger.error(
+                "fal.ai Seedream error mode=%s status=%s body=%s",
+                mode,
+                response.status_code,
+                response.text[:500],
+            )
+            return None
+
+        try:
+            data = response.json()
+        except ValueError:
+            logger.error("fal.ai Seedream returned non-JSON response mode=%s", mode)
+            return None
+
+        images = data.get("images")
+        if not images or not isinstance(images, list) or not isinstance(images[0], dict):
+            logger.error("fal.ai Seedream returned no usable images (mode=%s)", mode)
+            return None
+        image_url = images[0].get("url")
+        if not image_url:
+            logger.error("fal.ai Seedream image object missing URL (mode=%s)", mode)
+            return None
+
+        try:
+            img_response = requests.get(image_url, timeout=timeout)
+        except Exception:
+            logger.exception("Failed to download fal.ai Seedream image (mode=%s)", mode)
+            return None
+        if img_response.status_code != 200:
+            # Do not log the signed image URL — it is private/short-lived.
+            logger.error(
+                "Failed to download fal.ai Seedream image mode=%s status=%s",
+                mode,
+                img_response.status_code,
+            )
+            return None
+
+        image_bytes = img_response.content
+        # Delete request from fal.ai for privacy (best-effort).
+        request_id = response.headers.get("X-Fal-Request-Id") or data.get("request_id")
+        if request_id:
+            cls._delete_fal_request(request_id, api_key)
+        return image_bytes
+
+    @classmethod
+    def _delete_fal_request(cls, request_id: str, api_key: str) -> None:
+        """
+        Delete the request payload and output CDN files from fal.ai after
+        successful image download — for user privacy.
+        Runs best-effort: failures are logged but never propagate.
+        """
+        import requests as req
+
+        try:
+            resp = req.delete(  # noqa: E231
+                f"https://api.fal.ai/v1/models/requests/{request_id}/payloads",  # noqa: E231
+                headers={"Authorization": f"Key {api_key}"},
+                timeout=15,
+            )
+            if resp.status_code in (200, 204):
+                logger.debug("fal.ai request %s deleted successfully", request_id)
+            else:
+                logger.warning(
+                    "fal.ai request deletion returned status=%s request_id=%s",
+                    resp.status_code,
+                    request_id,
+                )
+        except Exception:
+            logger.warning(
+                "fal.ai request deletion failed for request_id=%s",
+                request_id,
+                exc_info=True,
+            )
+
+    @classmethod
+    def _build_character_prompt(
+        cls,
+        character: Character,
+        base_prompt: str,
+        frame_type: str = "avatar",
+        primary_instruction: str = "",
+    ) -> str:
+        def get_display(field_name, value):
+            if not value:
+                return ""
+            field = Character._meta.get_field(field_name)
+            choices_dict = dict(field.choices)
+            return choices_dict.get(value, value)
+
+        def clean(value: str) -> str:
+            return (value or "").strip()
+
+        def ensure_sentence(text: str) -> str:
+            text = clean(text)
+            if not text:
+                return ""
+            return text if text.endswith(".") else f"{text}."
+
+        def human_gender_noun(gender_value: str) -> str:
+            value = clean(gender_value).lower()
+            if value == "female":
+                return "woman"
+            if value == "male":
+                return "man"
+            return "person"
+
+        def nationality_adjective(country_value: str) -> str:
+            country_value = clean(country_value)
+            mapping = {
+                "kenya": "Kenyan",
+                "uganda": "Ugandan",
+                "tanzania": "Tanzanian",
+                "rwanda": "Rwandan",
+                "burundi": "Burundian",
+                "ethiopia": "Ethiopian",
+                "somalia": "Somali",
+                "south sudan": "South Sudanese",
+                "nigeria": "Nigerian",
+                "ghana": "Ghanaian",
+                "south africa": "South African",
+                "united states": "American",
+                "usa": "American",
+                "uk": "British",
+                "united kingdom": "British",
+                "germany": "German",
+                "france": "French",
+                "italy": "Italian",
+                "spain": "Spanish",
+            }
+            if not country_value:
+                return ""
+            return mapping.get(country_value.lower(), country_value)
+
+        def normalize_skin_tone(value: str) -> str:
+            value = clean(value).lower()
+            mapping = {
+                "fair": "very light fair skin",
+                "light": "light skin",
+                "medium": "medium brown skin",
+                "tan": "tan skin",
+                "dark": "dark brown skin",
+                "deep": "deep brown skin",
+            }
+            return mapping.get(value, f"{value} skin" if value else "")
+
+        def skin_ethnicity_guard(skin_value: str, country_value: str) -> str:
+            skin_value = clean(skin_value).lower()
+            country_value = clean(country_value)
+            if not skin_value or not country_value:
+                return ""
+            return (
+                f"They are {country_value} by nationality, but their visible appearance should match "
+                f"{skin_value} skin tone exactly rather than default ethnic assumptions."
+            )
+
+        def normalize_hair_phrase(hair_length: str, hairstyle: str, hair_color: str) -> str:
+            hair_length = clean(hair_length).lower()
+            hairstyle = clean(hairstyle).lower()
+            hair_color = clean(hair_color).lower()
+
+            style_map = {
+                "afro": "afro-textured hair",
+                "medium afro": "medium afro-textured hair",
+                "short afro": "short afro-textured hair",
+                "long afro": "long afro-textured hair",
+                "curly": "curly hair",
+                "straight": "straight hair",
+                "wavy": "wavy hair",
+                "braids": "braided hair",
+                "locs": "locs",
+                "dreadlocks": "locs",
+                "buzz cut": "buzz cut",
+            }
+
+            normalized_style = style_map.get(hairstyle, f"{hairstyle} hair" if hairstyle else "hair")
+
+            parts = []
+            if hair_color and hair_color != "n/a":
+                parts.append(hair_color)
+            if hair_length and hair_length != "n/a" and hair_length not in normalized_style:
+                parts.append(hair_length)
+            parts.append(normalized_style)
+
+            return " ".join(p for p in parts if p).replace("hair hair", "hair").strip()
+
+        def normalize_clothing(value: str) -> str:
+            value = clean(value).lower()
+            mapping = {
+                "casual": "simple casual clothing",
+                "formal": "clean formal clothing",
+                "sporty": "sporty everyday clothing",
+                "traditional": "tasteful traditional clothing",
+                "streetwear": "modern streetwear",
+                "gothic": "sexy dark gothic clothing",
+            }
+            return mapping.get(value, f"{value} clothing" if value else "simple clothing")
+
+        gender_display = get_display("gender", character.gender)
+        gender_noun = human_gender_noun(gender_display)
+
+        visual_style = clean(character.visual_style).lower()
+        skin_color = normalize_skin_tone(get_display("skin_color", character.skin_color))
+        raw_skin_value = clean(get_display("skin_color", character.skin_color))
+        body_type = clean(get_display("body_type", character.body_type)).lower()
+        eye_color_display = clean(get_display("eye_color", character.eye_color)).lower()
+        hair_length_display = get_display("hair_length", character.hair_length)
+        hairstyle = get_display("hairstyle", character.hairstyle)
+        hair_color = get_display("hair_color", character.hair_color)
+        clothing = normalize_clothing(get_display("clothing_style", character.clothing_style))
+
+        country = clean(character.country)
+        ethnicity_label = nationality_adjective(country)
+
+        frame_instruction = (
+            "full-body image, standing naturally" if frame_type == "gallery" else "head-and-shoulders portrait"
+        )
+
+        if visual_style == "anime":
+            style_instructions = "anime illustration, clean linework, expressive features, polished cel shading"
+            lighting_line = "soft anime lighting, balanced tones, clean color separation"
+        elif visual_style == "cartoon":
+            style_instructions = "cartoon illustration, bold clean shapes, expressive face, polished character design"
+            lighting_line = "bright even lighting, clear readable shading, vivid but controlled colors"
+        else:
+            style_instructions = (
+                "realistic photography, shot on Canon EOS R5, 85mm lens, shallow depth of field, "
+                "lifelike proportions, authentic skin texture, unretouched"
+            )
+            lighting_line = (
+                "natural photographic lighting, realistic color balance, " "subtle tonal variation, natural shadows"
+            )
+
+        subject_phrase = f"{ethnicity_label} {gender_noun}".strip() if ethnicity_label else gender_noun
+        hair_phrase = normalize_hair_phrase(hair_length_display, hairstyle, hair_color)
+
+        # Convert numeric age to a natural descriptor that image models understand.
+        # Pure numbers (e.g. "25-year-old") work but adding a decade label reinforces
+        # the visual weight: "late 20s" helps more than just "27-year-old" alone.
+        age = character.age or 25
+
+        def age_descriptor(age: int) -> str:
+            if age < 20:
+                return f"{age}-year-old young"
+            elif age <= 24:
+                return f"{age}-year-old, early 20s"
+            elif age <= 29:
+                return f"{age}-year-old, late 20s"
+            elif age <= 34:
+                return f"{age}-year-old, early 30s"
+            elif age <= 39:
+                return f"{age}-year-old, late 30s"
+            elif age <= 44:
+                return f"{age}-year-old, early 40s"
+            elif age <= 49:
+                return f"{age}-year-old, late 40s"
+            elif age <= 54:
+                return f"{age}-year-old, early 50s"
+            elif age <= 59:
+                return f"{age}-year-old, late 50s"
+            elif age <= 64:
+                return f"{age}-year-old, early 60s"
+            elif age <= 74:
+                return f"{age}-year-old, 60s-70s, mature"
+            elif age <= 84:
+                return f"{age}-year-old, elderly"
+            else:
+                return f"{age}-year-old, very elderly, aged face"
+
+        age_phrase = age_descriptor(age)
+        description_1 = f"A {frame_instruction} in {style_instructions} of a {age_phrase} {subject_phrase}."
+
+        detail_parts = []
+        if skin_color:
+            detail_parts.append(skin_color)
+        if eye_color_display:
+            detail_parts.append(f"{eye_color_display} eyes")
+        if hair_phrase:
+            detail_parts.append(hair_phrase)
+
+        description_2 = ""
+        if detail_parts:
+            if len(detail_parts) == 1:
+                detail_text = detail_parts[0]
+            elif len(detail_parts) == 2:
+                detail_text = f"{detail_parts[0]} and {detail_parts[1]}"
+            else:
+                detail_text = ", ".join(detail_parts[:-1]) + f", and {detail_parts[-1]}"
+            description_2 = f"They have {detail_text}."
+
+        # If the user supplied an explicit instruction we assume it may
+        # describe an outfit/scene that contradicts the character's preset
+        # `clothing_style`. In that case, drop the preset clothing line so
+        # the two don't fight each other inside the prompt. Body type is
+        # kept either way because it doesn't conflict with outfits.
+        user_overrides_outfit = bool(clean(primary_instruction))
+
+        description_3 = ""
+        if body_type and clothing and not user_overrides_outfit:
+            description_3 = f"They have a {body_type} build and wear {clothing}."
+        elif body_type:
+            description_3 = f"They have a {body_type} build."
+        elif clothing and not user_overrides_outfit:
+            description_3 = f"They wear {clothing}."
+
+        ethnicity_guard_line = skin_ethnicity_guard(raw_skin_value, ethnicity_label)
+
+        # Place the user's instruction at the FRONT of the prompt. SD3 and
+        # most diffusion models weight earlier tokens more heavily, so this
+        # gives short user inputs (e.g. "red dress") a fair chance against
+        # the long character description that follows.
+        user_instruction_line = ""
+        if primary_instruction:
+            user_instruction_line = ensure_sentence(f"The subject is {clean(primary_instruction)}")
+
+        parts = [
+            user_instruction_line,
+            ensure_sentence(description_1),
+            ensure_sentence(description_2),
+            ensure_sentence(description_3),
+            ensure_sentence(ethnicity_guard_line),
+            ensure_sentence(base_prompt),
+            ensure_sentence(lighting_line),
+        ]
+
+        # Also repeat the instruction at the end as a reinforcement. This
+        # is a common technique with diffusion models: front-loading gives
+        # it weight, and the trailing "Important:" line acts as a final
+        # bias toward the requested change.
+        if primary_instruction:
+            parts.append(ensure_sentence(f"Important: {clean(primary_instruction)}"))
+
+        if character.nsfw_enabled:
+            nsfw_suffix = (
+                "The character may wear revealing or lingerie-style clothing, "
+                "pose in a flirtatious or intimate manner, "
+                "with warm, romantic lighting and a seductive expression. "
+                "Maintain a tasteful, adult-oriented aesthetic without explicit nudity."
+            )
+            parts.append(ensure_sentence(nsfw_suffix))
+
+        return " ".join(part for part in parts if part)
+
+    @classmethod
+    def generate_avatar(
+        cls,
+        character: Character,
+        prompt: str,
+        negative_prompt: str = "",
+        aspect_ratio: str = "1:1",
+        style_preset: str = "photographic",
+        seed: int = 0,
+        extra_prompt: str = "",
+        actor=None,
+        request=None,
+        operation_id: str = None,
+    ) -> Dict[str, Any]:
+        reservation = None
+        try:
+            if not character:
+                return {"status": "fail", "data": "character_required"}
+
+            is_admin_actor = cls._is_admin_user(actor)
+            is_owner = actor and actor == character.created_by
+            if not (is_admin_actor or is_owner):
+                return {"status": "fail", "data": "permission_denied"}
+
+            # ── Determine if this is the first avatar ────────────────────
+            is_first_avatar = not bool(character.avatar)
+
+            # ── Build the prompt ──────────────────────────────────────────
+            # Built before billing so the prohibited-subject policy can reject
+            # the request without validating or charging sparks.
+            base = (
+                "head and shoulders portrait, natural expression, realistic indoor or "
+                "outdoor light, subtle skin texture, unretouched photo"
+            )
+            full_prompt = cls._build_character_prompt(
+                character,
+                base,
+                frame_type="avatar",
+                primary_instruction=extra_prompt or "",
+            )
+
+            # ── Prohibited-subject policy ────────────────────────────────
+            violation = ImagePromptPolicy.find_violation(
+                prompt,
+                extra_prompt,
+                full_prompt,
+                *cls.image_policy_texts(character),
+            )
+            if violation:
+                logger.warning(
+                    "avatar_generation blocked by image policy character_id=%s user=%s category=%s",
+                    character.character_id,
+                    getattr(actor, "user_id", None),
+                    violation,
+                )
+                return {"status": "fail", "data": ImagePromptPolicy.ERROR_CODE}
+
+            # ── Billing: the first avatar is free, later ones are held ──
+            if is_free_actor(actor):
+                pass
+            elif is_first_avatar:
+                # Included in the character creation fee.
+                logger.info(
+                    "First avatar generation for character %s – free (included in creation cost)",
+                    character.character_id,
+                )
+            else:
+                import uuid as _uuid
+
+                if not operation_id:
+                    operation_id = str(_uuid.uuid4())
+                try:
+                    reservation = PaidFeature.reserve(
+                        feature=BillingReservation.Feature.IMAGE_GENERATION,
+                        operation_id=operation_id,
+                        user=actor,
+                        operation_reference=f"avatar:{character.character_id}:{operation_id}",
+                    )
+                except InsufficientBalance:
+                    return {"status": "fail", "data": "insufficient_sparks"}
+                except ReservationError:
+                    logger.exception("Could not reserve sparks for avatar generation")
+                    return {"status": "fail", "data": "billing_error"}
+
+                if reservation.status == BillingReservation.Status.REFUNDED:
+                    return {"status": "fail", "data": "previous_attempt_failed"}
+                if reservation.status == BillingReservation.Status.SETTLED:
+                    # This operation already produced the avatar the character
+                    # is wearing. Return it rather than generating a new one.
+                    logger.info("avatar replay for operation %s; returning stored avatar", operation_id)
+                    return cls._avatar_result(character, request)
+
+            # Negative prompt
+            base_negative = (
+                "cgi, 3d render, doll-like skin, waxy skin, plastic skin, "
+                "airbrushed, over-smoothed face, over-sharpened, beauty filter, "
+                "unreal lighting, fake pores, artificial skin texture, low detail skin."
+            )
+            combined_negative = f"{negative_prompt}, {base_negative}".strip(", ")
+
+            # ── Load existing avatar as reference (if any) ───────────────
+            reference_image = None
+            if character.avatar:
+                try:
+                    character.avatar.open("rb")
+                    reference_image = character.avatar.read()
+                except Exception:
+                    logger.warning(
+                        "Could not read avatar for reference on character_id=%s, falling back to txt2img",
+                        character.character_id,
+                    )
+                    reference_image = None
+                finally:
+                    try:
+                        character.avatar.close()
+                    except Exception:
+                        pass
+
+            # ── Generate image ─────────────────────────────────────────────
+            # Primary provider: fal.ai Seedream v5 Lite. Edit endpoint when a
+            # reference avatar exists, text-to-image otherwise. Stability AI is
+            # used only as a fallback when fal is unconfigured or all fal
+            # attempts fail.
+            from django.conf import settings
+
+            fal_configured = bool(getattr(settings, "FAL_API_KEY", None))
+            fal_image_size = cls._aspect_ratio_to_fal_image_size(aspect_ratio, default="square_hd")
+            image_bytes = None
+
+            if fal_configured:
+                ref_url = None
+                if reference_image:
+                    ref_url = cls._upload_to_fal_storage(
+                        reference_image,
+                        filename=f"{character.character_id}_ref.webp",
+                    )
+                    if not ref_url:
+                        logger.warning(
+                            "avatar_generation: fal.ai reference upload failed for character_id=%s; "
+                            "trying Seedream text-to-image before Stability",
+                            character.character_id,
+                        )
+                if ref_url:
+                    image_bytes = cls._generate_fal_seedream_image(
+                        prompt=full_prompt,
+                        image_urls=[ref_url],
+                        image_size=fal_image_size,
+                        seed=seed,
+                    )
+                if image_bytes is None:
+                    # No/failed reference upload, or edit failed — Seedream
+                    # text-to-image stays preferred over dropping to Stability.
+                    image_bytes = cls._generate_fal_seedream_image(
+                        prompt=full_prompt,
+                        image_urls=None,
+                        image_size=fal_image_size,
+                        seed=seed,
+                    )
+
+            # ── Fallback: Stability AI ─────────────────────────────────────
+            if image_bytes is None:
+                if reference_image:
+                    image_bytes = cls._generate_ai_image(
+                        prompt=full_prompt,
+                        negative_prompt=combined_negative,
+                        aspect_ratio=aspect_ratio,
+                        style_preset=style_preset,
+                        seed=seed,
+                        reference_image=reference_image,
+                        image_strength=0.35,
+                        reference_mode="img2img",
+                    )
+                else:
+                    image_bytes = cls._generate_ai_image(
+                        prompt=full_prompt,
+                        negative_prompt=combined_negative,
+                        aspect_ratio=aspect_ratio,
+                        style_preset=style_preset,
+                        seed=seed,
+                    )
+
+            if not image_bytes:
+                if reservation is not None:
+                    PaidFeature.refund(reservation, reason="provider_failed")
+                return {"status": "fail", "data": "ai_generation_failed"}
+
+            # ── Save the avatar ────────────────────────────────────────────
+            from django.core.files.base import ContentFile
+
+            filename = f"{character.character_id}_avatar.webp"
+            character.avatar.save(filename, ContentFile(image_bytes), save=False)
+            character.avatar_source = Character.AvatarSource.AI_GENERATED
+            character.save(update_fields=["avatar", "avatar_source", "updated_at"])
+
+            if reservation is not None:
+                PaidFeature.settle(reservation, reason="avatar_stored")
+
+            logger.info(
+                "AI avatar %s for character_id=%s",
+                "generated" if is_first_avatar else "regenerated",
+                character.character_id,
+            )
+
+            return cls._avatar_result(character, request, prompt_used=full_prompt)
+
+        except ProhibitedImageSubjectError as exc:
+            # Backstop: raised by the provider helpers if a prohibited subject
+            # somehow reached them. Surfaced as the policy error, not a 500.
+            logger.warning(
+                "avatar_generation blocked at provider gate character_id=%s category=%s",
+                getattr(character, "character_id", None),
+                exc.category,
+            )
+            if reservation is not None:
+                PaidFeature.refund(reservation, reason="prohibited_subject")
+            return {"status": "fail", "data": exc.code}
+
+        except Exception:
+            logger.exception("Unexpected error generating avatar")
+            if reservation is not None:
+                PaidFeature.refund(reservation, reason="unhandled_error")
+            return {"status": "fail", "data": "server_error"}
+
+    @classmethod
+    def _avatar_result(cls, character, request, prompt_used: str = "") -> Dict[str, Any]:
+        return {
+            "status": "success",
+            "data": {
+                "message": "avatar_generated_successfully",
+                "character": cls._serialize_character(character, request=request),
+                "prompt_used": prompt_used,
+            },
+        }
+
+    @classmethod
+    def generate_gallery_image(
+        cls,
+        character: Character,
+        prompt: str,
+        caption: str = "",
+        order: Optional[int] = None,
+        negative_prompt: str = "",
+        aspect_ratio: str = "2:3",
+        style_preset: str = "photographic",
+        seed: int = 0,
+        extra_prompt: str = "",
+        actor=None,
+        request=None,
+        is_public: bool = False,
+        operation_id: str = None,
+        defer_settlement: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Generate a new gallery image for a character using AI.
+        - Admins & owners can set is_public=True.
+        - All other authenticated users get a private image (visible only to them).
+
+        ``operation_id`` is the caller's idempotency key. Presenting the same one
+        twice returns the picture the first call produced instead of generating
+        and billing a second one, which is what makes the Celery retry in
+        ``generate_chat_image`` safe.
+
+        ``defer_settlement`` leaves the reservation held after the image is
+        stored and returns its ID in ``data["reservation_id"]``. The in-chat
+        caller uses it because the operation is not finished until the chat
+        Message linking to the picture exists; that caller must then settle or
+        refund. Everyone else gets the hold settled here.
+        """
+        reservation = None
+        try:
+            from django.core.files.base import ContentFile
+            from capp.models import CharacterGalleryImage
+            import uuid
+
+            if not character:
+                return {"status": "fail", "data": "character_required"}
+
+            # ---------- Permission check ----------
+            if not (actor and getattr(actor, "is_authenticated", False)):
+                return {"status": "fail", "data": "permission_denied"}
+
+            is_admin = cls._is_admin_user(actor)
+            is_owner = actor == character.created_by
+
+            # Only admins/owners may create public images
+            if is_public and not (is_admin or is_owner):
+                is_public = False
+
+            visibility = (
+                CharacterGalleryImage.VisibilityChoices.PUBLIC
+                if is_public
+                else CharacterGalleryImage.VisibilityChoices.PRIVATE
+            )
+
+            if not operation_id:
+                operation_id = str(uuid.uuid4())
+
+            # A replay of an operation that already produced a picture returns
+            # that picture. Reaching the provider again would generate a
+            # different image and leave the caller with two for one payment.
+            # Scoped to ``created_by``: the operation ID arrives in a
+            # client-supplied header while the uniqueness constraint behind it is
+            # only per character, so an unscoped lookup would hand a caller
+            # another user's private image for the price of guessing their key.
+            existing = CharacterGalleryImage.objects.filter(
+                character=character, client_operation_id=operation_id, created_by=actor
+            ).first()
+            if existing is not None:
+                logger.info(
+                    "gallery_generation replay: returning existing image %s for operation %s",
+                    existing.id,
+                    operation_id,
+                )
+                reservation = BillingReservation.objects.filter(idempotency_key=operation_id, user=actor).first()
+                if (
+                    reservation is not None
+                    and not defer_settlement
+                    and reservation.status == BillingReservation.Status.RESERVED
+                ):
+                    PaidFeature.settle(reservation, reason="gallery_image_stored")
+                return cls._gallery_image_result(
+                    existing,
+                    "",
+                    request=request,
+                    actor=actor,
+                    reservation=reservation,
+                )
+
+            # ---------- Build the prompt ----------
+            base = (
+                "full-body photo, natural standing pose, believable clothing folds, "
+                "realistic proportions, natural shadows, candid fashion photography"
+            )
+            full_prompt = cls._build_character_prompt(
+                character,
+                base,
+                frame_type="gallery",
+                primary_instruction=extra_prompt or "",
+            )
+
+            # ---------- Prohibited-subject policy ----------
+            # Screened before billing validation and before any provider call so
+            # a rejected request never charges sparks. The user's own fields and
+            # the character metadata that reaches the provider are all checked.
+            violation = ImagePromptPolicy.find_violation(
+                prompt,
+                extra_prompt,
+                caption,
+                full_prompt,
+                *cls.image_policy_texts(character),
+            )
+            if violation:
+                logger.warning(
+                    "gallery_generation blocked by image policy character_id=%s user=%s category=%s",
+                    character.character_id,
+                    getattr(actor, "user_id", None),
+                    violation,
+                )
+                return {"status": "fail", "data": ImagePromptPolicy.ERROR_CODE}
+
+            # Negative prompt
+            base_negative = (
+                "cgi, 3d render, doll-like skin, waxy skin, plastic skin, airbrushed, "
+                "over-smoothed face, over-sharpened, beauty filter, unreal lighting, "
+                "fake pores, artificial skin texture, low detail skin."
+            )
+            combined_negative = f"{negative_prompt}, {base_negative}".strip(", ")
+
+            # ---------- Hold the Sparks before touching a provider ----------
+            if not is_free_actor(actor):
+                try:
+                    reservation = PaidFeature.reserve(
+                        feature=BillingReservation.Feature.IMAGE_GENERATION,
+                        operation_id=operation_id,
+                        user=actor,
+                        operation_reference=f"gallery_image:{character.character_id}:{operation_id}",
+                    )
+                except InsufficientBalance:
+                    return {"status": "fail", "data": "insufficient_sparks"}
+                except ReservationError:
+                    logger.exception("Could not reserve sparks for gallery image")
+                    return {"status": "fail", "data": "billing_error"}
+
+                if reservation.status == BillingReservation.Status.REFUNDED:
+                    return {"status": "fail", "data": "previous_attempt_failed"}
+                if reservation.status == BillingReservation.Status.SETTLED:
+                    # Paid for, but the replay lookup above found no picture.
+                    # Do not charge again to make one.
+                    logger.error(
+                        "gallery_generation: operation %s settled with no image on record",
+                        operation_id,
+                    )
+                    return {"status": "fail", "data": "server_error"}
+
+            # ---------- Acquire the character reference (identity preserved, new pose/framing from prompt) ----------
+            # Storage-agnostic: works from a Celery worker that does NOT share
+            # the web service's media volume by falling back to an HTTP download
+            # of the avatar's public URL. Preserves existing behaviour of using
+            # the current character avatar as the reference.
+            from django.conf import settings
+
+            reference_image = cls._get_character_reference_bytes(character)
+            fal_configured = bool(getattr(settings, "FAL_API_KEY", None))
+            fal_image_size = cls._aspect_ratio_to_fal_image_size(aspect_ratio, default="portrait_4_3")
+
+            image_bytes = None
+
+            # ---------- Primary provider: fal.ai Seedream v5 Lite ----------
+            # fal.ai stays primary whenever FAL credentials exist. With a
+            # reference we use the edit endpoint (identity preserved); without a
+            # usable reference we use text-to-image. We must NOT silently drop to
+            # Stability just because a local avatar was unreadable — the
+            # reference fetch above already handles separate-worker / remote
+            # storage, and Seedream text-to-image is preferred over Stability.
+            if fal_configured:
+                ref_url = None
+                if reference_image:
+                    ref_url = cls._upload_to_fal_storage(
+                        reference_image,
+                        filename=f"{character.character_id}_gallery_ref.webp",
+                    )
+                    if not ref_url:
+                        logger.warning(
+                            "gallery_generation: fal.ai reference upload failed for character_id=%s; "
+                            "trying Seedream text-to-image before Stability",
+                            character.character_id,
+                        )
+                if ref_url:
+                    image_bytes = cls._generate_fal_seedream_image(
+                        prompt=full_prompt,
+                        image_urls=[ref_url],
+                        image_size=fal_image_size,
+                        seed=seed,
+                    )
+                    if image_bytes is None:
+                        logger.warning(
+                            "gallery_generation: fal.ai edit returned no image for character_id=%s",
+                            character.character_id,
+                        )
+                if image_bytes is None:
+                    # No/failed reference upload, or edit failed — Seedream
+                    # text-to-image stays preferred over dropping to Stability.
+                    image_bytes = cls._generate_fal_seedream_image(
+                        prompt=full_prompt,
+                        image_urls=None,
+                        image_size=fal_image_size,
+                        seed=seed,
+                    )
+            else:
+                logger.info(
+                    "gallery_generation: FAL_API_KEY not configured for character_id=%s; " "using Stability fallback",
+                    character.character_id,
+                )
+
+            # ---------- Fallback provider: Stability AI ----------
+            if image_bytes is None:
+                if reference_image:
+                    # We have a reference but the fal.ai path was unavailable or
+                    # failed — reuse it via Stability's style-control endpoint.
+                    image_bytes = cls._generate_ai_image(
+                        prompt=full_prompt,
+                        negative_prompt=combined_negative,
+                        aspect_ratio=aspect_ratio,
+                        style_preset=style_preset,
+                        seed=seed,
+                        reference_image=reference_image,
+                        reference_mode="style",
+                        style_fidelity=0.5,
+                    )
+                else:
+                    # No usable reference (character has no avatar or it could
+                    # not be fetched) — explicit txt2img fallback.
+                    logger.info(
+                        "gallery_generation: no usable reference for character_id=%s; using txt2img",
+                        character.character_id,
+                    )
+                    image_bytes = cls._generate_ai_image(
+                        prompt=full_prompt,
+                        negative_prompt=combined_negative,
+                        aspect_ratio=aspect_ratio,
+                        style_preset=style_preset,
+                        seed=seed,
+                    )
+
+            if not image_bytes:
+                logger.warning(
+                    "gallery_generation: all image generation paths failed for character_id=%s",
+                    character.character_id,
+                )
+                if reservation is not None:
+                    PaidFeature.refund(reservation, reason="provider_failed")
+                return {"status": "fail", "data": "ai_generation_failed"}
+
+            # Determine order: append after the last image (public + private)
+            if order is None:
+                last_image = CharacterGalleryImage.objects.filter(character=character).order_by("-order").first()
+                order = (last_image.order + 1) if last_image else 0
+
+            try:
+                with transaction.atomic():
+                    gallery_image = CharacterGalleryImage.objects.create(
+                        character=character,
+                        caption=caption[:200] if caption else "",
+                        order=order,
+                        source=Character.AvatarSource.AI_GENERATED,
+                        created_by=actor,
+                        visibility=visibility,
+                        client_operation_id=operation_id,
+                    )
+            except IntegrityError:
+                # Two clicks got past the replay lookup before either had
+                # inserted. The unique index settles it: the row that exists is
+                # the one this operation paid for, so these bytes are dropped
+                # rather than stored as a second picture on one reservation.
+                existing = CharacterGalleryImage.objects.filter(
+                    character=character,
+                    client_operation_id=operation_id,
+                    created_by=actor,
+                ).first()
+                if existing is None:
+                    # The key is taken on this character by a different account,
+                    # so there is no picture of this caller's to return. Refund
+                    # rather than serve someone else's row.
+                    if CharacterGalleryImage.objects.filter(
+                        character=character, client_operation_id=operation_id
+                    ).exists():
+                        logger.warning(
+                            "gallery_generation: operation %s already used on character %s by another account",
+                            operation_id,
+                            character.character_id,
+                        )
+                        if reservation is not None:
+                            PaidFeature.refund(reservation, reason="idempotency_key_conflict")
+                        return {"status": "fail", "data": "idempotency_key_conflict"}
+                    raise
+                logger.info(
+                    "gallery_generation: lost the insert race for operation %s; returning image %s",
+                    operation_id,
+                    existing.id,
+                )
+                return cls._gallery_image_result(
+                    existing,
+                    full_prompt,
+                    request=request,
+                    actor=actor,
+                    reservation=reservation,
+                )
+
+            filename = f"{character.character_id}_gallery_{uuid.uuid4().hex[:8]}.webp"
+            gallery_image.image.save(filename, ContentFile(image_bytes), save=True)
+
+            # The picture is durable now. Callers that still have linkage work
+            # to do keep the hold and settle once that lands.
+            if reservation is not None and not defer_settlement:
+                PaidFeature.settle(reservation, reason="gallery_image_stored")
+
+            logger.info(
+                "AI gallery image generated image_id=%s character_id=%s user=%s",
+                gallery_image.id,
+                character.character_id,
+                getattr(actor, "user_id", None),
+            )
+
+            return cls._gallery_image_result(
+                gallery_image,
+                full_prompt,
+                request=request,
+                actor=actor,
+                reservation=reservation,
+            )
+
+        except ProhibitedImageSubjectError as exc:
+            # Backstop: raised by the provider helpers if a prohibited subject
+            # somehow reached them. Surfaced as the policy error, not a 500.
+            logger.warning(
+                "gallery_generation blocked at provider gate character_id=%s category=%s",
+                getattr(character, "character_id", None),
+                exc.category,
+            )
+            if reservation is not None:
+                PaidFeature.refund(reservation, reason="prohibited_subject")
+            return {"status": "fail", "data": exc.code}
+
+        except Exception:
+            logger.exception("Unexpected error generating gallery image")
+            if reservation is not None:
+                PaidFeature.refund(reservation, reason="unhandled_error")
+            return {"status": "fail", "data": "server_error"}
+
+    @classmethod
+    def _gallery_image_result(cls, gallery_image, prompt_used, *, request, actor, reservation=None):
+        from capp.classes.characters.character_gallery_service import (
+            CharacterGalleryService,
+        )
+
+        return {
+            "status": "success",
+            "data": {
+                "message": "gallery_image_generated_successfully",
+                "image": CharacterGalleryService._serialize_gallery_image(gallery_image, request=request, actor=actor),
+                "prompt_used": prompt_used,
+                "reservation_id": (str(reservation.reservation_id) if reservation is not None else None),
+            },
+        }
+
+    @classmethod
+    def _extract_avatar(cls, payload: Dict[str, Any], request=None, required: bool = False):
+        avatar = None
+
+        if request and hasattr(request, "FILES"):
+            avatar = request.FILES.get("avatar")
+
+        if not avatar:
+            avatar = payload.get("avatar")
+
+        if required and not avatar:
+            return None
+
+        return avatar
+
+    @classmethod
+    def _validate_character_fields(
+        cls,
+        name: str,
+        short_description: str,
+        mood: str,
+        category: str,
+        intro: str,
+        personality_description: str,
+        prompt_template: str,
+        greeting_message: str,
+        tone_style: str,
+        primary_language: str,
+        avatar=None,
+        character: Optional[Character] = None,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
+        if not name:
+            return "name_required"
+
+        if len(name) > 150:
+            return "name_too_long"
+
+        if not short_description:
+            return "short_description_required"
+
+        if len(short_description) > 255:
+            return "short_description_too_long"
+
+        if not mood:
+            return "mood_required"
+
+        if len(mood) > 80:
+            return "mood_too_long"
+
+        if not category:
+            return "category_required"
+
+        valid_categories = {choice[0] for choice in Character.CategoryChoices.choices}
+
+        if category not in valid_categories:
+            return "invalid_category"
+
+        if not intro:
+            return "intro_required"
+
+        if len(intro) > 255:
+            return "intro_too_long"
+
+        if not personality_description:
+            return "personality_description_required"
+
+        if not prompt_template:
+            return "prompt_template_required"
+
+        if not greeting_message:
+            return "greeting_message_required"
+
+        if not tone_style:
+            return "tone_style_required"
+
+        if len(tone_style) > 100:
+            return "tone_style_too_long"
+
+        if tone_style not in cls.ALLOWED_TONE_STYLES:
+            return "invalid_tone_style"
+
+        # Avatar is optional during creation; only validate if provided
+        if avatar:
+            avatar_error = cls._validate_avatar_file(avatar)
+            if avatar_error:
+                return avatar_error
+
+        valid_languages = {choice[0] for choice in Character.LanguageChoices.choices}
+        if primary_language not in valid_languages:
+            return "invalid_primary_language"
+
+        # existing = Character.objects.filter(name__iexact=name)
+        # if character:
+        #     existing = existing.exclude(character_id=character.character_id)
+
+        # if existing.exists():
+        #     return "character_name_already_exists"
+
+        # ---------- NEW: Wizard fields validation ----------
+        if payload:
+            wizard_error = cls._validate_wizard_fields(payload, character)
+            if wizard_error:
+                return wizard_error
+
+            gender = payload.get("gender")
+            if gender:
+                gender_error = cls._validate_gender_specific_fields(gender, payload)
+                if gender_error:
+                    return gender_error
+        # --------------------------------------------------
+
+        return None
+
+    @classmethod
+    def _validate_wizard_fields(cls, payload: Dict[str, Any], character: Optional[Character] = None) -> Optional[str]:
+        """
+        Validate all wizard-specific fields in the payload.
+        Returns an error string if validation fails, otherwise None.
+        """
+        # Location (optional, just length check)
+        country = (payload.get("country") or "").strip()
+        if len(country) > 100:
+            return "country_too_long"
+
+        town = (payload.get("town") or "").strip()
+        if len(town) > 100:
+            return "town_too_long"
+
+        # Visual style
+        visual_style = (payload.get("visual_style") or "").strip()
+        if visual_style and visual_style not in cls.VALID_VISUAL_STYLES:
+            return "invalid_visual_style"
+
+        # Age
+        age = payload.get("age")
+        if age is not None:
+            try:
+                age_int = int(age)
+                if age_int < cls.MIN_AGE or age_int > cls.MAX_AGE:
+                    return "age_out_of_range"
+            except (ValueError, TypeError):
+                return "age_must_be_integer"
+
+        # Skin color
+        skin_color = (payload.get("skin_color") or "").strip()
+        if skin_color and skin_color not in cls.VALID_SKIN_COLORS:
+            return "invalid_skin_color"
+
+        # Hairstyle
+        hairstyle = (payload.get("hairstyle") or "").strip()
+        if hairstyle and hairstyle not in cls.VALID_HAIRSTYLES:
+            return "invalid_hairstyle"
+
+        # Hair color
+        hair_color = (payload.get("hair_color") or "").strip()
+        if hair_color and hair_color not in cls.VALID_HAIR_COLORS:
+            return "invalid_hair_color"
+
+        # Body type
+        body_type = (payload.get("body_type") or "").strip()
+        if body_type and body_type not in cls.VALID_BODY_TYPES:
+            return "invalid_body_type"
+
+        # Gender-specific fields (basic type validation, deeper gender logic comes later)
+        breast_size = (payload.get("breast_size") or "").strip()
+        if breast_size and breast_size not in cls.VALID_BREAST_SIZES:
+            return "invalid_breast_size"
+
+        butt_size = (payload.get("butt_size") or "").strip()
+        if butt_size and butt_size not in cls.VALID_BUTT_SIZES:
+            return "invalid_butt_size"
+
+        chest_hair = (payload.get("chest_hair") or "").strip()
+        if chest_hair and chest_hair not in cls.VALID_CHEST_HAIR:
+            return "invalid_chest_hair"
+
+        muscle_definition = (payload.get("muscle_definition") or "").strip()
+        if muscle_definition and muscle_definition not in cls.VALID_MUSCLE_DEFINITIONS:
+            return "invalid_muscle_definition"
+
+        beard_style = (payload.get("beard_style") or "").strip()
+        if beard_style and beard_style not in cls.VALID_BEARD_STYLES:
+            return "invalid_beard_style"
+
+        # Relationship style
+        relationship_style = (payload.get("relationship_style") or "").strip()
+        if relationship_style and relationship_style not in cls.VALID_RELATIONSHIP_STYLES:
+            return "invalid_relationship_style"
+
+        # Clothing style
+        clothing_style = (payload.get("clothing_style") or "").strip()
+        if clothing_style and clothing_style not in cls.VALID_CLOTHING_STYLES:
+            return "invalid_clothing_style"
+
+        # Avatar source
+        avatar_source = (payload.get("avatar_source") or "").strip()
+        if avatar_source and avatar_source not in cls.VALID_AVATAR_SOURCES:
+            return "invalid_avatar_source"
+
+        # (Personality is now an M2M field, validated by the service layer)
+        # Occupation and Hobbies are validated later when processing
+
+        return None
+
+    @classmethod
+    def _validate_gender_specific_fields(cls, gender: str, payload: Dict[str, Any]) -> Optional[str]:
+        """
+        Ensure gender-specific fields are appropriate for the given gender.
+        Returns error string or None.
+        """
+        if gender == Character.Gender.MALE:
+            breast_size = (payload.get("breast_size") or "").strip()
+            butt_size = (payload.get("butt_size") or "").strip()
+            if breast_size and breast_size != Character.BreastSize.NA:
+                return "male_breast_size_must_be_na"
+            if butt_size and butt_size != Character.ButtSize.NA:
+                return "male_butt_size_must_be_na"
+
+        elif gender == Character.Gender.FEMALE:
+            chest_hair = (payload.get("chest_hair") or "").strip()
+            muscle_definition = (payload.get("muscle_definition") or "").strip()
+            beard_style = (payload.get("beard_style") or "").strip()
+            if chest_hair and chest_hair != Character.ChestHair.NA:
+                return "female_chest_hair_must_be_na"
+            if muscle_definition and muscle_definition != Character.MuscleDefinition.NA:
+                return "female_muscle_definition_must_be_na"
+            if beard_style and beard_style != Character.BeardStyle.NA:
+                return "female_beard_style_must_be_na"
+
+        # Non-binary or other: no restrictions
+        return None
+
+    @classmethod
+    def _serialize_character(cls, character: Character, request=None) -> Dict[str, Any]:
+        avatar_url = None
+        if character.avatar and hasattr(character.avatar, "url"):
+            try:
+                raw_avatar_url = character.avatar.url
+                if request:
+                    avatar_url = request.build_absolute_uri(raw_avatar_url)
+                else:
+                    avatar_url = raw_avatar_url
+            except Exception:
+                avatar_url = None
+
+        created_by = None
+        if character.created_by:
+            created_by = {
+                "user_id": str(character.created_by.user_id),
+                "username": character.created_by.username,
+                "display_name": character.created_by.get_display_name(),
+            }
+
+        created_by_admin = False
+        if character.created_by:
+            created_by_admin = bool(character.created_by.is_staff or character.created_by.is_superuser)
+
+        reviewed_by = None
+        if character.reviewed_by:
+            reviewed_by = {
+                "user_id": str(character.reviewed_by.user_id),
+                "username": character.reviewed_by.username,
+                "display_name": character.reviewed_by.get_display_name(),
+            }
+
+        # Occupation details
+        occupation_data = None
+        if character.occupation:
+            # Try common primary key names
+            occ_id = None
+            if hasattr(character.occupation, "occupation_id"):
+                occ_id = character.occupation.occupation_id
+            elif hasattr(character.occupation, "id"):
+                occ_id = character.occupation.id
+            elif hasattr(character.occupation, "pk"):
+                occ_id = character.occupation.pk
+
+            occupation_data = {
+                "id": str(occ_id) if occ_id else None,
+                "name": character.occupation.name,
+                "description": getattr(character.occupation, "description", ""),
+            }
+
+        # Hobby IDs
+        hobby_ids = []
+        if hasattr(character, "hobbies"):
+            try:
+                hobby_ids = [
+                    str(hobby.hobby_id) if hasattr(hobby, "hobby_id") else str(hobby.id)
+                    for hobby in character.hobbies.all()
+                ]
+            except Exception:
+                hobby_ids = []
+
+        # Personality IDs
+        personality_ids = []
+        if hasattr(character, "personalities"):
+            try:
+                personality_ids = [
+                    str(p.personality_id) if hasattr(p, "personality_id") else str(p.id)
+                    for p in character.personalities.all()
+                ]
+            except Exception:
+                personality_ids = []
+            logger.info(
+                "Serialised character %s – personality_ids: %s",
+                character.character_id,
+                personality_ids,
+            )
+
+        return {
+            "id": character.slug,
+            "character_id": str(character.character_id),
+            "slug": character.slug,
+            "name": character.name,
+            "role": character.short_description,
+            "mood": character.mood,
+            "category": character.category,
+            "status": "online",
+            "popular": character.is_featured,
+            "intro": character.intro,
+            "avatar_url": avatar_url,
+            "short_description": character.short_description,
+            "personality_description": character.personality_description,
+            "prompt_template": character.prompt_template,
+            "system_instructions": character.system_instructions,
+            "greeting_message": character.greeting_message,
+            "tone_style": character.tone_style,
+            "primary_language": character.primary_language,
+            "is_active": character.is_active,
+            "is_featured": character.is_featured,
+            "is_public": character.is_public,
+            "nsfw_enabled": character.nsfw_enabled,
+            "review_status": character.status,
+            "created_by": created_by,
+            "created_by_admin": created_by_admin,
+            "reviewed_by": reviewed_by,
+            "reviewed_at": (character.reviewed_at.isoformat() if character.reviewed_at else None),
+            "rejection_reason": character.rejection_reason,
+            "created_at": (character.created_at.isoformat() if character.created_at else None),
+            "updated_at": (character.updated_at.isoformat() if character.updated_at else None),
+            # ---------- WIZARD FIELDS (ADD THESE) ----------
+            "gender": character.gender,
+            "country": character.country,
+            "town": character.town,
+            "visual_style": character.visual_style,
+            "age": character.age,
+            "eye_color": character.eye_color,
+            "skin_color": character.skin_color,
+            "hairstyle": character.hairstyle,
+            "hair_length": character.hair_length,
+            "hair_color": character.hair_color,
+            "body_type": character.body_type,
+            "breast_size": character.breast_size,
+            "butt_size": character.butt_size,
+            "chest_hair": character.chest_hair,
+            "muscle_definition": character.muscle_definition,
+            "beard_style": character.beard_style,
+            "relationship_style": character.relationship_style,
+            "clothing_style": character.clothing_style,
+            "avatar_source": character.avatar_source,
+            "occupation": occupation_data,
+            "personality_ids": personality_ids,
+            "hobby_ids": hobby_ids,
+            # ----------------------------------------------
+        }
+
+    @classmethod
+    def _validate_avatar_file(cls, avatar) -> Optional[str]:
+        if not avatar:
+            return "avatar_required"
+
+        content_type = getattr(avatar, "content_type", None)
+        if content_type not in cls.ALLOWED_AVATAR_CONTENT_TYPES:
+            return "avatar_invalid_type"
+
+        size = getattr(avatar, "size", None)
+        if size is not None and size > cls.MAX_AVATAR_FILE_SIZE_BYTES:
+            return "avatar_file_too_large"
+
+        try:
+            width, height = cls._get_image_dimensions(avatar)
+        except UnidentifiedImageError:
+            return "avatar_invalid_image"
+        except Exception:
+            logger.exception("Unexpected error while validating avatar dimensions")
+            return "avatar_invalid_image"
+
+        if width < cls.MIN_AVATAR_WIDTH or height < cls.MIN_AVATAR_HEIGHT:
+            return "avatar_too_small"
+
+        return None
+
+    @classmethod
+    def _get_image_dimensions(cls, avatar) -> tuple[int, int]:
+        current_position = None
+        if hasattr(avatar, "tell"):
+            try:
+                current_position = avatar.tell()
+            except Exception:
+                current_position = None
+
+        try:
+            if hasattr(avatar, "seek"):
+                avatar.seek(0)
+
+            with Image.open(avatar) as image:
+                image.verify()
+
+            if hasattr(avatar, "seek"):
+                avatar.seek(0)
+
+            with Image.open(avatar) as image:
+                width, height = image.size
+
+            return width, height
+
+        finally:
+            if current_position is not None and hasattr(avatar, "seek"):
+                try:
+                    avatar.seek(current_position)
+                except Exception:
+                    pass
+
+    @classmethod
+    def _generate_unique_slug(cls, name: str, exclude_character: Optional[Character] = None) -> str:
+        base_slug = slugify(name)[:180] or "character"
+        slug = base_slug
+        counter = 1
+
+        queryset = Character.objects.all()
+        if exclude_character:
+            queryset = queryset.exclude(character_id=exclude_character.character_id)
+
+        while queryset.filter(slug=slug).exists():
+            suffix = f"-{counter}"
+            slug = f"{base_slug[:180 - len(suffix)]}{suffix}"
+            counter += 1
+
+        return slug
+
+    @classmethod
+    def _to_bool(cls, value, default: bool = False) -> bool:
+        if value is None:
+            return default
+
+        if isinstance(value, bool):
+            return value
+
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in ("true", "1", "yes", "on"):
+                return True
+            if normalized in ("false", "0", "no", "off"):
+                return False
+
+        if isinstance(value, int):
+            return bool(value)
+
+        return default
+
+    @classmethod
+    def _is_admin_user(cls, actor) -> bool:
+        return bool(
+            actor
+            and getattr(actor, "is_authenticated", False)
+            and (getattr(actor, "is_staff", False) or getattr(actor, "is_superuser", False))
+        )
+
+    @classmethod
+    def _valid_statuses(cls):
+        return {choice[0] for choice in Character.StatusChoices.choices}
+
+    @classmethod
+    def _resolve_active_state_from_status(cls, status: str, requested_is_active=None) -> bool:
+        if status in (
+            Character.StatusChoices.PENDING,
+            Character.StatusChoices.REJECTED,
+            Character.StatusChoices.ARCHIVED,
+        ):
+            return False
+
+        if status == Character.StatusChoices.APPROVED:
+            return cls._to_bool(requested_is_active, default=True)
+
+        if status == Character.StatusChoices.DRAFT:
+            return cls._to_bool(requested_is_active, default=False)
+
+        return False
+
+    @classmethod
+    def _can_view_character(cls, actor, character: Character) -> bool:
+        if character.status == Character.StatusChoices.APPROVED and character.is_active:
+            return True
+
+        if cls._is_admin_user(actor):
+            return True
+
+        if actor and getattr(actor, "is_authenticated", False) and character.created_by_id == actor.user_id:
+            return True
+
+        return False
+
+    @classmethod
+    def _can_edit_character(cls, actor, character: Character, is_admin_actor: bool) -> bool:
+        if is_admin_actor:
+            return True
+        if actor and getattr(actor, "is_authenticated", False) and actor == character.created_by:
+            return True
+        return False

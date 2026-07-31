@@ -1,0 +1,41 @@
+# UwenzAi
+
+> UwenzAi is an AI companion platform built for East African users and accessible worldwide at https://uwenzai.com. It offers emotionally intelligent, multilingual (English and Kiswahili/Sheng) AI companions with memory, relationship tracking, and culturally aware conversations. Users can chat as guests or register for a full account with coin-based messaging. They can also create their own characters and generate custom images of their companions. UwenzAi is operated by UwenzAi Limited, a company registered in Kenya in 2026.
+
+UwenzAi is developed in Kenya and Switzerland and is headquartered in Kenya. The platform is designed with East African culture, language, and social context at its core. All AI characters are fictional adults. The platform is intended for users aged 18 and older, as it includes NSFW features. Data privacy and security are core pillars of the platform. UwenzAi uses European-based infrastructure to ensure GDPR-compliant data handling. In addition to standard payment methods such as credit cards, the platform supports mobile money options like M-Pesa and Airtel Money, making it more accessible to East African users. Users can also bring their own API key (BYOK) to use third-party AI models at a reduced coin cost.
+
+---
+
+> UwenzAi ni jukwaa la AI companion lililoundwa kwa ajili ya watumiaji wa Afrika Mashariki na linapatikana duniani kote kupitia https://uwenzai.com. Linatoa washirika wa AI wenye akili ya kihisia, wanaozungumza lugha nyingi (Kiingereza na Kiswahili/Sheng), wenye kumbukumbu, ufuatiliaji wa mahusiano, na mazungumzo yanayoendana na utamaduni wa eneo husika. Watumiaji wanaweza kuzungumza kama wageni au kujisajili kwa akaunti kamili yenye mfumo wa ujumbe unaotumia sarafu. Pia wanaweza kuunda wahusika wao wenyewe na kutengeneza picha maalum za washirika wao. UwenzAi inaendeshwa na UwenzAi Limited, kampuni iliyosajiliwa nchini Kenya mwaka 2026.
+
+UwenzAi imetengenezwa nchini Kenya na Uswisi na ina makao yake Kenya. Jukwaa limeundwa kwa kuzingatia utamaduni, lugha, na muktadha wa kijamii wa Afrika Mashariki. Wahusika wote wa AI ni watu wazima wa kubuni. Maudhui yote yamelengwa kwa watumiaji wenye umri wa miaka 18 na zaidi, kwa kuwa jukwaa linajumuisha vipengele vya NSFW. Faragha na usalama wa data ni nguzo kuu za jukwaa hili. UwenzAi hutumia miundombinu iliyoko Ulaya ili kuhakikisha utunzaji wa data unaozingatia kanuni za GDPR. Mbali na njia za kawaida za malipo kama kadi za benki, jukwaa pia linaunga mkono huduma za fedha kwa simu kama M-Pesa na Airtel Money. Watumiaji pia wanaweza kuleta ufunguo wao wa API (BYOK) ili kutumia mifano ya AI ya watu wengine kwa gharama ndogo ya sarafu.
+
+---
+
+## Docs
+
+- [Terms of Service](https://uwenzai.com/terms): Usage rules, content policy, coin refund policy, and age verification requirements
+- [Privacy Policy](https://uwenzai.com/privacy): What data is collected, how conversations and memory facts are stored, and user rights
+- [Responsible Use Guide](https://uwenzai.com/responsible-use): Community standards, content boundaries, and BYOK policy
+- [About UwenzAi](https://uwenzai.com/about): Platform overview, mission, and East African focus
+
+## Product
+
+- [Homepage](https://uwenzai.com): Main entry point — guest chat access, character discovery, sign-up
+- [Characters](https://uwenzai.com/characters): Browse available AI companion characters (public listing)
+- [Pricing / Wallet](https://uwenzai.com/wallet): Coin packages, pricing in KES and other currencies, Paystack payment integration, M-Pesa and Airtel Money support
+
+## Company
+
+- UwenzAi Limited — registered in Kenya, founded 2026
+- Developed in Kenya and Switzerland
+- Contact: [info@uwenzai.com](mailto:info@uwenzai.com)
+
+## Support
+
+- [Responsible Use](https://uwenzai.com/responsible-use): Responsible use guide
+- [Contact](mailto:info@uwenzai.com)
+
+## Optional
+
+- [Sitemap](https://uwenzai.com/sitemap.xml): Full page index

@@ -1,0 +1,12 @@
+# Ignore top-level README and LICENSE
+
+README
+README.md
+LICENSE
+LICENSE.md
+
+# Ignore the "project documents" folder
+
+project documents/
+project documents/\*\*
+readme/

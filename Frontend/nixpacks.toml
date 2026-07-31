@@ -1,0 +1,8 @@
+[nixpacks]
+providers = ["node"]
+
+[phases.install]
+cmds = ["npm install"]
+
+[phases.build]
+cmds = ["npm run build"]
