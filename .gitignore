@@ -68,7 +68,7 @@ Frontend/src/pages/terms/DevServerPrivacyNotice.jsx
 frontend/public/robots.txt
 frontend/public/sitemap.xml
 frontend/public/llm.txt
-rontend/public/llms.txt
+frontend/public/llms.txt
 
 # -----------------------------------------------------------------------------
 # Databases, dumps and data exports
