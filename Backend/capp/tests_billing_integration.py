@@ -21,9 +21,12 @@ moved nothing. Anything else is the bug this branch exists to remove.
 
 import contextlib
 import uuid
+from datetime import timedelta
 from decimal import Decimal
 from unittest import mock
 
+from celery.exceptions import SoftTimeLimitExceeded
+from django.core.files.base import ContentFile
 from django.test import TestCase
 from django.utils import timezone
 
@@ -365,6 +368,241 @@ class GalleryImageBillingTests(BillingFeatureTestCase):
         self.assertEqual(net_sparks_moved(self.user), IMAGE_GENERATION_COST)
 
 
+class ImageReservationRecoveryTests(BillingFeatureTestCase):
+    def _stale_reservation(self, operation_id, operation_reference=None):
+        reservation = PaidFeature.reserve(
+            feature=BillingReservation.Feature.IMAGE_GENERATION,
+            operation_id=operation_id,
+            user=self.user,
+            operation_reference=(operation_reference or f"gallery_image:{self.character.character_id}:{operation_id}"),
+        )
+        stale_at = timezone.now() - timedelta(hours=1)
+        BillingReservation.objects.filter(pk=reservation.pk).update(
+            reserved_at=stale_at,
+            updated_at=stale_at,
+        )
+        reservation.refresh_from_db()
+        return reservation
+
+    def test_stale_hold_without_artifact_is_refunded(self):
+        from capp.tasks import reconcile_stale_image_reservations
+
+        reservation = self._stale_reservation(str(uuid.uuid4()))
+        self.assertEqual(reconcile_stale_image_reservations(), 1)
+        reservation.refresh_from_db()
+        self.assertEqual(reservation.status, BillingReservation.Status.REFUNDED)
+        self.assertEqual(reservation.refund_reason, "stale_image_operation_reconciled")
+        self.assertEqual(net_sparks_moved(self.user), 0)
+
+    def test_stale_hold_with_gallery_artifact_is_settled(self):
+        from capp.tasks import reconcile_stale_image_reservations
+
+        operation_id = str(uuid.uuid4())
+        reservation = self._stale_reservation(operation_id)
+        gallery_image = CharacterGalleryImage.objects.create(
+            character=self.character,
+            created_by=self.user,
+            visibility=CharacterGalleryImage.VisibilityChoices.PRIVATE,
+            client_operation_id=operation_id,
+        )
+        gallery_image.image.save("recovery/generated.webp", ContentFile(b"image"), save=True)
+
+        self.assertEqual(reconcile_stale_image_reservations(), 1)
+        reservation.refresh_from_db()
+        self.assertEqual(reservation.status, BillingReservation.Status.SETTLED)
+        self.assertEqual(reservation.settlement_reason, "stale_image_artifact_reconciled")
+        self.assertEqual(net_sparks_moved(self.user), IMAGE_GENERATION_COST)
+
+    def test_empty_gallery_row_is_not_treated_as_delivered_work(self):
+        from capp.tasks import reconcile_stale_image_reservations
+
+        operation_id = str(uuid.uuid4())
+        reservation = self._stale_reservation(operation_id)
+        CharacterGalleryImage.objects.create(
+            character=self.character,
+            created_by=self.user,
+            visibility=CharacterGalleryImage.VisibilityChoices.PRIVATE,
+            client_operation_id=operation_id,
+        )
+
+        self.assertEqual(reconcile_stale_image_reservations(), 1)
+        reservation.refresh_from_db()
+        self.assertEqual(reservation.status, BillingReservation.Status.REFUNDED)
+
+    def test_other_users_matching_message_cannot_settle_hold(self):
+        from capp.tasks import reconcile_stale_image_reservations
+
+        operation_id = str(uuid.uuid4())
+        reservation = self._stale_reservation(operation_id)
+        other = _make_user(username="other-billed", email="other-billed@example.com", verified=True)
+        conversation = Conversation.objects.create(user=other, character=self.character)
+        Message.objects.create(
+            conversation=conversation,
+            sender_type=Message.SenderType.AI,
+            content="",
+            status=Message.StatusChoices.SENT,
+            client_operation_id=result_key(operation_id),
+            metadata={
+                "type": "generated_image",
+                "image_name": "characters/gallery/other.webp",
+                "reservation_id": str(reservation.reservation_id),
+            },
+        )
+
+        self.assertEqual(reconcile_stale_image_reservations(), 1)
+        reservation.refresh_from_db()
+        self.assertEqual(reservation.status, BillingReservation.Status.REFUNDED)
+
+    def test_chat_gallery_intermediate_without_message_is_refunded(self):
+        from capp.tasks import reconcile_stale_image_reservations
+
+        operation_id = str(uuid.uuid4())
+        conversation = Conversation.objects.create(user=self.user, character=self.character)
+        reservation = self._stale_reservation(
+            operation_id,
+            f"chat_image:{conversation.conversation_id}:{operation_id}",
+        )
+        gallery_image = CharacterGalleryImage.objects.create(
+            character=self.character,
+            created_by=self.user,
+            visibility=CharacterGalleryImage.VisibilityChoices.PRIVATE,
+            client_operation_id=operation_id,
+        )
+        gallery_image.image.save("recovery/intermediate.webp", ContentFile(b"image"), save=True)
+
+        self.assertEqual(reconcile_stale_image_reservations(), 1)
+        reservation.refresh_from_db()
+        self.assertEqual(reservation.status, BillingReservation.Status.REFUNDED)
+
+    def test_chat_message_must_belong_to_encoded_conversation(self):
+        from capp.tasks import reconcile_stale_image_reservations
+
+        operation_id = str(uuid.uuid4())
+        expected_conversation = Conversation.objects.create(
+            user=self.user,
+            character=self.character,
+        )
+        other_conversation = Conversation.objects.create(
+            user=self.user,
+            character=self.character,
+        )
+        reservation = self._stale_reservation(
+            operation_id,
+            f"chat_image:{expected_conversation.conversation_id}:{operation_id}",
+        )
+        Message.objects.create(
+            conversation=other_conversation,
+            sender_type=Message.SenderType.AI,
+            content="",
+            status=Message.StatusChoices.SENT,
+            client_operation_id=result_key(operation_id),
+            metadata={
+                "type": "generated_image",
+                "image_name": "characters/gallery/wrong-conversation.webp",
+                "reservation_id": str(reservation.reservation_id),
+            },
+        )
+
+        self.assertEqual(reconcile_stale_image_reservations(), 1)
+        reservation.refresh_from_db()
+        self.assertEqual(reservation.status, BillingReservation.Status.REFUNDED)
+
+    def test_chat_message_in_encoded_conversation_is_settled(self):
+        from capp.tasks import reconcile_stale_image_reservations
+
+        operation_id = str(uuid.uuid4())
+        conversation = Conversation.objects.create(user=self.user, character=self.character)
+        reservation = self._stale_reservation(
+            operation_id,
+            f"chat_photo_offer:{conversation.conversation_id}:{operation_id}",
+        )
+        Message.objects.create(
+            conversation=conversation,
+            sender_type=Message.SenderType.AI,
+            content="",
+            status=Message.StatusChoices.SENT,
+            client_operation_id=result_key(operation_id),
+            metadata={
+                "type": "generated_image",
+                "image_name": "characters/gallery/delivered.webp",
+                "reservation_id": str(reservation.reservation_id),
+            },
+        )
+
+        self.assertEqual(reconcile_stale_image_reservations(), 1)
+        reservation.refresh_from_db()
+        self.assertEqual(reservation.status, BillingReservation.Status.SETTLED)
+
+    def test_chat_message_with_null_image_name_is_refunded(self):
+        from capp.tasks import reconcile_stale_image_reservations
+
+        operation_id = str(uuid.uuid4())
+        conversation = Conversation.objects.create(user=self.user, character=self.character)
+        reservation = self._stale_reservation(
+            operation_id,
+            f"chat_image:{conversation.conversation_id}:{operation_id}",
+        )
+        Message.objects.create(
+            conversation=conversation,
+            sender_type=Message.SenderType.AI,
+            content="",
+            status=Message.StatusChoices.SENT,
+            client_operation_id=result_key(operation_id),
+            metadata={
+                "type": "generated_image",
+                "image_name": None,
+                "reservation_id": str(reservation.reservation_id),
+            },
+        )
+
+        self.assertEqual(reconcile_stale_image_reservations(), 1)
+        reservation.refresh_from_db()
+        self.assertEqual(reservation.status, BillingReservation.Status.REFUNDED)
+
+    def test_gallery_artifact_must_belong_to_encoded_character(self):
+        from capp.tasks import reconcile_stale_image_reservations
+
+        operation_id = str(uuid.uuid4())
+        other_character = Character.objects.create(
+            name="Other recovery character",
+            created_by=self.user,
+        )
+        reservation = self._stale_reservation(operation_id)
+        gallery_image = CharacterGalleryImage.objects.create(
+            character=other_character,
+            created_by=self.user,
+            visibility=CharacterGalleryImage.VisibilityChoices.PRIVATE,
+            client_operation_id=operation_id,
+        )
+        gallery_image.image.save("recovery/wrong-character.webp", ContentFile(b"image"), save=True)
+
+        self.assertEqual(reconcile_stale_image_reservations(), 1)
+        reservation.refresh_from_db()
+        self.assertEqual(reservation.status, BillingReservation.Status.REFUNDED)
+
+    def test_preexisting_avatar_is_not_inferred_as_completed_work(self):
+        from capp.tasks import reconcile_stale_image_reservations
+
+        operation_id = str(uuid.uuid4())
+        self.character.avatar = "characters/avatars/preexisting.webp"
+        self.character.save(update_fields=["avatar", "updated_at"])
+        reservation = PaidFeature.reserve(
+            feature=BillingReservation.Feature.IMAGE_GENERATION,
+            operation_id=operation_id,
+            user=self.user,
+            operation_reference=f"avatar:{self.character.character_id}:{operation_id}",
+        )
+        stale_at = timezone.now() - timedelta(hours=1)
+        BillingReservation.objects.filter(pk=reservation.pk).update(
+            reserved_at=stale_at,
+            updated_at=stale_at,
+        )
+
+        self.assertEqual(reconcile_stale_image_reservations(), 1)
+        reservation.refresh_from_db()
+        self.assertEqual(reservation.status, BillingReservation.Status.REFUNDED)
+
+
 # ======================================================================
 # Chat message pairs, including the Celery task's retry behaviour
 # ======================================================================
@@ -474,6 +712,28 @@ class ChatMessagePairBillingTests(BillingFeatureTestCase):
         # What the client would get on reload.
         reply = Message.objects.get(conversation=self.conversation, sender_type=Message.SenderType.AI)
         self.assertEqual(reply.content, "Hi there!")
+
+    def test_push_soft_limit_after_commit_keeps_reply_settled(self):
+        before = self.balance()
+        message = self._user_message(str(uuid.uuid4()))
+
+        with mock.patch(
+            "capp.tasks.PushService.send_new_message_push",
+            side_effect=SoftTimeLimitExceeded(),
+        ):
+            self._run(message)
+
+        message.refresh_from_db()
+        self.assertEqual(message.status, Message.StatusChoices.SENT)
+        self.assertEqual(self.balance(), before - MESSAGE_PAIR_COST)
+        self.assertSettledOnce(MESSAGE_PAIR_COST)
+        self.assertEqual(
+            Message.objects.filter(
+                conversation=self.conversation,
+                sender_type=Message.SenderType.AI,
+            ).count(),
+            1,
+        )
 
     def test_a_refunded_operation_is_not_resurrected_by_a_late_retry(self):
         """

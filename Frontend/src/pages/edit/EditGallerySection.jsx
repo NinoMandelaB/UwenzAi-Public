@@ -17,6 +17,7 @@ export default function EditGallerySection({
   characterId,
   images,
   visualStyle,
+  isAdmin = false,
   onRefresh,
   onError,
   onImageGenerated,
@@ -136,22 +137,25 @@ export default function EditGallerySection({
               )}
               {t("characters.generate")}
             </button>
-            <label className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium bg-[var(--color-soft)] text-[var(--color-text)] border border-[var(--color-border)] cursor-pointer">
-              {isUploading ? (
-                <Loader2 className="animate-spin" size={16} />
-              ) : (
-                <Plus size={16} />
-              )}
-              {t("characters.addImage")}
-              <input
-                type="file"
-                accept="image/jpeg,image/png,image/webp"
-                ref={fileInputRef}
-                onChange={handleFileChange}
-                className="hidden"
-                disabled={isUploading}
-              />
-            </label>
+            {/* Upload button — admins only, mirroring the server-side restriction */}
+            {isAdmin && (
+              <label className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium bg-[var(--color-soft)] text-[var(--color-text)] border border-[var(--color-border)] cursor-pointer">
+                {isUploading ? (
+                  <Loader2 className="animate-spin" size={16} />
+                ) : (
+                  <Plus size={16} />
+                )}
+                {t("characters.addImage")}
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  ref={fileInputRef}
+                  onChange={handleFileChange}
+                  className="hidden"
+                  disabled={isUploading}
+                />
+              </label>
+            )}
           </div>
         </div>
 

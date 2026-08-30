@@ -2,6 +2,7 @@
 
 import { API, STORAGE_KEYS } from "../config/constants";
 import { ensureCsrfCookie, getAccessToken } from "./apiClient";
+import { unsubscribeFromPush, unsubscribePushLocally } from "./pushService";
 
 // -----------------------------------------------------------------
 //  Helpers
@@ -232,6 +233,7 @@ export async function deleteAccount() {
   });
 
   const data = await handleFetchResponse(response);
+  await unsubscribePushLocally().catch(() => {});
   clearStoredUserData(); // clears user & spark_pool from localStorage
   return data;
 }
@@ -352,6 +354,15 @@ export async function confirmEmailChange(payload) {
 
 export async function signoutUser() {
   try {
+    // Detach this device's push subscription while the access token is still
+    // valid, so a shared device stops receiving the signed-out account's
+    // notifications. Best-effort: it must never block sign-out (the backend
+    // prunes dead endpoints on send, so a missed cleanup self-heals).
+    try {
+      await unsubscribeFromPush();
+    } catch {
+      // Signing out matters more than a clean unsubscribe.
+    }
     const data = await postWithCsrf(API.AUTH.SIGNOUT, {});
     clearStoredUserData();
     return data;

@@ -1,5 +1,5 @@
 # --- Core Django ---
-Django==6.0.7
+Django==6.0.8
 
 # --- API ---
 djangorestframework==3.16.1
@@ -44,7 +44,7 @@ google-auth==2.29.0
 # --- HTTP ---
 requests==2.33.0
 
-cryptography==46.0.7
+cryptography==50.0.0
 
 # --- Mistral ---
 mistral-common>=1.5.0,<1.6.0
@@ -62,6 +62,9 @@ tiktoken>=0.9.0
 #---fal.ai----
 fal-client==1.0.0
 
+# --- open_url tool: readable-content extraction from fetched web pages ---
+trafilatura==2.2.0
+
 # --- Error Monitoring (opt-in via SENTRY_DSN) ---
 sentry-sdk==2.20.0
 
@@ -69,6 +72,14 @@ sentry-sdk==2.20.0
 black==26.5.1
 flake8==7.1.2
 autoflake==2.3.1
+
+# --- Test tooling ---
+# Lets Django's parallel test runner pickle tracebacks across worker
+# subprocesses. Without it, any per-test AssertionError is re-raised as an
+# unpicklable traceback that kills the worker and cascades as
+# OperationalError('database "test_test_db_N" does not exist') across every
+# other test in that worker.
+tblib==3.0.0
 
 # --- Security floors for transitive dependencies ---
 # Not imported directly. Each is pinned to the lowest patched release that clears
@@ -80,3 +91,6 @@ msgpack>=1.2.1        # GHSA-6v7p-g79w-8964
 pyasn1>=0.6.4         # PYSEC-2026-3455, PYSEC-2026-3456, PYSEC-2026-3457
 PyJWT>=2.13.0         # PYSEC-2026-175 .. PYSEC-2026-179
 urllib3>=2.7.0        # PYSEC-2026-141, PYSEC-2026-142
+
+# --- Web Push (VAPID) ---
+pywebpush==2.0.3

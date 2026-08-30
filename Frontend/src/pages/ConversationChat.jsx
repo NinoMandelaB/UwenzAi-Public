@@ -287,6 +287,104 @@ function ImagePromptModal({
   );
 }
 
+function PhotoOfferModal({
+  offer,
+  characterName,
+  onAccept,
+  onDecline,
+  responding,
+}) {
+  const { t } = useLanguage();
+  const { pricing } = usePricing();
+
+  if (!offer) return null;
+
+  // The offer message carries the discounted price the backend will charge;
+  // the /pricing/ value is only a display fallback until it resolves.
+  const cost =
+    typeof offer.cost === "number"
+      ? offer.cost
+      : pricing?.character_photo_offer_cost;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ backgroundColor: "rgba(0,0,0,0.5)" }}
+      onClick={onDecline}
+    >
+      <div
+        className="w-full max-w-sm rounded-2xl p-5 shadow-xl"
+        style={{
+          backgroundColor: "var(--color-card)",
+          border: "1px solid var(--color-border)",
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-3 flex items-start justify-between">
+          <h2 className="text-base font-semibold theme-text">
+            {t("chat.photoOfferTitle", { name: characterName })}
+          </h2>
+          <button
+            type="button"
+            onClick={onDecline}
+            className="rounded-full p-1 text-gray-400 hover:text-gray-200"
+            aria-label={t("chat.cancel")}
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <p className="mb-3 text-sm theme-text">
+          {t("chat.photoOfferQuestion")}
+        </p>
+
+        {offer.prompt ? (
+          <p className="mb-3 text-xs italic theme-text-muted">
+            {t("chat.photoOfferDescription", { description: offer.prompt })}
+          </p>
+        ) : null}
+
+        {typeof cost === "number" ? (
+          <p className="text-xs font-medium theme-text">
+            {t("chat.photoOfferCost", { cost })}
+          </p>
+        ) : null}
+
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onDecline}
+            disabled={responding}
+            className="rounded-xl px-4 py-2 text-sm font-medium transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            style={{
+              border: "1px solid var(--color-border)",
+              backgroundColor: "var(--color-soft)",
+              color: "var(--color-text-muted)",
+            }}
+          >
+            {t("chat.photoOfferDecline")}
+          </button>
+          <button
+            type="button"
+            onClick={onAccept}
+            disabled={responding}
+            className="rounded-xl px-4 py-2 text-sm font-medium transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            style={{
+              backgroundColor: "var(--color-accent-soft)",
+              color: "var(--color-accent)",
+              border: "1px solid var(--color-accent-soft)",
+            }}
+          >
+            {responding
+              ? t("chat.photoOfferAccepting")
+              : t("chat.photoOfferAccept")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ConversationChat() {
   const navigate = useNavigate();
   const { conversationId } = useParams();
@@ -304,6 +402,10 @@ export default function ConversationChat() {
     error: chatError,
     sendMessage: sendToAI,
     generateImage,
+    photoOffer,
+    acceptPhotoOffer,
+    declinePhotoOffer,
+    isRespondingToOffer,
     isSending,
     clearMessages,
     deleteMessage,
@@ -746,6 +848,19 @@ export default function ConversationChat() {
           onClose={() => setIsImageModalOpen(false)}
           onSubmit={handleGenerateImage}
           submitting={isGeneratingImage}
+        />
+      )}
+
+      {/* Character-initiated photo offer popup (authenticated users only).
+          Same conditional-mount reasoning as the image modal above: accepting
+          is a paid, authenticated-only action. */}
+      {canGenerateImage && (
+        <PhotoOfferModal
+          offer={photoOffer}
+          characterName={activeCharacter.name}
+          onAccept={acceptPhotoOffer}
+          onDecline={declinePhotoOffer}
+          responding={isRespondingToOffer}
         />
       )}
 

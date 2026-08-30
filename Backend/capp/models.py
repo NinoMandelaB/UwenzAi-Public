@@ -1259,6 +1259,14 @@ class Conversation(TimeStampedModel):
         ARCHIVED = "archived", "Archived"
         CLOSED = "closed", "Closed"
 
+    class ReasoningEffort(models.TextChoices):
+        # "Fast" preserves current behavior exactly (no reasoning/thinking params
+        # sent to the provider). "Deep" opts into provider-supported reasoning
+        # effort where verified against current official docs -- see
+        # capp/classes/ai/reasoning.py for the per-provider mapping and doc citations.
+        FAST = "fast", "Fast"
+        DEEP = "deep", "Deep"
+
     conversation_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(
         CustomUser,
@@ -1291,6 +1299,19 @@ class Conversation(TimeStampedModel):
     # derived from it rather than stored as a counter so that deleting or
     # resetting messages can never leave a badge stuck on a stale number.
     last_read_at = models.DateTimeField(default=timezone.now)
+
+    # --- Per-chat toggles ---------------------------------------------------
+    # Web search: when enabled, the reply pipeline may offer/execute a search
+    # tool (see capp/classes/search/). Default False: current behavior unchanged.
+    web_search_enabled = models.BooleanField(default=False)
+    # Reasoning/thinking effort: "fast" (default, unchanged behavior) or "deep"
+    # (opt-in; mapped to provider-specific reasoning params where documented
+    # support exists -- see capp/classes/ai/reasoning.py).
+    reasoning_effort = models.CharField(
+        max_length=10,
+        choices=ReasoningEffort.choices,
+        default=ReasoningEffort.FAST,
+    )
 
     class Meta:
         db_table = "conversations"
@@ -1455,6 +1476,22 @@ class MemoryFact(TimeStampedModel):
     is_active = models.BooleanField(default=True)
     extracted_at = models.DateTimeField(default=timezone.now)
 
+    # ----- Temporal fields (Phase 1: bi-temporal facts) -----
+    # Event time: when the stated fact became true in the user's world
+    # (resolved from relative expressions at extraction time).
+    valid_from = models.DateTimeField(blank=True, null=True)
+    # System time: when this fact stopped being the current truth, set when
+    # a newer fact supersedes it. NULL = currently believed true.
+    valid_to = models.DateTimeField(blank=True, null=True)
+    # Link to the newer fact that replaced this one (append-only history).
+    superseded_by = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        related_name="supersedes",
+        blank=True,
+        null=True,
+    )
+
     # ----- pgvector fields -----
     embedding = VectorField(dimensions=1024, null=True, blank=True)
     embedding_model = models.CharField(max_length=100, blank=True)
@@ -1465,11 +1502,140 @@ class MemoryFact(TimeStampedModel):
         indexes = [
             models.Index(fields=["user", "is_active"]),
             models.Index(fields=["character", "is_active"]),
+            # Name omitted on purpose: a custom name desyncs makemigrations
+            # (Django renames long auto-hashed indexes); default keeps them in sync.
+            models.Index(fields=["user", "valid_to"]),
         ]
 
     def __str__(self):
         name = self.user.get_display_name()
         return f"{name} - {self.fact_type}"
+
+
+class MemoryEntity(TimeStampedModel):
+    """
+    A canonical person, place, organisation, or thing known about a user.
+
+    Entities are the nodes of the memory graph: extraction canonicalizes
+    mentions ("mpenzi wangu", "my girlfriend", "Zawadi") into one node so
+    relations accumulate on a single identity across conversations.
+    Entities are user-global; per-character scoping lives on MemoryRelation.
+    """
+
+    class EntityType(models.TextChoices):
+        PERSON = "person", "Person"
+        PLACE = "place", "Place"
+        ORG = "org", "Organisation"
+        THING = "thing", "Thing"
+        OTHER = "other", "Other"
+
+    memory_entity_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name="memory_entities")
+
+    name = models.CharField(max_length=120)
+    normalized_name = models.CharField(max_length=120)
+    entity_type = models.CharField(max_length=20, choices=EntityType.choices, default=EntityType.OTHER)
+
+    # Optional semantic fallback for entity matching when the name lookup misses.
+    embedding = VectorField(dimensions=1024, null=True, blank=True)
+    embedding_model = models.CharField(max_length=100, blank=True)
+
+    class Meta:
+        db_table = "memory_entities"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "normalized_name"],
+                name="uniq_memory_entity_user_name",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["user"]),
+        ]
+
+    def __str__(self):
+        return f"{self.name} ({self.entity_type})"
+
+    @classmethod
+    def normalize_name(cls, name: str) -> str:
+        """Lowercase + whitespace-collapse; the cheap half of entity resolution."""
+        return " ".join((name or "").strip().lower().split())
+
+
+class MemoryRelation(TimeStampedModel):
+    """
+    A bi-temporal edge in the memory graph: (subject, predicate, object).
+
+    - valid_from / valid_to: event time — when the relationship held in the
+      user's world ("moved to Nairobi on 2026-03-01").
+    - invalidated_at: system time — when we stopped believing it, i.e. a
+      newer relation superseded it. NULL = currently believed true.
+    """
+
+    memory_relation_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name="memory_relations")
+    # NULL character = user-global relation visible to all characters.
+    character = models.ForeignKey(
+        Character,
+        on_delete=models.SET_NULL,
+        related_name="memory_relations",
+        blank=True,
+        null=True,
+    )
+    conversation = models.ForeignKey(
+        Conversation,
+        on_delete=models.SET_NULL,
+        related_name="memory_relations",
+        blank=True,
+        null=True,
+    )
+
+    subject = models.ForeignKey(MemoryEntity, on_delete=models.CASCADE, related_name="out_relations")
+    predicate = models.CharField(max_length=60)  # snake_case: lives_in, works_at, sibling_of, ...
+    object_entity = models.ForeignKey(
+        MemoryEntity,
+        on_delete=models.CASCADE,
+        related_name="in_relations",
+        blank=True,
+        null=True,
+    )
+    # Free-text object for values that are not entities ("works as a nurse").
+    object_text = EncryptedTextField(blank=True, null=True)
+
+    confidence_score = models.DecimalField(
+        max_digits=4,
+        decimal_places=2,
+        default=Decimal("0.50"),
+        validators=[MinValueValidator(0), MaxValueValidator(1)],
+    )
+
+    # Bi-temporal validity
+    valid_from = models.DateTimeField(blank=True, null=True)
+    valid_to = models.DateTimeField(blank=True, null=True)
+    extracted_at = models.DateTimeField(default=timezone.now)
+    invalidated_at = models.DateTimeField(blank=True, null=True)
+    superseded_by = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        related_name="supersedes",
+        blank=True,
+        null=True,
+    )
+
+    # Embedded triple text ("Nino lives in Frankfurt") for hybrid retrieval.
+    embedding = VectorField(dimensions=1024, null=True, blank=True)
+    embedding_model = models.CharField(max_length=100, blank=True)
+
+    class Meta:
+        db_table = "memory_relations"
+        indexes = [
+            models.Index(fields=["user", "invalidated_at"]),
+            models.Index(fields=["subject", "invalidated_at"]),
+            models.Index(fields=["object_entity", "invalidated_at"]),
+        ]
+
+    def __str__(self):
+        obj = self.object_entity.name if self.object_entity_id else (self.object_text or "?")
+        return f"{self.subject.name} -{self.predicate}-> {obj}"
 
 
 class RelationshipState(TimeStampedModel):
@@ -1501,6 +1667,9 @@ class RelationshipState(TimeStampedModel):
     )
     relationship_notes = models.TextField(blank=True, null=True)
     last_interaction_at = models.DateTimeField(blank=True, null=True)
+    # Idempotency guard for update_relationship_state Celery task retries.
+    # See RelationshipService.update_relationship_state.
+    last_processed_ai_message_id = models.UUIDField(blank=True, null=True)
 
     class Meta:
         db_table = "relationship_states"
@@ -2531,6 +2700,100 @@ class BillingReservation(TimeStampedModel):
         if self.user_id is not None:
             return f"user:{self.user_id}"
         return f"guest:{self.guest_identity_id}"
+
+
+class AdminActionLog(TimeStampedModel):
+    """
+    Persistent audit trail for destructive or sensitive admin actions.
+
+    Unlike stdout logs (which rotate away on Railway), this table keeps a
+    durable, queryable record of every admin action that changes user status,
+    adjusts Sparks, or permanently deletes a character. Required for compliance
+    accountability under the Kenya Data Protection Act 2019 and good practice
+    for any admin surface with real operational power.
+
+    Spark adjustments are also recorded as SparkTransaction rows (the financial
+    ledger), but this log captures the full admin context — who, what, why, and
+    when — in a single place that covers non-financial actions too.
+    """
+
+    class ActionType(models.TextChoices):
+        USER_STATUS_CHANGE = "user_status_change", "User Status Change"
+        SPARK_ADJUSTMENT = "spark_adjustment", "Spark Adjustment"
+        CHARACTER_HARD_DELETE = "character_hard_delete", "Character Hard Delete"
+
+    log_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # The admin who performed the action.
+    admin_user = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name="admin_actions_performed",
+    )
+
+    action_type = models.CharField(max_length=40, choices=ActionType.choices)
+
+    # The user affected by the action (if applicable).
+    target_user = models.ForeignKey(
+        CustomUser,
+        on_delete=models.SET_NULL,
+        related_name="admin_actions_received",
+        blank=True,
+        null=True,
+    )
+
+    # The character affected by the action (if applicable). Stored as a UUID
+    # rather than a FK because hard-deleted characters no longer have a row.
+    target_character_id = models.UUIDField(blank=True, null=True)
+    target_character_name = models.CharField(max_length=255, blank=True, null=True)
+
+    # Human-readable reason provided by the admin.
+    reason = models.TextField(blank=True, null=True)
+
+    # Structured details (old/new status, spark delta, cascade counts, etc.).
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        db_table = "admin_action_log"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["admin_user", "created_at"]),
+            models.Index(fields=["target_user", "created_at"]),
+            models.Index(fields=["action_type", "created_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.admin_user.username} — {self.action_type} — {self.created_at:%Y-%m-%d %H:%M}"  # noqa: E231
+
+
+# ============================================================
+# PUSH NOTIFICATIONS
+# ============================================================
+class PushSubscription(TimeStampedModel):
+    """
+    A Web Push subscription for one browser/device of a user.
+
+    The endpoint is the push service's delivery address (FCM, Mozilla, ...)
+    and doubles as the natural unique key: the same browser re-subscribing
+    after a toggle off/on yields the same endpoint, so an upsert keeps one
+    row per real device. Rows die with the user (CASCADE), and dead ones are
+    pruned on send when the push service reports 404/410.
+    """
+
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name="push_subscriptions")
+    # FCM endpoints can exceed 200 chars, so the URLField default is too small.
+    endpoint = models.URLField(max_length=768, unique=True)
+    p256dh = models.CharField(max_length=255)
+    auth = models.CharField(max_length=255)
+    # Diagnostics only: tells devices apart when a user reports lost pushes.
+    user_agent = models.CharField(max_length=255, blank=True, default="")
+
+    class Meta:
+        db_table = "push_subscriptions"
+        ordering = ["-updated_at"]
+
+    def __str__(self):
+        return f"{self.user.username} — {self.endpoint[:60]}"
 
 
 # Signal to delete image file when gallery image is deleted

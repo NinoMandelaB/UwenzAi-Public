@@ -22,6 +22,7 @@ urlpatterns = [
     path("api/v1/support/", include("capp.urls.support_urls")),
     path("api/v1/admin/", include("capp.urls.admin_urls")),
     path("api/v1/proactive-chat/", include("capp.urls.proactive_chat_urls")),
+    path("api/v1/push/", include("capp.urls.push_urls")),
     path("api/v1/memory/", include("capp.urls.memory_urls")),
 ]
 

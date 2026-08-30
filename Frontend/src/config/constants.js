@@ -113,9 +113,15 @@ export const API = {
       `/api/v1/conversations/${conversationId}/messages/`,
     GENERATE_IMAGE: (conversationId) =>
       `/api/v1/conversations/${conversationId}/generate-image/`,
+    ACCEPT_PHOTO_OFFER: (conversationId, messageId) =>
+      `/api/v1/conversations/${conversationId}/photo-offers/${messageId}/accept/`,
+    DECLINE_PHOTO_OFFER: (conversationId, messageId) =>
+      `/api/v1/conversations/${conversationId}/photo-offers/${messageId}/decline/`,
     RESET: (conversationId) => `/api/v1/conversations/${conversationId}/reset/`,
     DELETE_MESSAGE: (conversationId, messageId) =>
       `/api/v1/conversations/${conversationId}/messages/${messageId}/delete/`,
+    SETTINGS: (conversationId) =>
+      `/api/v1/conversations/${conversationId}/settings/`,
   },
 
   TOKENS: {
@@ -204,6 +210,15 @@ export const API = {
       `/api/v1/proactive-chat/preference/${characterId}/`,
     UPDATE: (characterId) =>
       `/api/v1/proactive-chat/preference/${characterId}/update/`,
+  },
+
+  // ─────────────────────────────────────────────────────────────
+  // Web Push (PWA notifications)
+  // ─────────────────────────────────────────────────────────────
+  PUSH: {
+    VAPID_PUBLIC_KEY: "/api/v1/push/vapid-public-key/",
+    SUBSCRIBE: "/api/v1/push/subscribe/",
+    UNSUBSCRIBE: "/api/v1/push/unsubscribe/",
   },
 
   PING: "/api/ping/",

@@ -20,6 +20,10 @@ export function normalizeHistoryMessage(raw) {
     created_at: raw.created_at,
     reply_to: raw.reply_to || null,
     code: raw.code || undefined,
+    type: raw.type || "",
+    // Present only on character-initiated photo offers (type "photo_offer"):
+    // { prompt, cost, status } so a reloaded page can re-open the popup.
+    offer: raw.offer || null,
   };
 }
 

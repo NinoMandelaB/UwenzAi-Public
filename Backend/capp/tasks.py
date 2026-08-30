@@ -1,16 +1,21 @@
 # capp/tasks.py
 
 import logging
+import re
+import time
+import uuid
+from datetime import timedelta
 
 from celery import shared_task
-from celery.exceptions import MaxRetriesExceededError, Retry
-from django.db import transaction
+from celery.exceptions import MaxRetriesExceededError, Retry, SoftTimeLimitExceeded
+from django.db import OperationalError, connection, transaction
 from django.utils import timezone
 from django.conf import settings
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from capp.classes.chat import unread_service
 from capp.classes.chat.proactive_chat_service import ProactiveChatService
+from capp.classes.push.push_service import PushService
 
 from capp.models import (
     BillingReservation,
@@ -28,7 +33,14 @@ from capp.models import (
 from capp.classes.ai.cortecs_client import CortecsClient
 from capp.classes.ai.prompt_builder import PromptBuilder
 from capp.classes.byok.byok_service import BYOKService
-from capp.constants import BYOK_MESSAGE_PAIR_COST
+from capp.constants import BYOK_MESSAGE_PAIR_COST, CHARACTER_PHOTO_OFFER_COST
+from capp.classes.search.base import get_search_provider
+from capp.classes.search.tool_loop import (
+    run_search_tool_calls,
+    run_open_url_tool_calls,
+    SEARCH_TOOL_SPEC,
+    OPEN_URL_TOOL_SPEC,
+)
 
 from capp.classes.memory.memory_service import MemoryService
 from capp.classes.relationship.relationship_service import RelationshipService
@@ -37,9 +49,67 @@ from capp.classes.billing.balances import debit_locked
 from capp.classes.billing.charge_service import _push_spark_pool_balance
 from capp.classes.billing.idempotency import result_key
 from capp.classes.billing.paid_features import InsufficientBalance, PaidFeature, ReservationError
+from capp.classes.billing.reservation_service import BillingReservationService
 from capp.classes.moderation.image_prompt_policy import ImagePromptPolicy
 
 logger = logging.getLogger(__name__)
+
+
+def _run_offered_tool_calls(tool_calls, conversation_id):
+    """
+    Execute whichever of the offered tools (web_search, open_url) the model
+    actually called, each independently capped at its own
+    settings.SEARCH_MAX_CALLS_PER_MESSAGE / OPEN_URL_MAX_CALLS_PER_MESSAGE.
+
+    Used by both the Cortecs and BYOK branches of process_ai_response so the
+    two paths behave identically once a tool-calling model is involved --
+    search execution (and open_url fetching) is provider-independent.
+
+    Returns (condensed_block, search_calls_used, open_url_calls_used).
+    """
+    search_condensed, search_calls_used = run_search_tool_calls(tool_calls)
+    open_url_condensed, open_url_calls_used = run_open_url_tool_calls(tool_calls)
+
+    if search_calls_used or open_url_calls_used:
+        logger.info(
+            "Tool calls used for conv=%s: web_search=%d open_url=%d; continuing generation",
+            conversation_id,
+            search_calls_used,
+            open_url_calls_used,
+        )
+
+    blocks = [b for b in (search_condensed, open_url_condensed) if b]
+    return ("\n\n".join(blocks), search_calls_used, open_url_calls_used)
+
+
+# The character may offer to send a photo of itself by ending its reply with a
+# marker carrying a generation-ready description, e.g.
+#   [PHOTO_OFFER:standing in a sunny market, smiling at the camera]
+# The marker never reaches the user: process_ai_response splits it off, stores
+# the visible text as the reply and a separate `photo_offer` message the client
+# renders as an accept/decline card (accepting runs generate_chat_image at the
+# discounted CHARACTER_PHOTO_OFFER_COST). Willingness — and the trust threshold
+# for intimate photos — is the model's call, driven by the system prompt.
+PHOTO_OFFER_MARKER_RE = re.compile(r"\[PHOTO_OFFER:(.*?)\]", re.IGNORECASE | re.DOTALL)
+
+
+def _extract_photo_offer(text: str):
+    """Split a trailing [PHOTO_OFFER:...] marker off an AI reply.
+
+    Returns (clean_text, offer_prompt_or_None). Only replies that are safe to
+    persist are touched here; billing and policy are unchanged because the
+    marker path never calls a provider — generation only happens if the user
+    later accepts the offer, through the normal image task.
+    """
+    match = PHOTO_OFFER_MARKER_RE.search(text or "")
+    if not match:
+        return text, None
+    prompt = match.group(1).strip()
+    clean = (text[: match.start()] + text[match.end() :]).strip()  # noqa: E203
+    if not prompt or len(prompt) > 600:
+        return clean or text.replace(match.group(0), "").strip(), None
+    return clean, prompt
+
 
 # Shown in chat when an image request involves a prohibited subject. Adult
 # explicit imagery is allowed; children, animals and deceased people are not.
@@ -121,7 +191,26 @@ def expire_subscriptions():
             logger.exception("Failed to expire subscription %s", sub.user_subscription_id)
 
 
-@shared_task(bind=True, max_retries=2, default_retry_delay=10)
+# Hard ceilings on one reply. Without them a single slow upstream (a provider
+# that never closes the connection, or a slow-drip page fetched by open_url)
+# occupies a worker slot forever; enough of those and the whole chat queue
+# stalls with no error surfaced to anyone. `soft_time_limit` raises
+# SoftTimeLimitExceeded inside the task so the handler below can refund the
+# Spark reservation and mark the message failed; `time_limit` is the
+# unconditional backstop if the soft signal is somehow swallowed.
+# AI_TASK_SOFT_TIME_LIMIT must exceed OPEN_URL_TOTAL_TIMEOUT_SECONDS so a slow
+# fetch aborts itself first and the user still gets a reply.
+AI_TASK_SOFT_TIME_LIMIT = int(getattr(settings, "AI_TASK_SOFT_TIME_LIMIT", 180))
+AI_TASK_TIME_LIMIT = int(getattr(settings, "AI_TASK_TIME_LIMIT", AI_TASK_SOFT_TIME_LIMIT + 20))
+
+
+@shared_task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=10,
+    soft_time_limit=AI_TASK_SOFT_TIME_LIMIT,
+    time_limit=AI_TASK_TIME_LIMIT,
+)
 def process_ai_response(self, conversation_id, user_message_id, is_guest=False, guest_session_id=None):
     logger.info(
         "TASK START: conv=%s msg=%s guest=%s session=%s",
@@ -132,6 +221,7 @@ def process_ai_response(self, conversation_id, user_message_id, is_guest=False, 
     )
 
     reservation = None
+    reply_committed = False
     try:
         conversation = Conversation.objects.select_related("user", "character").get(conversation_id=conversation_id)
         user_message = Message.objects.select_related("conversation").get(message_id=user_message_id)
@@ -317,28 +407,123 @@ def process_ai_response(self, conversation_id, user_message_id, is_guest=False, 
                 messages[0]["content"] = byok.system_prompt
                 logger.info("BYOK system prompt applied (%d chars)", len(byok.system_prompt))
 
+        # -- Web search + open_url tools (per-chat toggle) --------------------------
+        # Search execution is provider-independent, so both the Cortecs and
+        # BYOK paths get the same tools whenever the toggle is on and a
+        # search provider is configured. Gracefully degrades (no tool
+        # offered, no outbound call) when the toggle is off or when the
+        # selected provider's API key is unset.
+        # open_url is gated behind the exact same condition as web_search --
+        # it is never offered on its own -- and capped at
+        # settings.OPEN_URL_MAX_CALLS_PER_MESSAGE (separately from
+        # SEARCH_MAX_CALLS_PER_MESSAGE) once the model actually calls it.
+        search_tools = None
+        search_calls_used = 0
+        open_url_calls_used = 0
+        # The queued task receives the authoritative guest marker from the
+        # send endpoint.  A user-less conversation is also necessarily a guest
+        # conversation, which keeps this fail-closed if a malformed task were
+        # ever enqueued without that marker.
+        is_guest_conversation = is_guest or conversation.user_id is None
+        if not is_guest_conversation and conversation.web_search_enabled and get_search_provider() is not None:
+            search_tools = [SEARCH_TOOL_SPEC, OPEN_URL_TOOL_SPEC]
+            logger.info(
+                "Web search + open_url tools offered for conv=%s (byok=%s)",
+                conversation_id,
+                bool(byok),
+            )
+
+        # Guests always use the default fast behavior even if a stale or
+        # manually altered conversation row says otherwise.
+        reasoning_effort = (
+            Conversation.ReasoningEffort.FAST
+            if is_guest_conversation
+            else conversation.reasoning_effort or Conversation.ReasoningEffort.FAST
+        )
+
         # -- AI call ---------------------------------------------------------------
         logger.info(
-            "Calling AI via %s model=%s max_tokens=%d",
+            "Calling AI via %s model=%s max_tokens=%d reasoning_effort=%s search=%s",
             "BYOK" if byok else "Cortecs",
             byok.model_name if byok else (model or "default"),
             api_max_tokens,
+            reasoning_effort,
+            bool(search_tools),
         )
         try:
             if byok:
+                # BYOK: reasoning_effort is a BEST-EFFORT OpenAI-compatible
+                # mapping (see capp/classes/ai/reasoning.py) -- the endpoint
+                # is arbitrary and third-party, so this is not verified
+                # against specific provider docs the way Cortecs/Mistral are.
+                # BYOKService.chat_completion() retries once without the
+                # reasoning param if the endpoint rejects it, so this can
+                # never break the chat. Search/open_url tools are offered
+                # the same way as the Cortecs path since search execution is
+                # provider-independent.
+                byok_call_kwargs = {}
+                if search_tools:
+                    byok_call_kwargs["tools"] = search_tools
                 response = BYOKService.chat_completion(
                     byok_config=byok,
                     messages=messages,
                     max_tokens=api_max_tokens,
                     temperature=0.7,
+                    reasoning_effort=reasoning_effort,
+                    **byok_call_kwargs,
                 )
+
+                tool_calls = response.get("choices", [{}])[0].get("message", {}).get("tool_calls")
+                if tool_calls and search_tools:
+                    condensed, search_calls_used, open_url_calls_used = _run_offered_tool_calls(
+                        tool_calls, conversation_id
+                    )
+                    if condensed:
+                        follow_up_messages = PromptBuilder.inject_untrusted_web_results(messages, condensed)
+                        response = BYOKService.chat_completion(
+                            byok_config=byok,
+                            messages=follow_up_messages,
+                            max_tokens=api_max_tokens,
+                            temperature=0.7,
+                            reasoning_effort=reasoning_effort,
+                        )
             else:
+                call_kwargs = {}
+                if search_tools:
+                    call_kwargs["tools"] = search_tools
                 response = CortecsClient.chat_completion(
                     messages=messages,
                     model=model,
                     max_tokens=api_max_tokens,
                     temperature=0.7,
+                    reasoning_effort=reasoning_effort,
+                    **call_kwargs,
                 )
+
+                # Tool-calling loop: if the model asked to search and/or
+                # open a URL, execute server-side (capped at
+                # settings.SEARCH_MAX_CALLS_PER_MESSAGE /
+                # settings.OPEN_URL_MAX_CALLS_PER_MESSAGE respectively),
+                # inject the explicitly untrusted results immediately before the
+                # safety sandwich (never after the safety/photo tail), and
+                # continue generation once. We do not loop
+                # further even if the model asks again, to keep worst-case
+                # latency bounded to a single extra round trip.
+                tool_calls = response.get("choices", [{}])[0].get("message", {}).get("tool_calls")
+                if tool_calls and search_tools:
+                    condensed, search_calls_used, open_url_calls_used = _run_offered_tool_calls(
+                        tool_calls, conversation_id
+                    )
+                    if condensed:
+                        follow_up_messages = PromptBuilder.inject_untrusted_web_results(messages, condensed)
+                        response = CortecsClient.chat_completion(
+                            messages=follow_up_messages,
+                            model=model,
+                            max_tokens=api_max_tokens,
+                            temperature=0.7,
+                            reasoning_effort=reasoning_effort,
+                        )
+
             logger.info("AI response received: id=%s", response.get("id"))
         except Exception as e:
             if byok:
@@ -386,6 +571,36 @@ def process_ai_response(self, conversation_id, user_message_id, is_guest=False, 
 
         logger.info("AI response length: %d chars", len(ai_content))
 
+        # ── Character-initiated photo offer ──────────────────────────────
+        # The reply may end with [PHOTO_OFFER:description] when the character,
+        # based on personality and relationship, is willing to send a photo.
+        # Guests never get offers: accepting one is a paid, authenticated-only
+        # feature, so the marker is simply stripped for them.
+        offer_prompt = None
+        if not is_guest:
+            from capp.classes.characters.character_service import CharacterService
+
+            ai_content, offer_prompt = _extract_photo_offer(ai_content)
+            if offer_prompt is not None:
+                # Re-assert the prohibited-subject policy on the model-written
+                # description before it is stored: the same gate every other
+                # image prompt passes through.
+                violation = ImagePromptPolicy.find_violation(
+                    offer_prompt,
+                    *CharacterService.image_policy_texts(character),
+                )
+                if violation:
+                    logger.warning(
+                        "photo offer suppressed by image policy conversation=%s category=%s",
+                        conversation_id,
+                        violation,
+                    )
+                    offer_prompt = None
+                elif not ai_content:
+                    # A marker-only reply would leave an empty bubble; keep a
+                    # minimal line so the transcript still reads naturally.
+                    ai_content = "..."
+
         usage = response.get("usage", {})
         input_tokens_used = usage.get("prompt_tokens", 0)
         output_tokens_used = usage.get("completion_tokens", 0)
@@ -413,6 +628,9 @@ def process_ai_response(self, conversation_id, user_message_id, is_guest=False, 
                     "model": (byok.model_name if byok else (model or settings.CORTECS_MODEL or "mistral")),
                     "byok": bool(byok),
                     "reservation_id": str(reservation.reservation_id),
+                    "reasoning_effort": reasoning_effort,
+                    "search_calls_used": search_calls_used,
+                    "open_url_calls_used": open_url_calls_used,
                 },
             )
 
@@ -439,6 +657,7 @@ def process_ai_response(self, conversation_id, user_message_id, is_guest=False, 
             # disagree: either the user has an answer and has paid for it, or
             # neither happened and the hold is still refundable.
             PaidFeature.settle(reservation, reason="ai_reply_persisted")
+        reply_committed = True
 
         # Delivery is best effort from here. The reply is durable and paid for,
         # so a failed WebSocket push is not a reason to refund or regenerate —
@@ -451,7 +670,46 @@ def process_ai_response(self, conversation_id, user_message_id, is_guest=False, 
                 ai_message.message_id,
             )
 
+        # ── Persist and push the photo offer, if the reply carried one ──
+        # The offer message owns its own operation key (offer:<uuid>), which is
+        # what the accept view presents to generate_chat_image later: accepting
+        # reserves the discounted CHARACTER_PHOTO_OFFER_COST against that key
+        # and the image task links the delivered picture back to this offer.
+        if offer_prompt is not None:
+            try:
+                offer_operation_id = f"offer:{uuid.uuid4()}"
+                offer_message = Message.objects.create(
+                    conversation=conversation,
+                    sender_type=Message.SenderType.AI,
+                    content="",
+                    status=Message.StatusChoices.SENT,
+                    metadata={
+                        "type": "photo_offer",
+                        "prompt": offer_prompt,
+                        "offer_cost": CHARACTER_PHOTO_OFFER_COST,
+                        "offer_status": "pending",
+                        "offer_operation_id": offer_operation_id,
+                    },
+                )
+                conversation.last_message_at = offer_message.created_at
+                conversation.save(update_fields=["last_message_at", "updated_at"])
+                _send_photo_offer_message(conversation.conversation_id, offer_message)
+            except Exception:
+                # The reply itself is delivered; a lost offer costs nothing and
+                # the user can always ask for a picture again.
+                logger.exception("Failed to persist/broadcast photo offer for conv=%s", conversation_id)
+
         unread_service.broadcast_unread(conversation)
+
+        # Push only after every optional response message is durable, so the
+        # closed-app badge carries the same final unread count as the socket.
+        if not is_guest and user is not None:
+            try:
+                PushService.send_new_message_push(user, character, conversation)
+            except SoftTimeLimitExceeded:
+                raise
+            except Exception:
+                logger.exception("Push failed for message %s", ai_message.message_id)
 
         if not is_guest:
             transaction.on_commit(
@@ -477,6 +735,28 @@ def process_ai_response(self, conversation_id, user_message_id, is_guest=False, 
         logger.error("Conversation not found: %s", conversation_id)
     except Message.DoesNotExist:
         logger.error("User message not found: %s", user_message_id)
+    except SoftTimeLimitExceeded:
+        if reply_committed:
+            logger.warning(
+                "process_ai_response hit its soft limit after reply commit; "
+                "leaving settled reply and user-message status intact: conv=%s msg=%s",
+                conversation_id,
+                user_message_id,
+            )
+            return
+        # The task blew its wall-clock budget. Handled explicitly (before the
+        # generic handler) so the user is NOT charged for a reply they never
+        # received, and is not retried: a retry would just burn the same
+        # budget again against the same stuck upstream.
+        logger.error(
+            "process_ai_response exceeded soft time limit (%ss): conv=%s msg=%s",
+            AI_TASK_SOFT_TIME_LIMIT,
+            conversation_id,
+            user_message_id,
+        )
+        if reservation is not None:
+            PaidFeature.refund(reservation, reason="task_soft_time_limit")
+        _mark_message_failed_by_id(user_message_id, "The reply took too long and was cancelled. Please try again.")
     except Exception as e:
         logger.exception("Unhandled error in process_ai_response")
         if reservation is not None:
@@ -579,9 +859,143 @@ def retrospective_memory_for_new_user(self, user_id: str):
 # In-chat Image Generation Task
 # -------------------------------------------------------------
 
+IMAGE_TASK_SOFT_TIME_LIMIT = int(getattr(settings, "IMAGE_TASK_SOFT_TIME_LIMIT", 210))
+IMAGE_TASK_TIME_LIMIT = int(getattr(settings, "IMAGE_TASK_TIME_LIMIT", IMAGE_TASK_SOFT_TIME_LIMIT + 20))
 
-@shared_task(bind=True, max_retries=1, default_retry_delay=5)
-def generate_chat_image(self, conversation_id, user_message_id, prompt, operation_id=None):
+
+def _set_image_billing_db_timeout(deadline):
+    if connection.vendor != "postgresql":
+        return
+    remaining = max(0.001, deadline - time.monotonic())
+    max_wait = float(getattr(settings, "IMAGE_BILLING_DB_MAX_WAIT_SECONDS", 2))
+    timeout_ms = max(1, int(min(remaining, max_wait) * 1000))
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT set_config('lock_timeout', %s, true), " "set_config('statement_timeout', %s, true)",
+            [f"{timeout_ms}ms", f"{timeout_ms}ms"],
+        )
+
+
+@shared_task(bind=True, max_retries=8, default_retry_delay=15)
+def refund_billing_reservation(self, reservation_id, reason):
+    """Idempotently retry a refund that could not acquire its billing rows."""
+    deadline = time.monotonic() + float(getattr(settings, "IMAGE_BILLING_DB_MAX_WAIT_SECONDS", 2))
+    try:
+        with transaction.atomic():
+            _set_image_billing_db_timeout(deadline)
+            return str(BillingReservationService.refund(reservation_id, reason=reason).reservation_id)
+    except OperationalError as exc:
+        raise self.retry(exc=exc)
+
+
+def _image_reservation_has_durable_artifact(reservation):
+    """Return whether this reservation's specific paid result was delivered."""
+    reference = reservation.operation_reference or ""
+    try:
+        operation_type, target_id, reference_key = reference.split(":", 2)
+    except ValueError:
+        return False
+
+    key = reservation.idempotency_key
+    if not target_id or reference_key != key:
+        return False
+
+    if operation_type in {"chat_image", "chat_photo_offer"}:
+        return (
+            Message.objects.filter(
+                conversation_id=target_id,
+                conversation__user_id=reservation.user_id,
+                client_operation_id=result_key(key),
+                metadata__type="generated_image",
+                metadata__reservation_id=str(reservation.reservation_id),
+            )
+            .exclude(metadata__image_name=None)
+            .exclude(metadata__image_name="")
+            .exists()
+        )
+
+    if operation_type == "gallery_image":
+        return (
+            CharacterGalleryImage.objects.filter(
+                character_id=target_id,
+                client_operation_id=key,
+                created_by_id=reservation.user_id,
+                image__isnull=False,
+            )
+            .exclude(image="")
+            .exists()
+        )
+
+    # Avatar writes and their settlement are committed in one transaction, so
+    # a genuinely stale avatar hold has no independently attributable success
+    # marker. Unknown or malformed operation types also fail closed to refund.
+    return False
+
+
+@shared_task
+def reconcile_stale_image_reservations():
+    """Resolve image holds left by a hard-killed web or Celery process."""
+    cutoff = timezone.now() - timedelta(
+        seconds=int(getattr(settings, "IMAGE_TASK_TIME_LIMIT", IMAGE_TASK_TIME_LIMIT))
+        + int(getattr(settings, "IMAGE_BILLING_RECOVERY_GRACE_SECONDS", 60))
+    )
+    limit = int(getattr(settings, "IMAGE_BILLING_RECOVERY_BATCH_SIZE", 100))
+    candidate_ids = list(
+        BillingReservation.objects.filter(
+            feature=BillingReservation.Feature.IMAGE_GENERATION,
+            status=BillingReservation.Status.RESERVED,
+            reserved_at__lt=cutoff,
+            updated_at__lt=cutoff,
+        )
+        .order_by("reserved_at")
+        .values_list("reservation_id", flat=True)[:limit]
+    )
+    reconciled = 0
+    for reservation_id in candidate_ids:
+        deadline = time.monotonic() + float(getattr(settings, "IMAGE_BILLING_DB_MAX_WAIT_SECONDS", 2))
+        try:
+            with transaction.atomic():
+                _set_image_billing_db_timeout(deadline)
+                reservation = (
+                    BillingReservation.objects.select_for_update(skip_locked=True)
+                    .filter(
+                        reservation_id=reservation_id,
+                        status=BillingReservation.Status.RESERVED,
+                        updated_at__lt=cutoff,
+                    )
+                    .first()
+                )
+                if reservation is None:
+                    continue
+
+                has_durable_artifact = _image_reservation_has_durable_artifact(reservation)
+                _set_image_billing_db_timeout(deadline)
+                if has_durable_artifact:
+                    BillingReservationService.settle(
+                        reservation,
+                        reason="stale_image_artifact_reconciled",
+                    )
+                else:
+                    BillingReservationService.refund(
+                        reservation,
+                        reason="stale_image_operation_reconciled",
+                    )
+                reconciled += 1
+        except OperationalError:
+            logger.warning("Stale image reservation %s remained locked; retrying next sweep", reservation_id)
+        except Exception:
+            logger.exception("Could not reconcile stale image reservation %s", reservation_id)
+    return reconciled
+
+
+@shared_task(
+    bind=True,
+    max_retries=1,
+    default_retry_delay=5,
+    soft_time_limit=IMAGE_TASK_SOFT_TIME_LIMIT,
+    time_limit=IMAGE_TASK_TIME_LIMIT,
+)
+def generate_chat_image(self, conversation_id, user_message_id, prompt, operation_id=None, offer_message_id=None):
     """
     Generate an AI image for the conversation's character on demand.
 
@@ -605,6 +1019,7 @@ def generate_chat_image(self, conversation_id, user_message_id, prompt, operatio
     from capp.classes.characters.character_service import CharacterService
 
     logger.info("IMAGE TASK START: conv=%s msg=%s", conversation_id, user_message_id)
+    deadline = time.monotonic() + float(getattr(settings, "IMAGE_GENERATION_TOTAL_TIMEOUT_SECONDS", 180))
 
     try:
         conversation = Conversation.objects.select_related("user", "character").get(conversation_id=conversation_id)
@@ -635,6 +1050,25 @@ def generate_chat_image(self, conversation_id, user_message_id, prompt, operatio
         return
 
     reservation = BillingReservation.objects.filter(idempotency_key=operation_id, user=user).first()
+    if reservation is not None:
+        try:
+            with transaction.atomic():
+                _set_image_billing_db_timeout(deadline)
+                touched = (
+                    BillingReservation.objects.select_for_update()
+                    .filter(
+                        reservation_id=reservation.reservation_id,
+                        status=BillingReservation.Status.RESERVED,
+                    )
+                    .first()
+                )
+                if touched is None:
+                    return
+                touched.save(update_fields=["updated_at"])
+                reservation = touched
+        except OperationalError:
+            logger.warning("generate_chat_image: billing lease timed out")
+            return
 
     # Prohibited-subject policy, re-asserted inside the task so a direct
     # ``generate_chat_image.delay(...)`` (bypassing the view) still cannot reach
@@ -647,7 +1081,11 @@ def generate_chat_image(self, conversation_id, user_message_id, prompt, operatio
             violation,
         )
         if reservation is not None:
-            PaidFeature.refund(reservation, reason="prohibited_subject")
+            CharacterService._refund_image_reservation(
+                reservation,
+                reason="prohibited_subject",
+                deadline=deadline,
+            )
         _send_system_message(
             conversation.conversation_id,
             PROHIBITED_SUBJECT_SYSTEM_MESSAGE,
@@ -664,8 +1102,21 @@ def generate_chat_image(self, conversation_id, user_message_id, prompt, operatio
             is_public=False,
             operation_id=operation_id,
             defer_settlement=True,
+            deadline=deadline,
         )
     except Retry:
+        raise
+    except SoftTimeLimitExceeded:
+        if reservation is not None:
+            CharacterService._refund_image_reservation(
+                reservation,
+                reason="image_task_soft_time_limit",
+                deadline=deadline,
+            )
+        _send_system_message(
+            conversation.conversation_id,
+            "Sorry, the image took too long and was cancelled. No sparks were charged.",
+        )
         raise
     except Exception as e:
         logger.exception("generate_chat_image: unexpected error")
@@ -675,7 +1126,11 @@ def generate_chat_image(self, conversation_id, user_message_id, prompt, operatio
             self.retry(exc=e)
         except MaxRetriesExceededError:
             if reservation is not None:
-                PaidFeature.refund(reservation, reason="image_failed_after_retries")
+                CharacterService._refund_image_reservation(
+                    reservation,
+                    reason="image_failed_after_retries",
+                    deadline=deadline,
+                )
             _send_system_message(
                 conversation.conversation_id,
                 "Sorry, the image could not be generated. No sparks were charged.",
@@ -689,7 +1144,11 @@ def generate_chat_image(self, conversation_id, user_message_id, prompt, operatio
         # this one; refund is idempotent, so this closes the case where the
         # failure happened before it took ownership.
         if reservation is not None:
-            PaidFeature.refund(reservation, reason=str(reason)[:255])
+            CharacterService._refund_image_reservation(
+                reservation,
+                reason=str(reason)[:255],
+                deadline=deadline,
+            )
         if reason == ImagePromptPolicy.ERROR_CODE:
             _send_system_message(
                 conversation.conversation_id,
@@ -738,16 +1197,37 @@ def generate_chat_image(self, conversation_id, user_message_id, prompt, operatio
                 "gallery_image_id": gallery_image_id,
                 "prompt": prompt,
                 "reservation_id": (str(reservation.reservation_id) if reservation is not None else None),
+                "offer_message_id": (str(offer_message_id) if offer_message_id else None),
             },
         )
 
         conversation.last_message_at = ai_message.created_at
         conversation.save(update_fields=["last_message_at", "updated_at"])
 
+        # An accepted offer is fulfilled: the card in the transcript switches
+        # from its accept/decline state to the delivered state.
+        if offer_message_id:
+            try:
+                offer_message = Message.objects.get(
+                    message_id=offer_message_id,
+                    conversation=conversation,
+                    metadata__type="photo_offer",
+                )
+                offer_meta = dict(offer_message.metadata or {})
+                offer_meta["offer_status"] = "accepted"
+                offer_message.metadata = offer_meta
+                offer_message.save(update_fields=["metadata", "updated_at"])
+            except Message.DoesNotExist:
+                logger.warning("generate_chat_image: offer message %s not found", offer_message_id)
+
         # The picture is stored and linked into the chat: the operation the
         # user paid for is complete.
         if reservation is not None:
-            PaidFeature.settle(reservation, reason="chat_image_delivered")
+            CharacterService._settle_image_reservation(
+                reservation,
+                reason="chat_image_delivered",
+                deadline=deadline,
+            )
 
     try:
         _send_chat_image_message(conversation.conversation_id, ai_message, image_url)
@@ -853,6 +1333,46 @@ def _send_chat_image_message(conversation_id, ai_message: Message, image_url: st
         )
     except Exception:
         logger.exception("Failed to send chat image message over WebSocket")
+
+
+def _send_photo_offer_message(conversation_id, offer_message: Message):
+    """Push a photo-offer card to the conversation's WebSocket group.
+
+    Carries everything the client needs to render the accept/decline popup
+    without a history reload: the character's description of the photo and the
+    discounted price. Accepting POSTs the message id back to the offer-accept
+    view, which bills and queues generate_chat_image.
+    """
+    try:
+        meta = offer_message.metadata if isinstance(offer_message.metadata, dict) else {}
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            f"conversation_{conversation_id}",
+            {
+                "type": "chat.message",
+                "message": {
+                    "message_id": str(offer_message.message_id),
+                    "sender_type": "ai",
+                    "content": "",
+                    "image_url": None,
+                    "created_at": offer_message.created_at.isoformat(),
+                    "reply_to": None,
+                    "type": "photo_offer",
+                    "offer": {
+                        "prompt": meta.get("prompt") or "",
+                        "cost": meta.get("offer_cost"),
+                        "status": meta.get("offer_status") or "pending",
+                    },
+                },
+            },
+        )
+        logger.info(
+            "Sent photo offer message %s to WebSocket group conversation_%s",
+            offer_message.message_id,
+            conversation_id,
+        )
+    except Exception:
+        logger.exception("Failed to send photo offer message over WebSocket")
 
 
 def _send_system_message(conversation_id, text: str, code: str = ""):

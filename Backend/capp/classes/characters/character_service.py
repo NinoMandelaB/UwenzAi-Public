@@ -1,9 +1,14 @@
 import logging
 import json
+import os
 import re
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from typing import Dict, Any, List, Optional, Tuple
 
-from django.db import IntegrityError, transaction
+from celery.exceptions import SoftTimeLimitExceeded
+from django.db import IntegrityError, OperationalError, connection, transaction
 from django.db.models import Q
 from django.utils import timezone
 from django.utils.text import slugify
@@ -24,14 +29,44 @@ from capp.classes.billing.paid_features import (
     ReservationError,
     is_free_actor,
 )
+from capp.classes.characters.attire_detection import mentions_clothing_or_nudity
 from capp.classes.moderation.image_prompt_policy import (
     ImagePromptPolicy,
     ProhibitedImageSubjectError,
 )
+from capp.classes.ai.fal_capabilities import build_fal_payload, get_endpoint_capabilities
 from capp.classes.ai.mistral_client import MistralClient
 from capp.constants import CASHBACK_PUBLIC_CHARACTER, COUNTRY_TIMEZONE_MAP
 
 logger = logging.getLogger(__name__)
+
+
+class _BoundedExecutor:
+    """A thread pool with no unbounded submission queue."""
+
+    def __init__(self, max_workers: int, thread_name_prefix: str):
+        self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix=thread_name_prefix)
+        self._capacity = threading.BoundedSemaphore(max_workers)
+
+    def submit(self, operation):
+        if not self._capacity.acquire(blocking=False):
+            return None
+        try:
+            future = self._executor.submit(operation)
+        except Exception:
+            self._capacity.release()
+            raise
+        future.add_done_callback(lambda _future: self._capacity.release())
+        return future
+
+
+_IMAGE_IO_EXECUTOR = _BoundedExecutor(max_workers=8, thread_name_prefix="image-io")
+_IMAGE_CLEANUP_EXECUTOR = _BoundedExecutor(max_workers=2, thread_name_prefix="image-cleanup")
+_IMAGE_PROCESS_RECYCLE_SCHEDULED = threading.Event()
+
+
+class ImageGenerationDeadlineExceeded(TimeoutError):
+    """Raised when one image operation exhausts its shared wall-clock budget."""
 
 
 class CharacterService:
@@ -206,6 +241,7 @@ class CharacterService:
         reservation = None
         try:
             actor = getattr(request, "user", None)
+            is_admin_actor = cls._is_admin_user(actor)
 
             name = (payload.get("name") or "").strip()
             short_description = (payload.get("short_description") or payload.get("role") or "").strip()
@@ -228,8 +264,12 @@ class CharacterService:
             tone_style = (payload.get("tone_style") or "").strip()
             primary_language = (payload.get("primary_language") or Character.LanguageChoices.MULTI).strip()
 
-            # Avatar is optional during wizard creation
-            avatar = cls._extract_avatar(payload=payload, request=request, required=False)
+            # Avatar is optional during wizard creation, and uploading one is admin-only
+            avatar, avatar_permission_error = cls._extract_admin_avatar(
+                payload=payload, request=request, is_admin_actor=is_admin_actor
+            )
+            if avatar_permission_error:
+                return {"status": "fail", "data": avatar_permission_error}
 
             # ---------- Wizard Fields Extraction ----------
             gender = (payload.get("gender") or Character.Gender.FEMALE).strip()
@@ -291,8 +331,6 @@ class CharacterService:
             )
             if validation_error:
                 return {"status": "fail", "data": validation_error}
-
-            is_admin_actor = cls._is_admin_user(actor)
 
             # ---------- Hold the Sparks before any provider call ----------
             # This used to sit after the persona generation below, so a user who
@@ -563,7 +601,12 @@ class CharacterService:
                 payload.get("primary_language", character.primary_language) or Character.LanguageChoices.MULTI
             ).strip()
 
-            avatar = cls._extract_avatar(payload=payload, request=request, required=False)
+            avatar, avatar_permission_error = cls._extract_admin_avatar(
+                payload=payload, request=request, is_admin_actor=is_admin_actor
+            )
+            if avatar_permission_error:
+                return {"status": "fail", "data": avatar_permission_error}
+
             validation_error = cls._validate_character_fields(
                 name=name,
                 short_description=short_description,
@@ -1736,6 +1779,7 @@ class CharacterService:
         image_strength: float = 0.35,
         reference_mode: str = "img2img",
         style_fidelity: float = 0.5,
+        deadline: Optional[float] = None,
     ) -> Optional[bytes]:
         """
         Call Stability AI API to generate an image.
@@ -1772,7 +1816,7 @@ class CharacterService:
         import requests
         from django.conf import settings
 
-        ImagePromptPolicy.assert_allowed(prompt)
+        ImagePromptPolicy.assert_allowed(prompt, negative_prompt)
 
         api_key = getattr(settings, "STABILITY_API_KEY", None)
         api_url = getattr(settings, "STABILITY_API_URL", None)
@@ -1786,6 +1830,8 @@ class CharacterService:
         if not api_key:
             logger.error("Stability AI credentials not configured")
             return None
+        if deadline is None:
+            deadline = time.monotonic() + float(getattr(settings, "IMAGE_GENERATION_TOTAL_TIMEOUT_SECONDS", 180))
 
         headers = {
             "authorization": f"Bearer {api_key}",
@@ -1851,34 +1897,185 @@ class CharacterService:
             files = {"none": ""}
 
         try:
-            response = requests.post(
-                target_url,
-                headers=headers,
-                files=files,
-                data=data,
-                timeout=120,
+            response = cls._run_with_image_deadline(
+                lambda: requests.post(
+                    target_url,
+                    headers=headers,
+                    files=files,
+                    data=data,
+                    timeout=cls._remaining_image_timeout(deadline, 120),
+                    stream=True,
+                ),
+                deadline,
             )
-
+            response_bytes = cls._run_with_image_deadline(
+                lambda: cls._read_and_close_bounded_response(
+                    response,
+                    deadline=deadline,
+                    max_bytes=int(getattr(settings, "FAL_IMAGE_MAX_RESPONSE_BYTES", 15 * 1024 * 1024)),
+                ),
+                deadline,
+            )
             if response.status_code == 200:
-                return response.content
-            else:
-                error_detail = "Unknown error"
-                try:
-                    error_detail = response.json()
-                except Exception:
-                    error_detail = response.text or "Unknown error"
-                logger.error(
-                    f"Stability AI error: mode={reference_mode if reference_image else 'txt2img'} "
-                    f"status={response.status_code} detail={error_detail}"
-                )
-                return None
+                return response_bytes
+            error_detail = "Unknown error"
+            try:
+                error_detail = json.loads(response_bytes.decode("utf-8"))
+            except SoftTimeLimitExceeded:
+                raise
+            except (UnicodeDecodeError, ValueError):
+                error_detail = response_bytes[:500].decode("utf-8", errors="replace") or "Unknown error"
+            logger.error(
+                f"Stability AI error: mode={reference_mode if reference_image else 'txt2img'} "
+                f"status={response.status_code} detail={error_detail}"
+            )
+            return None
 
+        except SoftTimeLimitExceeded:
+            raise
+        except ImageGenerationDeadlineExceeded:
+            raise
         except Exception:
             logger.exception("Unexpected error calling Stability AI")
             return None
 
+    @staticmethod
+    def _remaining_image_timeout(deadline: float, fallback: float) -> float:
+        """Return the remaining shared budget for the next blocking call."""
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ImageGenerationDeadlineExceeded
+        return max(0.1, min(float(fallback), remaining))
+
     @classmethod
-    def _get_character_reference_bytes(cls, character: Character) -> "Optional[bytes]":
+    def _run_image_billing_operation(cls, operation, deadline: float):
+        """Run one billing transition with bounded PostgreSQL lock waits."""
+        from django.conf import settings
+
+        max_wait = float(getattr(settings, "IMAGE_BILLING_DB_MAX_WAIT_SECONDS", 2))
+        remaining = max(0.001, deadline - time.monotonic())
+        timeout_ms = max(1, int(min(max_wait, remaining) * 1000))
+        with transaction.atomic():
+            if connection.vendor == "postgresql":
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT set_config('lock_timeout', %s, true), " "set_config('statement_timeout', %s, true)",
+                        [f"{timeout_ms}ms", f"{timeout_ms}ms"],
+                    )
+            return operation()
+
+    @classmethod
+    def _refund_image_reservation(cls, reservation, *, reason: str, deadline: float) -> None:
+        """Attempt a bounded refund and enqueue durable recovery on failure."""
+        if reservation is None:
+            return
+        try:
+            cls._run_image_billing_operation(
+                lambda: PaidFeature.refund(reservation, reason=reason),
+                deadline,
+            )
+        except (OperationalError, ImageGenerationDeadlineExceeded):
+            logger.exception(
+                "Image refund deferred for reservation=%s reason=%s",
+                getattr(reservation, "reservation_id", reservation),
+                reason,
+            )
+            try:
+                from capp.tasks import refund_billing_reservation
+
+                refund_billing_reservation.delay(
+                    str(getattr(reservation, "reservation_id", reservation)),
+                    reason,
+                )
+            except Exception:
+                logger.exception("Could not enqueue image refund; periodic reconciliation remains active")
+
+    @classmethod
+    def _settle_image_reservation(cls, reservation, *, reason: str, deadline: float) -> None:
+        """Settle under the DB budget; reconciliation repairs a timed-out settle."""
+        if reservation is None:
+            return
+        try:
+            cls._run_image_billing_operation(
+                lambda: PaidFeature.settle(reservation, reason=reason),
+                deadline,
+            )
+        except (OperationalError, ImageGenerationDeadlineExceeded):
+            logger.exception(
+                "Image settlement deferred for reservation=%s",
+                getattr(reservation, "reservation_id", reservation),
+            )
+
+    @classmethod
+    def _run_with_image_deadline(cls, operation, deadline: float):
+        """Bound blocking provider/storage I/O independently of socket activity."""
+        future = _IMAGE_IO_EXECUTOR.submit(operation)
+        if future is None:
+            cls._schedule_image_process_recycle()
+            raise ImageGenerationDeadlineExceeded("image I/O capacity exhausted")
+        try:
+            return future.result(timeout=cls._remaining_image_timeout(deadline, 300))
+        except FutureTimeoutError as exc:
+            future.cancel()
+            cls._schedule_image_process_recycle()
+            raise ImageGenerationDeadlineExceeded from exc
+
+    @staticmethod
+    def _schedule_image_process_recycle() -> None:
+        """
+        Recycle a production process after abandoning blocking I/O.
+
+        Python cannot safely kill a blocked thread. Railway restarts the web
+        process, while Celery replaces a terminated prefork child. The delay
+        lets the caller run its bounded refund/error path first.
+        """
+        from django.conf import settings
+
+        if not getattr(settings, "IMAGE_IO_RECYCLE_PROCESS_ON_TIMEOUT", False):
+            return
+        if _IMAGE_PROCESS_RECYCLE_SCHEDULED.is_set():
+            return
+        _IMAGE_PROCESS_RECYCLE_SCHEDULED.set()
+        logger.critical("Blocking image I/O exceeded its deadline; recycling process")
+        timer = threading.Timer(5.0, os._exit, args=(70,))
+        timer.daemon = True
+        timer.start()
+
+    @classmethod
+    def _read_and_close_bounded_response(cls, response, *, deadline: float, max_bytes: int) -> bytes:
+        """Read and dispose a streamed response inside the bounded worker."""
+        try:
+            return cls._read_bounded_response(response, deadline=deadline, max_bytes=max_bytes)
+        finally:
+            response.close()
+
+    @classmethod
+    def _read_bounded_response(cls, response, *, deadline: float, max_bytes: int) -> bytes:
+        """Stream a response under one absolute deadline and byte ceiling."""
+        content_length = response.headers.get("Content-Length")
+        try:
+            if content_length is not None and int(content_length) > max_bytes:
+                raise ValueError("response_too_large")
+        except (TypeError, ValueError) as exc:
+            raise ValueError("invalid_or_oversized_response") from exc
+
+        body = bytearray()
+        for chunk in response.iter_content(chunk_size=64 * 1024):
+            cls._remaining_image_timeout(deadline, 1)
+            if not chunk:
+                continue
+            body.extend(chunk)
+            if len(body) > max_bytes:
+                raise ValueError("response_too_large")
+        cls._remaining_image_timeout(deadline, 1)
+        return bytes(body)
+
+    @classmethod
+    def _get_character_reference_bytes(
+        cls,
+        character: Character,
+        deadline: Optional[float] = None,
+    ) -> "Optional[bytes]":
         """
         Read the character's avatar bytes for use as a fal.ai Seedream edit
         reference, via the Django storage API (``avatar.open()/read()``).
@@ -1893,9 +2090,19 @@ class CharacterService:
         if not avatar:
             return None
 
-        try:
+        def read_avatar():
             avatar.open("rb")
-            data = avatar.read()
+            try:
+                return avatar.read()
+            finally:
+                avatar.close()
+
+        try:
+            data = cls._run_with_image_deadline(read_avatar, deadline) if deadline is not None else read_avatar()
+        except SoftTimeLimitExceeded:
+            raise
+        except ImageGenerationDeadlineExceeded:
+            raise
         except Exception:
             logger.warning(
                 "reference_fetch: could not read avatar via storage for character_id=%s",
@@ -1903,11 +2110,6 @@ class CharacterService:
                 exc_info=True,
             )
             return None
-        finally:
-            try:
-                avatar.close()
-            except Exception:
-                pass
 
         if data:
             logger.info(
@@ -1923,7 +2125,12 @@ class CharacterService:
         return data
 
     @classmethod
-    def _upload_to_fal_storage(cls, image_bytes: bytes, filename: str = "reference.webp") -> "Optional[str]":
+    def _upload_to_fal_storage(
+        cls,
+        image_bytes: bytes,
+        filename: str = "reference.webp",
+        deadline: Optional[float] = None,
+    ) -> "Optional[str]":
         """
         Upload raw image bytes to fal.ai CDN and return the public URL.
         Uses the fal_client Python SDK (pip install fal-client==1.0.0).
@@ -1941,11 +2148,27 @@ class CharacterService:
             import os
 
             os.environ.setdefault("FAL_KEY", api_key)
-            from fal_client import SyncClient
+            from fal_client import StorageSettings, SyncClient
 
-            client = SyncClient()
-            url = client.upload(image_bytes, "image/webp")
+            timeout = float(getattr(settings, "FAL_IMAGE_TIMEOUT", 120))
+            if deadline is not None:
+                timeout = cls._remaining_image_timeout(deadline, timeout)
+            client = SyncClient(default_timeout=timeout)
+            upload_deadline = deadline or (time.monotonic() + timeout)
+            url = cls._run_with_image_deadline(
+                lambda: client.upload(
+                    image_bytes,
+                    "image/webp",
+                    file_name=filename,
+                    lifecycle=StorageSettings(expires_in="1h"),
+                ),
+                upload_deadline,
+            )
             return url
+        except SoftTimeLimitExceeded:
+            raise
+        except ImageGenerationDeadlineExceeded:
+            raise
         except Exception:
             logger.exception("Unexpected error uploading reference image to fal.ai storage")
             return None
@@ -1976,6 +2199,7 @@ class CharacterService:
         image_urls: "Optional[List[str]]" = None,
         image_size: str = "square_hd",
         seed: int = 0,
+        deadline: Optional[float] = None,
     ) -> "Optional[bytes]":
         """
         Generate an image via fal.ai ByteDance Seedream v5 Lite — the primary
@@ -1988,17 +2212,34 @@ class CharacterService:
         - Otherwise the text-to-image endpoint (``FAL_TEXT_TO_IMAGE_MODEL``) is
           used.
 
-        ``enable_safety_checker`` is always ``False`` (the provider's built-in
-        checker is disabled by product requirement). That provider setting is
-        independent of the application policy: adult explicit imagery is allowed,
-        but the prohibited-subject policy (children, animals, deceased people) is
-        re-asserted here as the last gate before the request leaves the process,
-        so no caller can bypass it. Violations raise
-        ``ProhibitedImageSubjectError`` rather than returning None, so they are
-        never mistaken for a provider failure that should trigger a fallback.
+        ``enable_safety_checker`` defaults to ``False`` (the provider's built-in
+        checker is disabled by product requirement; env-overridable via
+        ``FAL_ENABLE_SAFETY_CHECKER``). NOTE: fal only honours ``False`` for
+        accounts authorized to disable the checker — unauthorized requests are
+        always checked server-side — so the flag alone is never a guarantee.
+        That provider setting is independent of the application policy: adult
+        explicit imagery is allowed, but the prohibited-subject policy
+        (children, animals, deceased people) is re-asserted here as the last
+        gate before the request leaves the process, so no caller can bypass it.
+        Violations raise ``ProhibitedImageSubjectError`` rather than returning
+        None, so they are never mistaken for a provider failure that should
+        trigger a fallback.
 
         ``num_images``/``max_images`` are pinned to 1. Returns image bytes on
         success, None on failure.
+
+        The request payload is assembled from the per-endpoint capability map
+        in ``capp.classes.ai.fal_capabilities``: only parameters the selected
+        endpoint supports are sent, so swapping ``FAL_TEXT_TO_IMAGE_MODEL`` /
+        ``FAL_IMAGE_EDIT_MODEL`` to another model can never produce a
+        non-retryable fal 422 from an unsupported parameter
+        (https://fal.ai/docs/documentation/model-apis/errors).
+
+        Endpoint-specific schema naming is the capability map's job, so
+        pointing ``FAL_IMAGE_EDIT_MODEL`` at ``fal-ai/flux-pro/kontext``
+        (singular ``image_url``, ``aspect_ratio`` instead of ``image_size``)
+        or ``fal-ai/flux-pro/kontext/multi`` works purely via env vars — no
+        code change needed here.
         """
         import requests
         from django.conf import settings
@@ -2012,87 +2253,218 @@ class CharacterService:
 
         base_url = getattr(settings, "FAL_API_BASE_URL", "https://fal.run").rstrip("/")
         timeout = float(getattr(settings, "FAL_IMAGE_TIMEOUT", 120))
+        if deadline is None:
+            deadline = time.monotonic() + float(getattr(settings, "IMAGE_GENERATION_TOTAL_TIMEOUT_SECONDS", 180))
         use_edit = bool(image_urls)
         if use_edit:
             model_id = getattr(settings, "FAL_IMAGE_EDIT_MODEL", "bytedance/seedream/v5/lite/edit")
+            capabilities = get_endpoint_capabilities(model_id)
+            if not capabilities or not ({"image_url", "image_urls"} & set(capabilities["params"])):
+                logger.error("Configured fal edit endpoint has no verified reference-image capability")
+                return None
         else:
             model_id = getattr(settings, "FAL_TEXT_TO_IMAGE_MODEL", "bytedance/seedream/v5/lite/text-to-image")
         endpoint = f"{base_url}/{model_id.strip('/')}"
         mode = "edit" if use_edit else "text-to-image"
 
-        payload = {
+        # Desired params in priority order; build_fal_payload keeps only what
+        # the selected endpoint supports (per the capability map) and drops
+        # the rest with a debug log, so an unsupported param is never sent.
+        desired_params = {
             "prompt": prompt,
             "image_size": image_size,
             "num_images": 1,
             "max_images": 1,
-            "enable_safety_checker": False,
+            # False by product requirement (see docstring). fal honours False
+            # only for authorized accounts; unauthorized ones are always
+            # checked. Env: FAL_ENABLE_SAFETY_CHECKER (default False).
+            "enable_safety_checker": getattr(settings, "FAL_ENABLE_SAFETY_CHECKER", False),
+            # FLUX-Pro-only parameter (enum "1"-"6" on v1/v1.1, "1"-"5" on
+            # FLUX 2 Pro; API-only on 1.1 ultra). Seedream has no such param
+            # and would 422, so the capability map drops it there.
+            "safety_tolerance": getattr(settings, "FAL_SAFETY_TOLERANCE", "2"),
         }
         if use_edit:
-            # Seedream edit accepts up to 10 reference images.
-            payload["image_urls"] = list(image_urls)[:10]
+            # Seedream edit accepts up to 10 reference images. Endpoints with
+            # a different image-input shape (FLUX Pro Kontext's singular
+            # image_url, kontext/multi's unbounded list) are handled by
+            # build_fal_payload's translation layer.
+            desired_params["image_urls"] = list(image_urls)[:10]
         if seed and seed != 0:
-            payload["seed"] = seed
+            desired_params["seed"] = seed
+
+        payload, _dropped = build_fal_payload(model_id, desired_params)
+        if use_edit and not payload.get("image_url") and not payload.get("image_urls"):
+            logger.error("fal edit payload lost all reference images; refusing request")
+            return None
 
         try:
-            response = requests.post(
-                endpoint,
-                headers={
-                    "Authorization": f"Key {api_key}",
-                    "Content-Type": "application/json",
-                    # Ask fal not to persist request/response IO (privacy).
-                    "X-Fal-Store-IO": "0",
-                },
-                json=payload,
-                timeout=timeout,
+            response = cls._run_with_image_deadline(
+                lambda: requests.post(
+                    endpoint,
+                    headers={
+                        "Authorization": f"Key {api_key}",
+                        "Content-Type": "application/json",
+                        # Ask fal not to persist request/response IO (privacy).
+                        "X-Fal-Store-IO": "0",
+                    },
+                    json=payload,
+                    timeout=cls._remaining_image_timeout(deadline, timeout),
+                    stream=True,
+                ),
+                deadline,
             )
+        except SoftTimeLimitExceeded:
+            raise
+        except ImageGenerationDeadlineExceeded:
+            raise
         except Exception:
             logger.exception("Unexpected error calling fal.ai Seedream (%s)", mode)
             return None
 
-        if response.status_code != 200:
-            logger.error(
-                "fal.ai Seedream error mode=%s status=%s body=%s",
-                mode,
-                response.status_code,
-                response.text[:500],
-            )
-            return None
-
+        request_id = response.headers.get("X-Fal-Request-Id")
         try:
-            data = response.json()
-        except ValueError:
-            logger.error("fal.ai Seedream returned non-JSON response mode=%s", mode)
-            return None
+            response_bytes = b""
+            try:
+                response_bytes = cls._run_with_image_deadline(
+                    lambda: cls._read_and_close_bounded_response(
+                        response,
+                        deadline=deadline,
+                        max_bytes=1024 * 1024,
+                    ),
+                    deadline,
+                )
+                parsed_data = json.loads(response_bytes.decode("utf-8"))
+                data = parsed_data if isinstance(parsed_data, dict) else {}
+                request_id = request_id or data.get("request_id")
+            except (UnicodeDecodeError, ValueError):
+                if response.status_code == 200:
+                    logger.error("fal.ai Seedream returned non-JSON response mode=%s", mode)
+                    return None
+                data = {}
 
-        images = data.get("images")
-        if not images or not isinstance(images, list) or not isinstance(images[0], dict):
-            logger.error("fal.ai Seedream returned no usable images (mode=%s)", mode)
-            return None
-        image_url = images[0].get("url")
-        if not image_url:
-            logger.error("fal.ai Seedream image object missing URL (mode=%s)", mode)
-            return None
+            if response.status_code != 200:
+                logger.error(
+                    "fal.ai Seedream error mode=%s status=%s body=%s",
+                    mode,
+                    response.status_code,
+                    response_bytes[:500].decode("utf-8", errors="replace"),
+                )
+                return None
 
+            images = data.get("images")
+            if not images or not isinstance(images, list) or not isinstance(images[0], dict):
+                logger.error("fal.ai Seedream returned no usable images (mode=%s)", mode)
+                return None
+            image_url = images[0].get("url")
+            if not cls._is_allowed_fal_image_url(image_url):
+                logger.error("fal.ai Seedream returned a disallowed image URL (mode=%s)", mode)
+                return None
+
+            try:
+                img_response = cls._run_with_image_deadline(
+                    lambda: requests.get(
+                        image_url,
+                        timeout=cls._remaining_image_timeout(deadline, timeout),
+                        allow_redirects=False,
+                        stream=True,
+                    ),
+                    deadline,
+                )
+            except SoftTimeLimitExceeded:
+                raise
+            except ImageGenerationDeadlineExceeded:
+                raise
+            except Exception:
+                logger.exception("Failed to download fal.ai Seedream image (mode=%s)", mode)
+                return None
+            max_bytes = int(getattr(settings, "FAL_IMAGE_MAX_RESPONSE_BYTES", 15 * 1024 * 1024))
+            try:
+                image_bytes = cls._run_with_image_deadline(
+                    lambda: cls._read_and_close_bounded_response(
+                        img_response,
+                        deadline=deadline,
+                        max_bytes=max_bytes,
+                    ),
+                    deadline,
+                )
+            except ValueError:
+                logger.error("fal.ai Seedream image exceeded byte limit (mode=%s)", mode)
+                return None
+            if img_response.status_code != 200:
+                logger.error(
+                    "Failed to download fal.ai Seedream image mode=%s status=%s",
+                    mode,
+                    img_response.status_code,
+                )
+                return None
+            content_type = img_response.headers.get("Content-Type", "")
+            if isinstance(content_type, str) and content_type and not content_type.lower().startswith("image/"):
+                logger.error("fal.ai Seedream returned non-image content (mode=%s)", mode)
+                return None
+            try:
+                from io import BytesIO
+
+                with Image.open(BytesIO(image_bytes)) as image:
+                    image.verify()
+            except (UnidentifiedImageError, OSError, ValueError):
+                logger.error("fal.ai Seedream returned invalid image bytes (mode=%s)", mode)
+                return None
+            return image_bytes
+        except SoftTimeLimitExceeded:
+            raise
+        except ImageGenerationDeadlineExceeded:
+            raise
+        except requests.RequestException:
+            logger.exception("fal.ai Seedream image stream failed (mode=%s)", mode)
+            return None
+        finally:
+            if request_id:
+                cls._schedule_fal_cleanup(request_id, api_key)
+
+    @staticmethod
+    def _is_allowed_fal_image_url(image_url: str) -> bool:
+        from urllib.parse import urlsplit
+        from django.conf import settings
+
+        if not isinstance(image_url, str):
+            return False
         try:
-            img_response = requests.get(image_url, timeout=timeout)
-        except Exception:
-            logger.exception("Failed to download fal.ai Seedream image (mode=%s)", mode)
-            return None
-        if img_response.status_code != 200:
-            # Do not log the signed image URL — it is private/short-lived.
-            logger.error(
-                "Failed to download fal.ai Seedream image mode=%s status=%s",
-                mode,
-                img_response.status_code,
-            )
-            return None
+            parsed = urlsplit(image_url)
+            port = parsed.port
+        except (TypeError, ValueError):
+            return False
+        if (
+            parsed.scheme.lower() != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.fragment
+            or port not in (None, 443)
+        ):
+            return False
+        hostname = parsed.hostname.lower()
+        allowed = tuple(getattr(settings, "FAL_IMAGE_DOWNLOAD_ALLOWED_HOSTS", ("fal.media",)))
+        return any(hostname == host or hostname.endswith(f".{host}") for host in allowed)
 
-        image_bytes = img_response.content
-        # Delete request from fal.ai for privacy (best-effort).
-        request_id = response.headers.get("X-Fal-Request-Id") or data.get("request_id")
-        if request_id:
-            cls._delete_fal_request(request_id, api_key)
-        return image_bytes
+    @classmethod
+    def _schedule_fal_cleanup(cls, request_id: str, api_key: str) -> None:
+        """Queue privacy cleanup without extending the caller's shared deadline."""
+        future = _IMAGE_CLEANUP_EXECUTOR.submit(lambda: cls._delete_fal_request(request_id, api_key))
+        if future is None:
+            logger.error("fal.ai cleanup capacity exhausted for request_id=%s", request_id)
+            cls._schedule_image_process_recycle()
+            return
+
+        def recycle_if_stuck():
+            if not future.done():
+                logger.critical("fal.ai cleanup exceeded its hard ceiling for request_id=%s", request_id)
+                cls._schedule_image_process_recycle()
+
+        watchdog = threading.Timer(20.0, recycle_if_stuck)
+        watchdog.daemon = True
+        future.add_done_callback(lambda _future: watchdog.cancel())
+        watchdog.start()
 
     @classmethod
     def _delete_fal_request(cls, request_id: str, api_key: str) -> None:
@@ -2117,6 +2489,8 @@ class CharacterService:
                     resp.status_code,
                     request_id,
                 )
+        except SoftTimeLimitExceeded:
+            raise
         except Exception:
             logger.warning(
                 "fal.ai request deletion failed for request_id=%s",
@@ -2258,7 +2632,14 @@ class CharacterService:
         hair_length_display = get_display("hair_length", character.hair_length)
         hairstyle = get_display("hairstyle", character.hairstyle)
         hair_color = get_display("hair_color", character.hair_color)
-        clothing = normalize_clothing(get_display("clothing_style", character.clothing_style))
+        # A character with no configured clothing style gets no outfit line at
+        # all — better to inject nothing than to invent attire the owner never
+        # chose. (The API and the model both default ``clothing_style`` to
+        # "casual", so a blank value only occurs when it was cleared on
+        # purpose at the model level.)
+        clothing = ""
+        if clean(character.clothing_style):
+            clothing = normalize_clothing(get_display("clothing_style", character.clothing_style))
 
         country = clean(character.country)
         ethnicity_label = nationality_adjective(country)
@@ -2339,12 +2720,22 @@ class CharacterService:
                 detail_text = ", ".join(detail_parts[:-1]) + f", and {detail_parts[-1]}"
             description_2 = f"They have {detail_text}."
 
-        # If the user supplied an explicit instruction we assume it may
-        # describe an outfit/scene that contradicts the character's preset
-        # `clothing_style`. In that case, drop the preset clothing line so
-        # the two don't fight each other inside the prompt. Body type is
-        # kept either way because it doesn't conflict with outfits.
-        user_overrides_outfit = bool(clean(primary_instruction))
+        # The user's instruction overrides the character's preset
+        # `clothing_style` ONLY when it actually expresses attire intent —
+        # explicit clothing ("red dress") or explicit nudity ("topless",
+        # "uchi"). Both are honoured exactly as written and the preset
+        # clothing line is dropped so the two don't fight each other inside
+        # the prompt. This is an adult app: stated NSFW intent always wins.
+        #
+        # An instruction that is ambiguous about attire ("at the beach",
+        # "smiling in a market") previously dropped the preset line too,
+        # leaving the prompt with no clothing signal at all — and image
+        # models fill that gap from gendered training-data priors (male
+        # characters rendered in female lingerie). Keeping the character's
+        # own clothing line for attire-ambiguous instructions IS the
+        # default-outfit injection. Body type is kept either way because it
+        # doesn't conflict with outfits.
+        user_overrides_outfit = bool(clean(primary_instruction)) and mentions_clothing_or_nudity(primary_instruction)
 
         description_3 = ""
         if body_type and clothing and not user_overrides_outfit:
@@ -2392,6 +2783,19 @@ class CharacterService:
 
         return " ".join(part for part in parts if part)
 
+    @staticmethod
+    def _combine_image_instructions(prompt: str, extra_prompt: str) -> str:
+        """Combine public image fields once, preserving their documented order."""
+        parts = []
+        seen = set()
+        for value in (prompt, extra_prompt):
+            cleaned = (value or "").strip()
+            key = " ".join(cleaned.casefold().split())
+            if cleaned and key not in seen:
+                parts.append(cleaned)
+                seen.add(key)
+        return " ".join(parts)
+
     @classmethod
     def generate_avatar(
         cls,
@@ -2405,6 +2809,59 @@ class CharacterService:
         actor=None,
         request=None,
         operation_id: str = None,
+    ) -> Dict[str, Any]:
+        if not character:
+            return {"status": "fail", "data": "character_required"}
+        from django.conf import settings
+
+        deadline = time.monotonic() + float(getattr(settings, "IMAGE_GENERATION_TOTAL_TIMEOUT_SECONDS", 180))
+        expected_first_avatar = not bool(character.avatar)
+        # Hold the row lock through provider generation. This deliberately
+        # favors billing correctness over same-character avatar throughput.
+        try:
+            with transaction.atomic():
+                if connection.vendor == "postgresql":
+                    lock_timeout_ms = max(1, int(cls._remaining_image_timeout(deadline, 180) * 1000))
+                    with connection.cursor() as cursor:
+                        cursor.execute("SET LOCAL lock_timeout = %s", [f"{lock_timeout_ms}ms"])
+                locked_character = Character.objects.select_for_update().get(pk=character.pk)
+                is_admin_actor = cls._is_admin_user(actor)
+                is_owner = actor and actor == locked_character.created_by
+                if not (is_admin_actor or is_owner):
+                    return {"status": "fail", "data": "permission_denied"}
+                if expected_first_avatar and locked_character.avatar:
+                    return cls._avatar_result(locked_character, request)
+                return cls._generate_avatar_locked(
+                    character=locked_character,
+                    prompt=prompt,
+                    negative_prompt=negative_prompt,
+                    aspect_ratio=aspect_ratio,
+                    style_preset=style_preset,
+                    seed=seed,
+                    extra_prompt=extra_prompt,
+                    actor=actor,
+                    request=request,
+                    operation_id=operation_id,
+                    deadline=deadline,
+                )
+        except (OperationalError, ImageGenerationDeadlineExceeded):
+            logger.warning("Avatar generation timed out for character_id=%s", character.character_id)
+            return {"status": "fail", "data": "provider_timeout"}
+
+    @classmethod
+    def _generate_avatar_locked(
+        cls,
+        character: Character,
+        prompt: str,
+        negative_prompt: str = "",
+        aspect_ratio: str = "1:1",
+        style_preset: str = "photographic",
+        seed: int = 0,
+        extra_prompt: str = "",
+        actor=None,
+        request=None,
+        operation_id: str = None,
+        deadline: Optional[float] = None,
     ) -> Dict[str, Any]:
         reservation = None
         try:
@@ -2430,13 +2887,14 @@ class CharacterService:
                 character,
                 base,
                 frame_type="avatar",
-                primary_instruction=extra_prompt or "",
+                primary_instruction=cls._combine_image_instructions(prompt, extra_prompt),
             )
 
             # ── Prohibited-subject policy ────────────────────────────────
             violation = ImagePromptPolicy.find_violation(
                 prompt,
                 extra_prompt,
+                negative_prompt,
                 full_prompt,
                 *cls.image_policy_texts(character),
             )
@@ -2464,15 +2922,18 @@ class CharacterService:
                 if not operation_id:
                     operation_id = str(_uuid.uuid4())
                 try:
-                    reservation = PaidFeature.reserve(
-                        feature=BillingReservation.Feature.IMAGE_GENERATION,
-                        operation_id=operation_id,
-                        user=actor,
-                        operation_reference=f"avatar:{character.character_id}:{operation_id}",
+                    reservation = cls._run_image_billing_operation(
+                        lambda: PaidFeature.reserve(
+                            feature=BillingReservation.Feature.IMAGE_GENERATION,
+                            operation_id=operation_id,
+                            user=actor,
+                            operation_reference=f"avatar:{character.character_id}:{operation_id}",
+                        ),
+                        deadline,
                     )
                 except InsufficientBalance:
                     return {"status": "fail", "data": "insufficient_sparks"}
-                except ReservationError:
+                except (ReservationError, OperationalError):
                     logger.exception("Could not reserve sparks for avatar generation")
                     return {"status": "fail", "data": "billing_error"}
 
@@ -2493,22 +2954,7 @@ class CharacterService:
             combined_negative = f"{negative_prompt}, {base_negative}".strip(", ")
 
             # ── Load existing avatar as reference (if any) ───────────────
-            reference_image = None
-            if character.avatar:
-                try:
-                    character.avatar.open("rb")
-                    reference_image = character.avatar.read()
-                except Exception:
-                    logger.warning(
-                        "Could not read avatar for reference on character_id=%s, falling back to txt2img",
-                        character.character_id,
-                    )
-                    reference_image = None
-                finally:
-                    try:
-                        character.avatar.close()
-                    except Exception:
-                        pass
+            reference_image = cls._get_character_reference_bytes(character, deadline=deadline)
 
             # ── Generate image ─────────────────────────────────────────────
             # Primary provider: fal.ai Seedream v5 Lite. Edit endpoint when a
@@ -2527,6 +2973,7 @@ class CharacterService:
                     ref_url = cls._upload_to_fal_storage(
                         reference_image,
                         filename=f"{character.character_id}_ref.webp",
+                        deadline=deadline,
                     )
                     if not ref_url:
                         logger.warning(
@@ -2540,6 +2987,7 @@ class CharacterService:
                         image_urls=[ref_url],
                         image_size=fal_image_size,
                         seed=seed,
+                        deadline=deadline,
                     )
                 if image_bytes is None:
                     # No/failed reference upload, or edit failed — Seedream
@@ -2549,6 +2997,7 @@ class CharacterService:
                         image_urls=None,
                         image_size=fal_image_size,
                         seed=seed,
+                        deadline=deadline,
                     )
 
             # ── Fallback: Stability AI ─────────────────────────────────────
@@ -2563,6 +3012,7 @@ class CharacterService:
                         reference_image=reference_image,
                         image_strength=0.35,
                         reference_mode="img2img",
+                        deadline=deadline,
                     )
                 else:
                     image_bytes = cls._generate_ai_image(
@@ -2571,11 +3021,12 @@ class CharacterService:
                         aspect_ratio=aspect_ratio,
                         style_preset=style_preset,
                         seed=seed,
+                        deadline=deadline,
                     )
 
             if not image_bytes:
                 if reservation is not None:
-                    PaidFeature.refund(reservation, reason="provider_failed")
+                    cls._refund_image_reservation(reservation, reason="provider_failed", deadline=deadline)
                 return {"status": "fail", "data": "ai_generation_failed"}
 
             # ── Save the avatar ────────────────────────────────────────────
@@ -2587,7 +3038,7 @@ class CharacterService:
             character.save(update_fields=["avatar", "avatar_source", "updated_at"])
 
             if reservation is not None:
-                PaidFeature.settle(reservation, reason="avatar_stored")
+                cls._settle_image_reservation(reservation, reason="avatar_stored", deadline=deadline)
 
             logger.info(
                 "AI avatar %s for character_id=%s",
@@ -2606,13 +3057,25 @@ class CharacterService:
                 exc.category,
             )
             if reservation is not None:
-                PaidFeature.refund(reservation, reason="prohibited_subject")
+                cls._refund_image_reservation(reservation, reason="prohibited_subject", deadline=deadline)
             return {"status": "fail", "data": exc.code}
 
+        except SoftTimeLimitExceeded:
+            if reservation is not None:
+                cls._refund_image_reservation(reservation, reason="task_soft_time_limit", deadline=deadline)
+            raise
+        except ImageGenerationDeadlineExceeded:
+            logger.warning(
+                "Avatar image generation exceeded total deadline for character_id=%s",
+                getattr(character, "character_id", None),
+            )
+            if reservation is not None:
+                cls._refund_image_reservation(reservation, reason="provider_timeout", deadline=deadline)
+            return {"status": "fail", "data": "provider_timeout"}
         except Exception:
             logger.exception("Unexpected error generating avatar")
             if reservation is not None:
-                PaidFeature.refund(reservation, reason="unhandled_error")
+                cls._refund_image_reservation(reservation, reason="unhandled_error", deadline=deadline)
             return {"status": "fail", "data": "server_error"}
 
     @classmethod
@@ -2643,6 +3106,7 @@ class CharacterService:
         is_public: bool = False,
         operation_id: str = None,
         defer_settlement: bool = False,
+        deadline: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
         Generate a new gallery image for a character using AI.
@@ -2662,9 +3126,13 @@ class CharacterService:
         """
         reservation = None
         try:
+            from django.conf import settings
             from django.core.files.base import ContentFile
             from capp.models import CharacterGalleryImage
             import uuid
+
+            if deadline is None:
+                deadline = time.monotonic() + float(getattr(settings, "IMAGE_GENERATION_TOTAL_TIMEOUT_SECONDS", 180))
 
             if not character:
                 return {"status": "fail", "data": "character_required"}
@@ -2675,6 +3143,14 @@ class CharacterService:
 
             is_admin = cls._is_admin_user(actor)
             is_owner = actor == character.created_by
+            if not (
+                is_admin
+                or is_owner
+                or (
+                    character.is_public and character.is_active and character.status == Character.StatusChoices.APPROVED
+                )
+            ):
+                return {"status": "fail", "data": "permission_denied"}
 
             # Only admins/owners may create public images
             if is_public and not (is_admin or is_owner):
@@ -2711,7 +3187,11 @@ class CharacterService:
                     and not defer_settlement
                     and reservation.status == BillingReservation.Status.RESERVED
                 ):
-                    PaidFeature.settle(reservation, reason="gallery_image_stored")
+                    cls._settle_image_reservation(
+                        reservation,
+                        reason="gallery_image_stored",
+                        deadline=deadline,
+                    )
                 return cls._gallery_image_result(
                     existing,
                     "",
@@ -2729,7 +3209,7 @@ class CharacterService:
                 character,
                 base,
                 frame_type="gallery",
-                primary_instruction=extra_prompt or "",
+                primary_instruction=cls._combine_image_instructions(prompt, extra_prompt),
             )
 
             # ---------- Prohibited-subject policy ----------
@@ -2740,6 +3220,7 @@ class CharacterService:
                 prompt,
                 extra_prompt,
                 caption,
+                negative_prompt,
                 full_prompt,
                 *cls.image_policy_texts(character),
             )
@@ -2763,15 +3244,18 @@ class CharacterService:
             # ---------- Hold the Sparks before touching a provider ----------
             if not is_free_actor(actor):
                 try:
-                    reservation = PaidFeature.reserve(
-                        feature=BillingReservation.Feature.IMAGE_GENERATION,
-                        operation_id=operation_id,
-                        user=actor,
-                        operation_reference=f"gallery_image:{character.character_id}:{operation_id}",
+                    reservation = cls._run_image_billing_operation(
+                        lambda: PaidFeature.reserve(
+                            feature=BillingReservation.Feature.IMAGE_GENERATION,
+                            operation_id=operation_id,
+                            user=actor,
+                            operation_reference=f"gallery_image:{character.character_id}:{operation_id}",
+                        ),
+                        deadline,
                     )
                 except InsufficientBalance:
                     return {"status": "fail", "data": "insufficient_sparks"}
-                except ReservationError:
+                except (ReservationError, OperationalError):
                     logger.exception("Could not reserve sparks for gallery image")
                     return {"status": "fail", "data": "billing_error"}
 
@@ -2791,9 +3275,7 @@ class CharacterService:
             # the web service's media volume by falling back to an HTTP download
             # of the avatar's public URL. Preserves existing behaviour of using
             # the current character avatar as the reference.
-            from django.conf import settings
-
-            reference_image = cls._get_character_reference_bytes(character)
+            reference_image = cls._get_character_reference_bytes(character, deadline=deadline)
             fal_configured = bool(getattr(settings, "FAL_API_KEY", None))
             fal_image_size = cls._aspect_ratio_to_fal_image_size(aspect_ratio, default="portrait_4_3")
 
@@ -2812,6 +3294,7 @@ class CharacterService:
                     ref_url = cls._upload_to_fal_storage(
                         reference_image,
                         filename=f"{character.character_id}_gallery_ref.webp",
+                        deadline=deadline,
                     )
                     if not ref_url:
                         logger.warning(
@@ -2825,6 +3308,7 @@ class CharacterService:
                         image_urls=[ref_url],
                         image_size=fal_image_size,
                         seed=seed,
+                        deadline=deadline,
                     )
                     if image_bytes is None:
                         logger.warning(
@@ -2839,6 +3323,7 @@ class CharacterService:
                         image_urls=None,
                         image_size=fal_image_size,
                         seed=seed,
+                        deadline=deadline,
                     )
             else:
                 logger.info(
@@ -2860,6 +3345,7 @@ class CharacterService:
                         reference_image=reference_image,
                         reference_mode="style",
                         style_fidelity=0.5,
+                        deadline=deadline,
                     )
                 else:
                     # No usable reference (character has no avatar or it could
@@ -2874,6 +3360,7 @@ class CharacterService:
                         aspect_ratio=aspect_ratio,
                         style_preset=style_preset,
                         seed=seed,
+                        deadline=deadline,
                     )
 
             if not image_bytes:
@@ -2882,7 +3369,7 @@ class CharacterService:
                     character.character_id,
                 )
                 if reservation is not None:
-                    PaidFeature.refund(reservation, reason="provider_failed")
+                    cls._refund_image_reservation(reservation, reason="provider_failed", deadline=deadline)
                 return {"status": "fail", "data": "ai_generation_failed"}
 
             # Determine order: append after the last image (public + private)
@@ -2924,7 +3411,11 @@ class CharacterService:
                             character.character_id,
                         )
                         if reservation is not None:
-                            PaidFeature.refund(reservation, reason="idempotency_key_conflict")
+                            cls._refund_image_reservation(
+                                reservation,
+                                reason="idempotency_key_conflict",
+                                deadline=deadline,
+                            )
                         return {"status": "fail", "data": "idempotency_key_conflict"}
                     raise
                 logger.info(
@@ -2946,7 +3437,11 @@ class CharacterService:
             # The picture is durable now. Callers that still have linkage work
             # to do keep the hold and settle once that lands.
             if reservation is not None and not defer_settlement:
-                PaidFeature.settle(reservation, reason="gallery_image_stored")
+                cls._settle_image_reservation(
+                    reservation,
+                    reason="gallery_image_stored",
+                    deadline=deadline,
+                )
 
             logger.info(
                 "AI gallery image generated image_id=%s character_id=%s user=%s",
@@ -2972,13 +3467,25 @@ class CharacterService:
                 exc.category,
             )
             if reservation is not None:
-                PaidFeature.refund(reservation, reason="prohibited_subject")
+                cls._refund_image_reservation(reservation, reason="prohibited_subject", deadline=deadline)
             return {"status": "fail", "data": exc.code}
 
+        except SoftTimeLimitExceeded:
+            if reservation is not None:
+                cls._refund_image_reservation(reservation, reason="task_soft_time_limit", deadline=deadline)
+            raise
+        except ImageGenerationDeadlineExceeded:
+            logger.warning(
+                "Gallery image generation exceeded total deadline for character_id=%s",
+                getattr(character, "character_id", None),
+            )
+            if reservation is not None:
+                cls._refund_image_reservation(reservation, reason="provider_timeout", deadline=deadline)
+            return {"status": "fail", "data": "provider_timeout"}
         except Exception:
             logger.exception("Unexpected error generating gallery image")
             if reservation is not None:
-                PaidFeature.refund(reservation, reason="unhandled_error")
+                cls._refund_image_reservation(reservation, reason="unhandled_error", deadline=deadline)
             return {"status": "fail", "data": "server_error"}
 
     @classmethod
@@ -3011,6 +3518,23 @@ class CharacterService:
             return None
 
         return avatar
+
+    @classmethod
+    def _extract_admin_avatar(cls, payload: Dict[str, Any], request, is_admin_actor: bool):
+        """
+        Resolve a caller-supplied avatar, which only admins may provide.
+
+        Returns ``(avatar, error)``. Ordinary users still get avatars through
+        ``generate_avatar``, where the picture is produced server-side and
+        billed; a caller-supplied file bypasses that path entirely, so it is
+        refused rather than silently dropped.
+        """
+        avatar = cls._extract_avatar(payload=payload, request=request, required=False)
+
+        if avatar and not is_admin_actor:
+            return None, "permission_denied"
+
+        return avatar, None
 
     @classmethod
     def _validate_character_fields(

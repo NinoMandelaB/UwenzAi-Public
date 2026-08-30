@@ -15,6 +15,7 @@ import {
   getUnreadSummary,
   markConversationRead,
 } from "../services/conversationService";
+import { syncAppBadge } from "../services/appBadge";
 import { ensureGuestSession } from "../utils/session";
 
 const UnreadContext = createContext(null);
@@ -111,16 +112,25 @@ export function UnreadProvider({ children }) {
     [applyUpdate],
   );
 
+  const totalUnread = sumCounts(counts);
+
+  // The installed app's icon carries the same total (Badging API). A closed
+  // app gets its badge from the push service worker instead; this sync covers
+  // every foreground change — socket updates, reads, sign-in/out.
+  useEffect(() => {
+    syncAppBadge(totalUnread);
+  }, [totalUnread]);
+
   const value = useMemo(
     () => ({
       counts,
-      totalUnread: sumCounts(counts),
+      totalUnread,
       unreadFor: (conversationId) => counts[conversationId] || 0,
       markRead,
       refresh,
       seed,
     }),
-    [counts, markRead, refresh, seed],
+    [counts, totalUnread, markRead, refresh, seed],
   );
 
   return (

@@ -1211,33 +1211,30 @@ class Auth:
                     },
                 }
 
-            user = CustomUser.objects.filter(username=username).first()
+            # reCAPTCHA is enforced for ALL accounts — including staff
+            # and superusers. The admin panel (uwenzAi-Admin) now carries
+            # its own reCAPTCHA widget, so the staff bypass is no longer
+            # needed. Removing it also closes a username-enumeration oracle
+            # where a missing recaptcha_token returned different errors for
+            # staff vs non-staff accounts.
+            recaptcha_result = RecaptchaService.verify_token(
+                recaptcha_token,
+                remote_ip=ip_address,
+            )
 
-            # The internal admin panel (uwenzAi-Admin) reuses this same signin
-            # endpoint but has no reCAPTCHA integration - it's a staff-only tool
-            # behind known credentials, not a public/bot-exposed surface like the
-            # main app's signin/signup forms. Skip the reCAPTCHA gate for known
-            # staff/superuser accounts only; unknown usernames and regular users
-            # still go through the normal reCAPTCHA-gated flow below.
-            skip_recaptcha = bool(user and (user.is_staff or user.is_superuser))
-
-            if not skip_recaptcha:
-                recaptcha_result = RecaptchaService.verify_token(
-                    recaptcha_token,
-                    remote_ip=ip_address,
+            if recaptcha_result["success"] is not True:
+                logger.warning(
+                    "Recaptcha failed for username=%s ip=%s code=%s",
+                    username,
+                    ip_address,
+                    recaptcha_result["code"],
                 )
+                return {
+                    "status": "fail",
+                    "data": recaptcha_result["code"],
+                }
 
-                if recaptcha_result["success"] is not True:
-                    logger.warning(
-                        "Recaptcha failed for username=%s ip=%s code=%s",
-                        username,
-                        ip_address,
-                        recaptcha_result["code"],
-                    )
-                    return {
-                        "status": "fail",
-                        "data": recaptcha_result["code"],
-                    }
+            user = CustomUser.objects.filter(username=username).first()
 
             if not user:
                 lockout_status = LoginLockoutService.record_failure(

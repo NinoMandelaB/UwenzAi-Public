@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Mapping
 
 from django.shortcuts import get_object_or_404
 from rest_framework.decorators import api_view, permission_classes, parser_classes
@@ -11,10 +12,71 @@ from capp.classes.billing.idempotency import InvalidIdempotencyKey
 from capp.classes.guest.guest_identity_service import GuestIdentityService
 from capp.csrf import csrf_protect_for_guests
 from capp.models import Character, Personality
+from capp.permissions import IsAdminOrSuperuser
 from capp.classes.characters.character_service import CharacterService
 from capp.classes.characters.character_flag_service import CharacterFlagService
 
 logger = logging.getLogger(__name__)
+
+MAX_IMAGE_PROMPT_LENGTH = 600
+MAX_IMAGE_CAPTION_LENGTH = 200
+ALLOWED_IMAGE_ASPECT_RATIOS = {"1:1", "2:3", "3:2", "4:3", "16:9", "9:16"}
+
+
+def _image_text(data, name, *, default="", max_length=MAX_IMAGE_PROMPT_LENGTH):
+    value = data.get(name, default)
+    if not isinstance(value, str):
+        raise ValueError(f"invalid_{name}")
+    value = value.strip()
+    if len(value) > max_length:
+        raise ValueError(f"{name}_too_long")
+    return value
+
+
+def _image_seed(data):
+    value = data.get("seed", 0)
+    if isinstance(value, bool):
+        raise ValueError("invalid_seed")
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str) and value.strip().isdigit():
+        parsed = int(value.strip())
+    else:
+        raise ValueError("invalid_seed") from None
+    if not 0 <= parsed <= 2**32 - 1:
+        raise ValueError("invalid_seed")
+    return parsed
+
+
+def _image_order(data):
+    value = data.get("order")
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        raise ValueError("invalid_order")
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str) and value.strip().isdigit():
+        parsed = int(value.strip())
+    else:
+        raise ValueError("invalid_order")
+    if not 0 <= parsed <= 2**31 - 1:
+        raise ValueError("invalid_order")
+    return parsed
+
+
+def _image_aspect_ratio(data, default):
+    value = data.get("aspect_ratio", default)
+    if not isinstance(value, str) or value not in ALLOWED_IMAGE_ASPECT_RATIOS:
+        raise ValueError("invalid_aspect_ratio")
+    return value
+
+
+def _image_style(data):
+    value = data.get("style_preset", "photographic")
+    if not isinstance(value, str) or not value or len(value) > 50:
+        raise ValueError("invalid_style_preset")
+    return value
 
 
 @api_view(["DELETE"])
@@ -208,6 +270,8 @@ def api_generate_gallery_image(request, character_id):
     Body: { prompt, caption, order, negative_prompt, aspect_ratio, style_preset, seed, extra_prompt }
     """
     try:
+        if not isinstance(request.data, Mapping):
+            return Response({"status": "fail", "data": "invalid_payload"}, status=400)
         character = Character.objects.filter(character_id=character_id).first()
         if not character:
             return Response(
@@ -215,21 +279,23 @@ def api_generate_gallery_image(request, character_id):
                 status=404,
             )
 
-        prompt = request.data.get("prompt", "").strip()
+        try:
+            prompt = _image_text(request.data, "prompt")
+            caption = _image_text(
+                request.data,
+                "caption",
+                max_length=MAX_IMAGE_CAPTION_LENGTH,
+            )
+            extra_prompt = _image_text(request.data, "extra_prompt")
+            negative_prompt = _image_text(request.data, "negative_prompt")
+            aspect_ratio = _image_aspect_ratio(request.data, "2:3")
+            style_preset = _image_style(request.data)
+            seed = _image_seed(request.data)
+            order = _image_order(request.data)
+        except ValueError as exc:
+            return Response({"status": "fail", "data": str(exc)}, status=400)
         if not prompt:
             prompt = "portrait, high quality, detailed"
-
-        caption = request.data.get("caption", "")
-        extra_prompt = request.data.get("extra_prompt", "").strip()
-
-        order = request.data.get("order")
-        if order is not None and order != "":
-            try:
-                order = int(order)
-            except (ValueError, TypeError):
-                order = None
-        else:
-            order = None
 
         try:
             operation_id, _ = idempotency.resolve(request)
@@ -241,10 +307,10 @@ def api_generate_gallery_image(request, character_id):
             prompt=prompt,
             caption=caption,
             order=order,
-            negative_prompt=request.data.get("negative_prompt", ""),
-            aspect_ratio=request.data.get("aspect_ratio", "2:3"),
-            style_preset=request.data.get("style_preset", "photographic"),
-            seed=int(request.data.get("seed", 0)),
+            negative_prompt=negative_prompt,
+            aspect_ratio=aspect_ratio,
+            style_preset=style_preset,
+            seed=seed,
             extra_prompt=extra_prompt,  # <-- passed here
             actor=request.user,
             request=request,
@@ -272,6 +338,8 @@ def api_generate_avatar(request, character_id):
     Body: { prompt, negative_prompt, aspect_ratio, style_preset, seed, extra_prompt }
     """
     try:
+        if not isinstance(request.data, Mapping):
+            return Response({"status": "fail", "data": "invalid_payload"}, status=400)
         character = Character.objects.filter(character_id=character_id).first()
         if not character:
             return Response(
@@ -279,11 +347,17 @@ def api_generate_avatar(request, character_id):
                 status=404,
             )
 
-        prompt = request.data.get("prompt", "").strip()
+        try:
+            prompt = _image_text(request.data, "prompt")
+            extra_prompt = _image_text(request.data, "extra_prompt")
+            negative_prompt = _image_text(request.data, "negative_prompt")
+            aspect_ratio = _image_aspect_ratio(request.data, "1:1")
+            style_preset = _image_style(request.data)
+            seed = _image_seed(request.data)
+        except ValueError as exc:
+            return Response({"status": "fail", "data": str(exc)}, status=400)
         if not prompt:
             prompt = "portrait, high quality, detailed"
-
-        extra_prompt = request.data.get("extra_prompt", "").strip()
 
         try:
             operation_id, _ = idempotency.resolve(request)
@@ -293,10 +367,10 @@ def api_generate_avatar(request, character_id):
         result = CharacterService.generate_avatar(
             character=character,
             prompt=prompt,
-            negative_prompt=request.data.get("negative_prompt", ""),
-            aspect_ratio=request.data.get("aspect_ratio", "1:1"),
-            style_preset=request.data.get("style_preset", "photographic"),
-            seed=int(request.data.get("seed", 0)),
+            negative_prompt=negative_prompt,
+            aspect_ratio=aspect_ratio,
+            style_preset=style_preset,
+            seed=seed,
             extra_prompt=extra_prompt,  # <-- passed here
             actor=request.user,
             request=request,
@@ -411,7 +485,7 @@ def api_create_hobby(request):
 
 
 @api_view(["POST"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAdminOrSuperuser])
 @parser_classes([MultiPartParser, FormParser])
 def api_upload_gallery_image(request, character_id):
     """
@@ -587,6 +661,8 @@ def api_create_character(request):
         result = CharacterService.create_character(request.data, request=request, operation_id=operation_id)
 
         if result["status"] != "success":
+            if result["data"] == "permission_denied":
+                return Response(result, status=403)
             return Response(result, status=400)
 
         return idempotency.echo(Response(result, status=201), operation_id)

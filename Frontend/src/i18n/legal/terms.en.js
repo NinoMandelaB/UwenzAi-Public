@@ -189,6 +189,10 @@ export const termsEn = {
             "Impersonate any person or entity, including UwenzAi staff, or misrepresent your affiliation with any person or entity.",
           ],
         },
+        {
+          type: "p",
+          text: "6.6. Acceptable Use of Web Search. You may not use the web search or page-opening features to seek, retrieve, or distribute unlawful content, to infringe the rights of others, to circumvent technical or legal access restrictions, or to probe, scan, or attack third-party systems. We may limit, suspend, or disable these features for a user or conversation at any time, including to comply with the acceptable-use requirements of our search provider.",
+        },
       ],
     },
     {
@@ -265,7 +269,7 @@ export const termsEn = {
         },
         {
           type: "p",
-          text: "8.7. Duration. This licence lasts as long as we hold Your Inputs. It ends when the relevant content is deleted, except to the extent we must retain a copy as described in sections 13 and 14 of the [Privacy Policy](/privacy) — for example in backups for a limited period, or in records we are legally required to keep.",
+          text: "8.7. Duration. This licence lasts as long as we hold Your Inputs. It ends when the relevant content is deleted, except to the extent we must retain a copy as described in sections 14 and 15 of the [Privacy Policy](/privacy) — for example in backups for a limited period, or in records we are legally required to keep.",
         },
         {
           type: "p",
@@ -299,6 +303,10 @@ export const termsEn = {
         {
           type: "p",
           text: "9.3. UwenzAi is not responsible for the actions or failures of third-party providers, and your use of their services is at your own risk, subject to their terms and policies.",
+        },
+        {
+          type: "p",
+          text: "9.4. Web Search Content. The web search feature retrieves information from third-party websites in real time. We do not control, endorse, or guarantee the accuracy, completeness, or lawfulness of content obtained from the web. AI responses that rely on web search results may contain outdated, incomplete, or incorrect information, and you should verify important information independently. Third-party content remains subject to the terms and rights of its respective owners.",
         },
       ],
     },

@@ -11,7 +11,24 @@ MESSAGE_PAIR_COST = 85  # 1 user message + 1 AI reply
 CHARACTER_GENERATION_COST = 500  # includes 1 image
 CHARACTER_EDIT_COST = 50
 IMAGE_GENERATION_COST = 450
+CHARACTER_PHOTO_OFFER_COST = 400  # discounted: character-initiated photo the user accepts
 BYOK_MESSAGE_PAIR_COST = 5
+
+# Open product decision (see PR description): a search-assisted message pair
+# does not currently carry a surcharge. The existing Spark reservation is
+# made *before* the AI call, at a point where it is not yet known whether the
+# model will actually invoke the web_search tool for this particular
+# message -- charging WEB_SEARCH_SURCHARGE_COST unconditionally whenever the
+# per-chat search toggle is on would overcharge messages where the model
+# chose not to search, and charging it only after the fact would require a
+# second reservation/settle cycle that does not exist yet. This constant is
+# defined so a future PR can wire it in once product decides between
+# "charge whenever the toggle is on" vs "charge only when search actually
+# ran" (the latter needs a follow-up debit path, see
+# capp/classes/billing/paid_features.py and capp/tasks.py process_ai_response
+# where `search_calls_used` is already tracked on the persisted message
+# metadata for exactly this purpose).
+WEB_SEARCH_SURCHARGE_COST = 15
 
 # ----------------------------------------------------------------------
 # Cashback

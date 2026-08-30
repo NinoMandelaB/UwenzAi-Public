@@ -77,7 +77,11 @@ describe("UnreadContext", () => {
     markConversationRead.mockReset().mockResolvedValue({});
   });
 
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    delete navigator.setAppBadge;
+    delete navigator.clearAppBadge;
+  });
 
   it("loads the summary on mount", async () => {
     getUnreadSummary.mockResolvedValue({
@@ -169,6 +173,28 @@ describe("UnreadContext", () => {
     await click("read");
 
     expect(screen.getByTestId("total").textContent).toBe("1");
+  });
+
+  it("mirrors the total onto the app-icon badge and clears it at zero", async () => {
+    navigator.setAppBadge = vi.fn().mockResolvedValue(undefined);
+    navigator.clearAppBadge = vi.fn().mockResolvedValue(undefined);
+    getUnreadSummary.mockResolvedValue({
+      conversations: [{ conversation_id: "a", unread_count: 3 }],
+    });
+
+    await renderProvider();
+
+    expect(navigator.setAppBadge).toHaveBeenCalledWith(3);
+
+    await act(async () => {
+      socketListener({
+        type: "unread_update",
+        conversation_id: "a",
+        unread_count: 0,
+      });
+    });
+
+    expect(navigator.clearAppBadge).toHaveBeenCalled();
   });
 
   it("does not leave one owner's counts on screen after a sign-out", async () => {

@@ -1,5 +1,13 @@
 export const translations = {
   en: {
+    ageGate: {
+      title: "Adult content ahead",
+      body: "UwenzAi contains adult content and is intended for users aged 18 and over. Please confirm that you are at least 18 years old to continue.",
+      confirm: "I am 18 or older – enter",
+      decline: "I am under 18 – leave",
+      legal:
+        "By entering, you agree to our Terms of Service and confirm that adult content is legal in your jurisdiction.",
+    },
     chat: {
       generateImage: "Generate an image",
       imagePromptTitle: "Create an image",
@@ -23,6 +31,13 @@ export const translations = {
       loadOlderFailed: "Could not load older messages.",
       retryLoadOlder: "Try again",
       historyStart: "You have reached the start of this conversation.",
+      photoOfferTitle: "{name} wants to send you an image",
+      photoOfferQuestion: "Do you want to accept it?",
+      photoOfferDescription: "“{description}”",
+      photoOfferCost: "This will cost you {cost} sparks.",
+      photoOfferAccept: "Accept",
+      photoOfferAccepting: "Accepting…",
+      photoOfferDecline: "Decline",
     },
     systemMessages: {
       guest_insufficient_sparks:
@@ -48,10 +63,10 @@ export const translations = {
         "Set how long (in hours) the character should wait after your last message before sending a proactive message. Valid range: 6–168 hours.",
       clearMemory: "Clear Memory",
       clearMemoryExplanation:
-        "Permanently delete all memory facts and conversation summaries for this character. This action cannot be undone.",
+        "Permanently delete all memory facts, conversation summaries, and the character's relationship with you — including familiarity, trust, affinity, and tone — for this character. This action cannot be undone.",
       clearMemoryConfirmTitle: "Clear Memory?",
       clearMemoryConfirmMessage:
-        "This will permanently delete all memory facts and conversation summaries for this character. Are you sure you want to proceed?",
+        "This will permanently delete all memory facts and conversation summaries for this character. It will also reset the character's relationship with you — familiarity, trust, affinity, and tone will start again from zero. Are you sure you want to proceed?",
       clear: "Clear",
       saving: "Saving...",
       failedToUpdatePreference: "Failed to update preference.",
@@ -186,6 +201,13 @@ export const translations = {
       darkMode: "Dark Mode",
       themeLight: "Light",
       themeDark: "Dark",
+      installApp: "Install App",
+      installAppSubtitle: "Add UwenzAi to your home screen",
+      notifications: "Notifications",
+      pushNotifications: "Push Notifications",
+      pushNotificationsSubtitle: "Get notified when a companion messages you",
+      pushDeniedHint:
+        "Notifications are blocked — enable them in your browser settings",
       mySparkPool: "My Spark Pool",
       termsAndPrivacy: "Terms & Privacy",
       platformPolicies: "Platform policies and data usage",
@@ -320,7 +342,7 @@ export const translations = {
     dashboard: {
       guestModeTitle: "Guest Mode",
       guestModeText:
-        "You're currently using UwenzAi as a guest. Create an account or log in to save chats, sync progress, and unlock more features.",
+        "You're currently using UwenzAi as a guest. Create an account or log in to save chats, sync progress, get **2000 bonus Sparks instantly** and unlock more features like:\n- Better character memory\n- Web search and deep thinking — your character gives better, more current answers\n- BYOK — bring your own model",
       welcomeBack: "Welcome back",
       heroTitle: "Your companion space is ready",
       heroText:
@@ -1066,6 +1088,14 @@ export const translations = {
   },
 
   sw: {
+    ageGate: {
+      title: "Maudhui ya watu wazima mbele",
+      body: "UwenzAi ina maudhui ya watu wazima na imelenga watumiaji wenye umri wa miaka 18 na zaidi. Tafadhali thibitisha kuwa una angalau miaka 18 ili kuendelea.",
+      confirm: "Nina miaka 18 au zaidi – ingia",
+      decline: "Nina chini ya miaka 18 – ondoka",
+      legal:
+        "Kwa kuingia, unakubali Masharti yetu ya Huduma na kuthibitisha kuwa maudhui ya watu wazima ni halali katika eneo lako.",
+    },
     chat: {
       generateImage: "Tengeneza picha",
       imagePromptTitle: "Tengeneza picha",
@@ -1088,6 +1118,13 @@ export const translations = {
       loadOlderFailed: "Imeshindwa kupakia jumbe za zamani.",
       retryLoadOlder: "Jaribu tena",
       historyStart: "Umefika mwanzo wa mazungumzo haya.",
+      photoOfferTitle: "{name} anataka kukutumia picha",
+      photoOfferQuestion: "Je, unataka kuikubali?",
+      photoOfferDescription: "“{description}”",
+      photoOfferCost: "Hii itakuchukua cheche {cost}.",
+      photoOfferAccept: "Kubali",
+      photoOfferAccepting: "Inakubali…",
+      photoOfferDecline: "Kataa",
     },
     systemMessages: {
       guest_insufficient_sparks:
@@ -1113,10 +1150,10 @@ export const translations = {
         "Weka muda (kwa saa) ambao mhusika atasubiri baada ya ujumbe wako wa mwisho kabla ya kutuma ujumbe wa kuanzisha. Muda halali: 6–168 saa.",
       clearMemory: "Futa Kumbukumbu",
       clearMemoryExplanation:
-        "Futa kabisa kumbukumbu zote na muhtasari wa mazungumzo kwa mhusika huyu. Kitendo hiki hakiwezi kutenduliwa.",
+        "Futa kabisa kumbukumbu zote, muhtasari wa mazungumzo, na uhusiano wa mhusika nawe — ikijumuisha ujuano, imani, mapenzi, na sauti — kwa mhusika huyu. Kitendo hiki hakiwezi kutenduliwa.",
       clearMemoryConfirmTitle: "Futa Kumbukumbu?",
       clearMemoryConfirmMessage:
-        "Hii itafuta kabisa kumbukumbu zote na muhtasari wa mazungumzo kwa mhusika huyu. Je, una uhakika unataka kuendelea?",
+        "Hii itafuta kabisa kumbukumbu zote na muhtasari wa mazungumzo kwa mhusika huyu. Pia itarudisha uhusiano wa mhusika nawe hadi mwanzo — ujuano, imani, mapenzi, na sauti vitaanza upya kutoka sifuri. Je, una uhakika unataka kuendelea?",
       clear: "Futa",
       saving: "Inahifadhi...",
       failedToUpdatePreference: "Imeshindwa kusasisha mapendeleo.",
@@ -1252,6 +1289,13 @@ export const translations = {
       darkMode: "Hali ya Giza",
       themeLight: "Mwanga",
       themeDark: "Giza",
+      installApp: "Sakinisha Programu",
+      installAppSubtitle: "Ongeza UwenzAi kwenye skrini yako ya kwanza",
+      notifications: "Arifa",
+      pushNotifications: "Arifa za Push",
+      pushNotificationsSubtitle: "Pata arifa mwandani wako anapokutumia ujumbe",
+      pushDeniedHint:
+        "Arifa zimezuiwa — ziruhusu kwenye mipangilio ya kivinjari chako",
       mySparkPool: "Hifadhi ya Cheche Yangu",
       termsAndPrivacy: "Masharti na Faragha",
       platformPolicies: "Sera za jukwaa na matumizi ya data",
@@ -1385,7 +1429,7 @@ export const translations = {
     dashboard: {
       guestModeTitle: "Hali ya Mgeni",
       guestModeText:
-        "Kwa sasa unatumia UwenzAi kama mgeni. Fungua akaunti au ingia ili kuhifadhi mazungumzo, kusawazisha maendeleo, na kufungua vipengele zaidi.",
+        "Kwa sasa unatumia UwenzAi kama mgeni. Fungua akaunti au ingia ili kuhifadhi mazungumzo, kusawazisha maendeleo, kupata **Sparks 2000 za ziada mara moja** na kufungua vipengele zaidi kama:\n- Kumbukumbu bora ya mhusika\n- Utafutaji wa wavuti na kufikiria kwa kina — mhusika wako anakupa majibu bora na ya kisasa zaidi\n- BYOK — leta modeli yako mwenyewe",
       welcomeBack: "Karibu tena",
       heroTitle: "Nafasi yako ya mwandani iko tayari",
       heroText:

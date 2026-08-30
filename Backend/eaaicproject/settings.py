@@ -77,6 +77,25 @@ RECAPTCHA_SECRET_KEY = os.getenv("RECAPTCHA_SECRET_KEY")
 FIELD_ENCRYPTION_KEY = os.getenv("FIELD_ENCRYPTION_KEY")
 MESSAGE_ENCRYPTION_KEY = os.getenv("MESSAGE_ENCRYPTION_KEY")
 
+# Web Push (VAPID). Both keys unset disables the feature cleanly: the
+# public-key endpoint answers 503 and every send is a no-op, so environments
+# without keys (CI, local dev) keep working. Generate a pair with
+# `vapid --gen` (ships with py-vapid). The public key is safe to expose —
+# the private key must never leave the server.
+WEBPUSH_VAPID_PUBLIC_KEY = os.getenv("WEBPUSH_VAPID_PUBLIC_KEY", "")
+WEBPUSH_VAPID_PRIVATE_KEY = os.getenv("WEBPUSH_VAPID_PRIVATE_KEY", "")
+WEBPUSH_VAPID_SUBJECT = os.getenv("WEBPUSH_VAPID_SUBJECT", "mailto:support@uwenzai.com")
+WEBPUSH_ALLOWED_ORIGINS = tuple(
+    origin.strip().lower().rstrip("/")
+    for origin in os.getenv(
+        "WEBPUSH_ALLOWED_ORIGINS",
+        "https://fcm.googleapis.com," "https://updates.push.services.mozilla.com," "https://web.push.apple.com",
+    ).split(",")
+    if origin.strip()
+)
+WEBPUSH_TIMEOUT_SECONDS = max(1.0, min(float(os.getenv("WEBPUSH_TIMEOUT_SECONDS", "5")), 15.0))
+WEBPUSH_MAX_SUBSCRIPTIONS_PER_USER = max(1, min(int(os.getenv("WEBPUSH_MAX_SUBSCRIPTIONS_PER_USER", "10")), 20))
+
 STABILITY_API_KEY = os.getenv("STABILITY_API_KEY")
 STABILITY_API_URL = os.getenv("STABILITY_API_URL", "https://api.stability.ai/v2beta/stable-image/generate/core")
 STABILITY_MODEL = os.getenv("STABILITY_MODEL", "sd3.5-large-turbo")
@@ -89,12 +108,61 @@ FAL_API_BASE_URL = os.getenv("FAL_API_BASE_URL", "https://fal.run")
 FAL_TEXT_TO_IMAGE_MODEL = os.getenv("FAL_TEXT_TO_IMAGE_MODEL", "bytedance/seedream/v5/lite/text-to-image")
 FAL_IMAGE_EDIT_MODEL = os.getenv("FAL_IMAGE_EDIT_MODEL", "bytedance/seedream/v5/lite/edit")
 FAL_IMAGE_TIMEOUT = float(os.getenv("FAL_IMAGE_TIMEOUT", "120"))
+FAL_IMAGE_MAX_RESPONSE_BYTES = max(
+    1_000_000, min(int(os.getenv("FAL_IMAGE_MAX_RESPONSE_BYTES", str(15 * 1024 * 1024))), 25 * 1024 * 1024)
+)
+FAL_IMAGE_DOWNLOAD_ALLOWED_HOSTS = tuple(
+    host.strip().lower().rstrip(".")
+    for host in os.getenv("FAL_IMAGE_DOWNLOAD_ALLOWED_HOSTS", "fal.media").split(",")
+    if host.strip()
+)
+IMAGE_GENERATION_TOTAL_TIMEOUT_SECONDS = max(
+    30.0,
+    min(float(os.getenv("IMAGE_GENERATION_TOTAL_TIMEOUT_SECONDS", "180")), 300.0),
+)
+IMAGE_BILLING_DB_MAX_WAIT_SECONDS = max(
+    0.05,
+    min(float(os.getenv("IMAGE_BILLING_DB_MAX_WAIT_SECONDS", "2")), 5.0),
+)
+IMAGE_BILLING_RECOVERY_GRACE_SECONDS = max(
+    30,
+    min(int(os.getenv("IMAGE_BILLING_RECOVERY_GRACE_SECONDS", "60")), 600),
+)
+IMAGE_BILLING_RECOVERY_BATCH_SIZE = max(
+    1,
+    min(int(os.getenv("IMAGE_BILLING_RECOVERY_BATCH_SIZE", "100")), 500),
+)
+IMAGE_IO_RECYCLE_PROCESS_ON_TIMEOUT = os.getenv(
+    "IMAGE_IO_RECYCLE_PROCESS_ON_TIMEOUT",
+    "true" if IS_PRODUCTION else "false",
+).lower() in ("1", "true", "yes", "on")
+IMAGE_TASK_SOFT_TIME_LIMIT = max(
+    int(IMAGE_GENERATION_TOTAL_TIMEOUT_SECONDS) + 10,
+    int(os.getenv("IMAGE_TASK_SOFT_TIME_LIMIT", "210")),
+)
+IMAGE_TASK_TIME_LIMIT = max(
+    IMAGE_TASK_SOFT_TIME_LIMIT + 1,
+    int(os.getenv("IMAGE_TASK_TIME_LIMIT", str(IMAGE_TASK_SOFT_TIME_LIMIT + 20))),
+)
+# Payload knobs consumed by capp.classes.ai.fal_capabilities.build_fal_payload.
+# Default False preserves the long-standing product behaviour of sending
+# enable_safety_checker=False; note fal only honours that for authorized
+# accounts (unauthorized requests are always checked).
+FAL_ENABLE_SAFETY_CHECKER = env_bool("FAL_ENABLE_SAFETY_CHECKER", False)
+# String enum, only forwarded to endpoints whose capability entry supports it
+# (the FLUX Pro family). "2" is the fal-side default; out-of-range values fall
+# back to the endpoint default with a warning inside build_fal_payload.
+FAL_SAFETY_TOLERANCE = os.getenv("FAL_SAFETY_TOLERANCE", "2")
 
 CORTECS_API_KEY = os.getenv("CORTECS_API_KEY")
 CORTECS_BASE_URL = os.getenv("CORTECS_BASE_URL", "https://api.cortecs.ai/v1")
 CORTECS_MODEL = os.getenv("CORTECS_MODEL", "deepseek-v4-flash")
 CORTECS_BACKUP_MODEL = os.getenv("CORTECS_BACKUP_MODEL", CORTECS_MODEL)
 CORTECS_SWAHILI_MODEL = os.getenv("CORTECS_SWAHILI_MODEL", CORTECS_MODEL)
+# Dedicated model for memory extraction. Defaults to a stronger tier than
+# the chat model because prompt-adherence and structured-JSON quality are
+# far more important here than latency or cost per message.
+CORTECS_MEM_MODEL = os.getenv("CORTECS_MEM_MODEL", "deepseek-v4-flash-0731")
 CORTECS_TIMEOUT = float(os.getenv("CORTECS_TIMEOUT", "60"))
 CORTECS_EMBED_URL = os.getenv("CORTECS_EMBED_URL", "https://api.cortecs.ai/v1/embedding")
 CORTECS_EMBED_MODEL = os.getenv("CORTECS_EMBED_MODEL", "qwen3-embedding-8b")
@@ -105,6 +173,62 @@ MISTRAL_EMBED_BASE_URL = os.getenv("MISTRAL_EMBED_BASE_URL", "https://api.mistra
 MISTRAL_MODEL = os.getenv("MISTRAL_MODEL")
 MISTRAL_EMBED_MODEL = os.getenv("MISTRAL_EMBED_MODEL")
 MISTRAL_TOKENIZER_MODEL = os.getenv("MISTRAL_TOKENIZER_MODEL")
+
+# Web search tool (per-chat opt-in). If unset, search gracefully degrades:
+# no tool is offered to the model and no outbound search calls are made.
+#
+# Staan (https://staan.ai) is the only provider: EU-based (France),
+# GDPR-native, with EU-only routing available and no US CLOUD Act exposure,
+# which fits UwenzAi's privacy positioning. If STAAN_API_KEY is missing,
+# search gracefully degrades (no tool offered, no crash).
+#
+# SEARCH_PROVIDER is NOT a selection knob -- there is only one provider.
+# It is read purely as a deprecation guard: a deployment that still sets it
+# to something other than "staan" fails closed (see get_search_provider in
+# capp/classes/search/base.py) rather than silently sending queries to a
+# different processor than the operator asked for. Defaults to empty (the
+# normal case) so an unset variable is never treated as a misconfiguration.
+SEARCH_PROVIDER = os.getenv("SEARCH_PROVIDER", "")
+
+STAAN_API_KEY = os.getenv("STAAN_API_KEY")
+STAAN_API_URL = os.getenv("STAAN_API_URL", "https://api.staan.ai/v2/search/web")
+STAAN_TIMEOUT = float(os.getenv("STAAN_TIMEOUT", "10"))
+STAAN_MARKET = os.getenv("STAAN_MARKET", "en-us").strip() or None
+# Hard cap on search calls per user message (latency/cost bound).
+SEARCH_MAX_CALLS_PER_MESSAGE = int(os.getenv("SEARCH_MAX_CALLS_PER_MESSAGE", "2"))
+
+# open_url tool (fetch + read a single web page). Gated behind the same
+# per-chat web_search_enabled toggle as web_search -- never offered on its
+# own. See capp/classes/search/open_url.py for the SSRF/size/timeout policy
+# these settings control.
+OPEN_URL_TIMEOUT_SECONDS = float(os.getenv("OPEN_URL_TIMEOUT_SECONDS", "10"))
+# Total wall-clock budget for one open_url fetch, spanning every redirect hop
+# and the body read. OPEN_URL_TIMEOUT_SECONDS above is only an INACTIVITY
+# timeout, so a server that sends one byte every 9s never trips it and would
+# otherwise hold a Celery worker open indefinitely. Must stay comfortably
+# below CELERY_TASK_SOFT_TIME_LIMIT so the fetch aborts itself before the
+# whole AI task is killed.
+OPEN_URL_TOTAL_TIMEOUT_SECONDS = float(os.getenv("OPEN_URL_TOTAL_TIMEOUT_SECONDS", "25"))
+# Wall-clock ceilings for one AI reply task (capp.tasks.process_ai_response).
+# The soft limit raises SoftTimeLimitExceeded inside the task so it can refund
+# the Spark reservation and mark the message failed; the hard limit kills the
+# worker process as a backstop. Keep the soft limit well above
+# OPEN_URL_TOTAL_TIMEOUT_SECONDS so a slow page aborts itself and the user
+# still gets a reply, and above the provider timeouts plus retry backoff.
+AI_TASK_SOFT_TIME_LIMIT = int(os.getenv("AI_TASK_SOFT_TIME_LIMIT", "180"))
+AI_TASK_TIME_LIMIT = int(os.getenv("AI_TASK_TIME_LIMIT", str(AI_TASK_SOFT_TIME_LIMIT + 20)))
+OPEN_URL_MAX_RESPONSE_BYTES = int(os.getenv("OPEN_URL_MAX_RESPONSE_BYTES", str(2_000_000)))
+OPEN_URL_MAX_EXTRACTED_CHARS = int(os.getenv("OPEN_URL_MAX_EXTRACTED_CHARS", "6000"))
+OPEN_URL_MAX_REDIRECTS = int(os.getenv("OPEN_URL_MAX_REDIRECTS", "5"))
+# Hard cap on open_url calls per user message (separate from, and stricter
+# than, SEARCH_MAX_CALLS_PER_MESSAGE -- fetching full pages is far more
+# expensive than a search snippet lookup).
+OPEN_URL_MAX_CALLS_PER_MESSAGE = int(os.getenv("OPEN_URL_MAX_CALLS_PER_MESSAGE", "1"))
+# Comma-separated list of domains (and subdomains) open_url must never fetch,
+# in addition to the built-in SSRF protections (private/loopback/link-local
+# IPs and cloud metadata endpoints are always blocked regardless of this
+# list).
+OPEN_URL_BLOCKED_DOMAINS = [d.strip() for d in os.getenv("OPEN_URL_BLOCKED_DOMAINS", "").split(",") if d.strip()]
 
 # Paystack
 PAYSTACK_BASE_URL = os.getenv("PAYSTACK_BASE_URL", "https://api.paystack.co")
@@ -423,6 +547,8 @@ CELERY_TASK_DEFAULT_QUEUE = "general"
 CELERY_TASK_ROUTES = {
     # Long-running fal.ai image generation — isolated so it never delays chat.
     "capp.tasks.generate_chat_image": {"queue": "images"},
+    "capp.tasks.refund_billing_reservation": {"queue": "general"},
+    "capp.tasks.reconcile_stale_image_reservations": {"queue": "general"},
 }
 
 # Explicitly declare both queues so a worker (or the broker) knows about them up
@@ -579,7 +705,15 @@ CELERY_BEAT_SCHEDULE = {
     "check_proactive_chat": {
         "task": "capp.tasks.check_and_send_proactive_messages",
         "schedule": crontab(minute="*/30"),  # every 30 minutes
-        "options": {"expires": 60, "queue": "general"},
+        # Expire stale runs, but give a busy general worker a chance: 60 s was
+        # tight enough to silently drop runs whenever slower tasks (memory
+        # extraction, summaries) occupied the queue. The next tick is 30 min away.
+        "options": {"expires": 300, "queue": "general"},
+    },
+    "reconcile-stale-image-reservations": {
+        "task": "capp.tasks.reconcile_stale_image_reservations",
+        "schedule": crontab(minute="*"),
+        "options": {"expires": 55, "queue": "general"},
     },
 }
 # ------------------------------------------------------------------------------

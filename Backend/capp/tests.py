@@ -1,17 +1,26 @@
 # capp/tests.py
+import io
+import json
 import pathlib
 import re
+import tempfile
 import uuid
 from datetime import timedelta
 from unittest import mock
 
+from PIL import Image
+
 from packaging.utils import canonicalize_name
 from packaging.version import Version
+from celery.exceptions import SoftTimeLimitExceeded
 
 from django.conf import settings
 from django.contrib.auth.models import AnonymousUser
 from django.core.cache import cache
-from django.test import SimpleTestCase, TestCase
+from django.core.files.base import ContentFile
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import SimpleTestCase, TestCase, override_settings
+from django.test.client import BOUNDARY, MULTIPART_CONTENT, encode_multipart
 from django.utils import timezone
 
 from capp.classes.billing.paid_features import InsufficientBalance, PaidFeature
@@ -32,12 +41,14 @@ from capp.models import (
     GuestIdentity,
     GuestTokenQuota,
     Message,
+    ProactiveChatPreference,
     SparkPool,
     SparkTransaction,
     UsageCharge,
     UserBYOKConfig,
 )
-from capp.tasks import generate_chat_image
+from capp.classes.chat.proactive_chat_service import PROACTIVE_NAMESPACE, ProactiveChatService
+from capp.tasks import check_and_send_proactive_messages, generate_chat_image
 from capp.utils.encryption import EncryptionService
 
 RECAPTCHA_OK = {"success": True}
@@ -127,23 +138,22 @@ class AuthApiTests(TestCase):
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(resp.json()["data"], "invalid_credentials")
 
-    def test_signin_staff_account_bypasses_recaptcha(self):
-        # No RecaptchaService mock here on purpose - a staff/superuser account
-        # must sign in successfully even with no recaptcha_token at all, since
-        # the internal admin panel (uwenzAi-Admin) never sends one.
+    def test_signin_staff_account_requires_recaptcha(self):
+        # Staff/superuser accounts are NOT exempt from reCAPTCHA — the admin
+        # panel (uwenzAi-Admin) sends a reCAPTCHA token on login just like
+        # the main app. Without a token, signin is rejected.
         _make_user(username="staffer", email="staffer@example.com", verified=True, is_staff=True)
         resp = self.client.post(
             "/api/v1/auth/signin/",
             data={"username": "staffer", "password": "pw123456"},
             content_type="application/json",
         )
-        self.assertEqual(resp.status_code, 200)
-        self.assertIn("access_token", resp.json()["data"])
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json()["data"], "recaptcha_required")
 
-    def test_signin_regular_account_still_requires_recaptcha(self):
-        # No RecaptchaService mock here either - confirms the bypass above is
-        # scoped to staff/superuser only, and everyone else keeps the existing
-        # reCAPTCHA gate.
+    def test_signin_regular_account_requires_recaptcha(self):
+        # Confirms reCAPTCHA is enforced for all accounts (staff and non-staff
+        # alike) when no valid recaptcha_token is provided.
         _make_user(username="regular", email="regular@example.com", verified=True, is_staff=False)
         resp = self.client.post(
             "/api/v1/auth/signin/",
@@ -214,7 +224,21 @@ def _bearer_token(client, username, password="pw123456"):
         data={"username": username, "password": password},
         content_type="application/json",
     )
-    return resp.json()["data"]["access_token"]
+    try:
+        body = resp.json()
+    except ValueError:
+        body = resp.content.decode("utf-8", errors="replace")
+
+    if resp.status_code != 200 or not isinstance(body, dict) or not isinstance(body.get("data"), dict):
+        raise AssertionError(f"Sign-in for {username!r} failed: status={resp.status_code}, body={body!r}")
+
+    token = body["data"].get("access_token")
+    if not token:
+        raise AssertionError(
+            f"Sign-in for {username!r} returned no access token: status={resp.status_code}, body={body!r}"
+        )
+
+    return token
 
 
 class AdminApiTests(TestCase):
@@ -807,7 +831,7 @@ class ChatImageGenerationTests(TestCase):
         token = _bearer_token(self.client, "imgowner")
         for prompt in (
             "a child playing in the sand",
-            "posing with her pet dog",
+            "sex with animal",
             "standing beside a corpse",
         ):
             with self.subTest(prompt=prompt):
@@ -985,6 +1009,28 @@ class ChatImageGenerationTests(TestCase):
                 metadata__type="generated_image",
             ).exists()
         )
+        send_system.assert_called_once()
+
+    def test_task_soft_limit_is_not_swallowed(self):
+        request_msg = Message.objects.create(
+            conversation=self.conversation,
+            sender_type=Message.SenderType.USER,
+            content="a portrait",
+            status=Message.StatusChoices.SENT,
+            metadata={"type": "image_request"},
+        )
+
+        with mock.patch.object(
+            CharacterService,
+            "generate_gallery_image",
+            side_effect=SoftTimeLimitExceeded(),
+        ), mock.patch("capp.tasks._send_system_message") as send_system, self.assertRaises(SoftTimeLimitExceeded):
+            generate_chat_image(
+                str(self.conversation.conversation_id),
+                str(request_msg.message_id),
+                "a portrait",
+            )
+
         send_system.assert_called_once()
 
     # ---------- Gallery privacy + billing via the reused service ----------
@@ -1525,31 +1571,42 @@ class SeedreamRequestHelperTests(TestCase):
     def setUp(self):
         cache.clear()
 
+    @staticmethod
+    def _valid_png_bytes():
+        buffer = io.BytesIO()
+        Image.new("RGB", (1, 1), (120, 90, 60)).save(buffer, format="PNG")
+        return buffer.getvalue()
+
     def _fake_post(self, status=200, images=None, headers=None):
         resp = mock.Mock()
         resp.status_code = status
         resp.headers = headers or {}
         resp.text = "err"
         if images is _UNSET:
-            resp.json.return_value = {"images": [{"url": "https://fal.cdn/out.webp"}]}
+            payload = {"images": [{"url": "https://fal.cdn/out.webp"}]}
         else:
-            resp.json.return_value = {"images": images}
+            payload = {"images": images}
+        resp.iter_content.return_value = [json.dumps(payload).encode("utf-8")]
         return resp
 
     def test_text_to_image_endpoint_and_payload(self):
         from capp.classes.characters.character_service import CharacterService
 
         post = mock.Mock(return_value=self._fake_post(images=_UNSET))
-        get = mock.Mock(return_value=mock.Mock(status_code=200, content=b"img"))
+        image_bytes = self._valid_png_bytes()
+        get_response = mock.Mock(status_code=200, headers={"Content-Type": "image/png"})
+        get_response.iter_content.return_value = [image_bytes]
+        get = mock.Mock(return_value=get_response)
 
         with mock.patch("requests.post", post), mock.patch("requests.get", get), self.settings(
             FAL_API_KEY="k",
             FAL_API_BASE_URL="https://fal.run",
             FAL_TEXT_TO_IMAGE_MODEL="bytedance/seedream/v5/lite/text-to-image",
+            FAL_IMAGE_DOWNLOAD_ALLOWED_HOSTS=("fal.cdn",),
         ):
             out = CharacterService._generate_fal_seedream_image(prompt="hi", image_size="square_hd")
 
-        self.assertEqual(out, b"img")
+        self.assertEqual(out, image_bytes)
         url = post.call_args.args[0]
         self.assertEqual(url, "https://fal.run/bytedance/seedream/v5/lite/text-to-image")
         payload = post.call_args.kwargs["json"]
@@ -1563,12 +1620,16 @@ class SeedreamRequestHelperTests(TestCase):
         from capp.classes.characters.character_service import CharacterService
 
         post = mock.Mock(return_value=self._fake_post(images=_UNSET))
-        get = mock.Mock(return_value=mock.Mock(status_code=200, content=b"img"))
+        image_bytes = self._valid_png_bytes()
+        get_response = mock.Mock(status_code=200, headers={"Content-Type": "image/png"})
+        get_response.iter_content.return_value = [image_bytes]
+        get = mock.Mock(return_value=get_response)
 
         with mock.patch("requests.post", post), mock.patch("requests.get", get), self.settings(
             FAL_API_KEY="k",
             FAL_API_BASE_URL="https://fal.run",
             FAL_IMAGE_EDIT_MODEL="bytedance/seedream/v5/lite/edit",
+            FAL_IMAGE_DOWNLOAD_ALLOWED_HOSTS=("fal.cdn",),
         ):
             out = CharacterService._generate_fal_seedream_image(
                 prompt="hi",
@@ -1576,7 +1637,7 @@ class SeedreamRequestHelperTests(TestCase):
                 image_size="portrait_4_3",
             )
 
-        self.assertEqual(out, b"img")
+        self.assertEqual(out, image_bytes)
         self.assertEqual(post.call_args.args[0], "https://fal.run/bytedance/seedream/v5/lite/edit")
         payload = post.call_args.kwargs["json"]
         self.assertEqual(payload["image_urls"], ["https://fal.cdn/ref.webp"])
@@ -2028,6 +2089,8 @@ class CeleryQueueRoutingTests(SimpleTestCase):
         "capp.tasks.maybe_summarize_conversation",
         "capp.tasks.retrospective_memory_for_new_user",
         "capp.tasks.check_and_send_proactive_messages",
+        "capp.tasks.refund_billing_reservation",
+        "capp.tasks.reconcile_stale_image_reservations",
         "expire_subscriptions",
     ]
     IMAGE_TASKS = ["capp.tasks.generate_chat_image"]
@@ -2234,9 +2297,10 @@ class ImagePromptPolicyTests(SimpleTestCase):
     Unit coverage for the prohibited-subject policy itself.
 
     The policy is deliberately narrow: adult NSFW is allowed, and only minors,
-    animals and deceased people are refused. These cases pin both halves of
-    that contract, plus the substring false-positives the term lists must not
-    trip on.
+    bestiality/zoophilia and deceased people are refused. Normal, non-sexual
+    animal scenes (pets, riding, farming, wildlife) are allowed. These cases pin
+    both halves of that contract, plus the substring false-positives the term
+    lists must not trip on.
     """
 
     ALLOWED = (
@@ -2262,6 +2326,19 @@ class ImagePromptPolicyTests(SimpleTestCase):
         "hair in a ponytail",
         "an 18-year-old Kenyan woman",
         "a 30 year old man in Nairobi",
+        # Normal, non-sexual animal scenes are now allowed.
+        "posing with her pet dog",
+        "a cat on the windowsill",
+        "riding a horse",
+        "holding a chicken",
+        "an elephant in the savannah",
+        "a lion resting",
+        "a butterfly on her hand",
+        "a snake around her neck",
+        "beside a cow in the field",
+        "mbwa na paka",
+        "simba wa Serengeti",
+        "nyuki kwenye ua",
     )
 
     BLOCKED = {
@@ -2288,20 +2365,22 @@ class ImagePromptPolicyTests(SimpleTestCase):
             "miaka 14",
             "ch1ld portrait",
             "c h i l d portrait",
+            "c.h.i.l.d portrait",
+            "сhild portrait",
         ),
-        "animals": (
-            "posing with her pet dog",
-            "a cat on the windowsill",
-            "riding a horse",
-            "holding a chicken",
-            "an elephant in the savannah",
-            "a lion resting",
-            "a butterfly on her hand",
-            "a snake around her neck",
-            "beside a cow in the field",
-            "mbwa na paka",
-            "simba wa Serengeti",
-            "nyuki kwenye ua",
+        "bestiality": (
+            "a bestiality scene",
+            "zoophilia content",
+            "sex with animal",
+            "having sex with dog",
+            "fucking horse",
+            "a dog penetrating a woman",
+            "oral sex on a dog",
+            "an erotic scene between a woman and horse",
+            "a woman mating with a horse",
+            "kujamiiana na mnyama",
+            "kufanya ngono na mnyama",
+            "ngono na mnyama",
         ),
         "deceased": (
             "standing beside a corpse",
@@ -2309,6 +2388,8 @@ class ImagePromptPolicyTests(SimpleTestCase):
             "a dead body in the street",
             "the deceased man",
             "the woman is dead",
+            "a dead actress on the floor",
+            "the deceased model posing",
             "an open casket funeral",
             "in a graveyard at night",
             "a zombie reaching out",
@@ -2333,8 +2414,8 @@ class ImagePromptPolicyTests(SimpleTestCase):
     def test_violation_in_any_argument_is_detected(self):
         """Every field is screened, so a secondary field cannot smuggle a subject."""
         self.assertEqual(
-            ImagePromptPolicy.find_violation("a portrait at sunset", None, "", "with her puppy"),
-            "animals",
+            ImagePromptPolicy.find_violation("a portrait at sunset", None, "", "sex with animal"),
+            "bestiality",
         )
 
     def test_blank_and_none_inputs_are_allowed(self):
@@ -2399,8 +2480,19 @@ class ImagePolicyServiceEnforcementTests(TestCase):
         with mock.patch.object(PaidFeature, "reserve") as reserve, mock.patch("requests.post") as post:
             result = CharacterService.generate_gallery_image(
                 character=self.character,
-                prompt="holding a puppy",
-                extra_prompt="holding a puppy",
+                prompt="sex with animal",
+                extra_prompt="sex with animal",
+                actor=self.user,
+                is_public=False,
+            )
+        self._assert_refused_without_side_effects(result, reserve, post)
+
+    def test_gallery_negative_prompt_cannot_smuggle_prohibited_subject(self):
+        with mock.patch.object(PaidFeature, "reserve") as reserve, mock.patch("requests.post") as post:
+            result = CharacterService.generate_gallery_image(
+                character=self.character,
+                prompt="portrait",
+                negative_prompt="sex with animal",
                 actor=self.user,
                 is_public=False,
             )
@@ -2412,6 +2504,16 @@ class ImagePolicyServiceEnforcementTests(TestCase):
                 character=self.character,
                 prompt="beside a corpse",
                 extra_prompt="beside a corpse",
+                actor=self.user,
+            )
+        self._assert_refused_without_side_effects(result, reserve, post)
+
+    def test_avatar_negative_prompt_cannot_smuggle_prohibited_subject(self):
+        with mock.patch.object(PaidFeature, "reserve") as reserve, mock.patch("requests.post") as post:
+            result = CharacterService.generate_avatar(
+                character=self.character,
+                prompt="portrait",
+                negative_prompt="a dead actress",
                 actor=self.user,
             )
         self._assert_refused_without_side_effects(result, reserve, post)
@@ -2428,10 +2530,10 @@ class ImagePolicyServiceEnforcementTests(TestCase):
         self.assertEqual(result["status"], "success")
 
     def test_image_policy_texts_covers_character_fields_reaching_the_provider(self):
-        self.character.visual_style = "a puppy in frame"
+        self.character.visual_style = "sex with animal"
         self.character.save(update_fields=["visual_style"])
         texts = CharacterService.image_policy_texts(self.character)
-        self.assertEqual(ImagePromptPolicy.find_violation(*texts), "animals")
+        self.assertEqual(ImagePromptPolicy.find_violation(*texts), "bestiality")
 
 
 class CharacterImageGenerationAuthTests(TestCase):
@@ -2534,3 +2636,519 @@ class CharacterImageGenerationAuthTests(TestCase):
         self.assertEqual(gallery["data"], "permission_denied")
         self.assertEqual(avatar["data"], "permission_denied")
         post.assert_not_called()
+
+    def test_post_lock_avatar_fast_path_still_checks_owner(self):
+        """A stale no-avatar object cannot expose a newly-created private avatar."""
+        stale_character = Character.objects.get(pk=self.character.pk)
+        self.character.avatar.save("private.webp", ContentFile(b"private-avatar"), save=True)
+
+        result = CharacterService.generate_avatar(
+            character=stale_character,
+            prompt="portrait",
+            actor=_make_user(username="intruder", email="intruder@example.com"),
+        )
+
+        self.assertEqual(result, {"status": "fail", "data": "permission_denied"})
+
+    @mock.patch("capp.classes.auth.recaptcha.RecaptchaService.verify_token", return_value=RECAPTCHA_OK)
+    def test_gallery_rejects_non_object_json_before_provider_call(self, _recaptcha):
+        token = _bearer_token(self.client, "galowner")
+        with mock.patch.object(CharacterService, "generate_gallery_image") as generate:
+            response = self.client.post(
+                self.gallery_url,
+                data=["portrait"],
+                content_type="application/json",
+                HTTP_AUTHORIZATION=f"Bearer {token}",
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["data"], "invalid_payload")
+        generate.assert_not_called()
+
+    @mock.patch("capp.classes.auth.recaptcha.RecaptchaService.verify_token", return_value=RECAPTCHA_OK)
+    def test_gallery_rejects_invalid_order_before_provider_call(self, _recaptcha):
+        token = _bearer_token(self.client, "galowner")
+        for order in (-1, 2**31, 1.5, "not-an-order"):
+            with self.subTest(order=order), mock.patch.object(CharacterService, "generate_gallery_image") as generate:
+                response = self.client.post(
+                    self.gallery_url,
+                    data={"prompt": "portrait", "order": order},
+                    content_type="application/json",
+                    HTTP_AUTHORIZATION=f"Bearer {token}",
+                )
+
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(response.json()["data"], "invalid_order")
+            generate.assert_not_called()
+
+    @mock.patch("capp.classes.auth.recaptcha.RecaptchaService.verify_token", return_value=RECAPTCHA_OK)
+    def test_avatar_rejects_float_seed_before_provider_call(self, _recaptcha):
+        token = _bearer_token(self.client, "galowner")
+        with mock.patch.object(CharacterService, "generate_avatar") as generate:
+            response = self.client.post(
+                self.avatar_url,
+                data={"prompt": "portrait", "seed": 1.5},
+                content_type="application/json",
+                HTTP_AUTHORIZATION=f"Bearer {token}",
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["data"], "invalid_seed")
+        generate.assert_not_called()
+
+
+def _image_upload(name="picture.png", size=(512, 512), content_type="image/png"):
+    """A real PNG that clears the 400x400 minimum both validators enforce."""
+    buffer = io.BytesIO()
+    Image.new("RGB", size, (120, 90, 60)).save(buffer, format="PNG")
+    return SimpleUploadedFile(name, buffer.getvalue(), content_type=content_type)
+
+
+@override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+class AdminOnlyImageUploadTests(TestCase):
+    """
+    Supplying a picture file is an admin-only action. Everyone else gets
+    artwork through the AI generators, which are prompt-screened and billed;
+    an uploaded file skips both gates, so owning the character is not enough.
+    The character edit form is the case that matters here — it accepts an
+    ``avatar`` part on a multipart update, which is a second upload route into
+    the same ImageField as the gallery endpoint.
+    """
+
+    def setUp(self):
+        cache.clear()
+        self.admin = _make_user(username="imgadmin", email="imgadmin@example.com", verified=True, is_staff=True)
+        self.owner = _make_user(username="imgowner", email="imgowner@example.com", verified=True)
+        self.character = _make_character(name="Neema", slug="neema", created_by=self.owner)
+        # The shared fixture's "casual" tone is not in ALLOWED_TONE_STYLES, so an
+        # update would fail validation before reaching the permission check.
+        self.character.tone_style = "warm"
+        self.character.save(update_fields=["tone_style"])
+
+        # Editing an approved public character costs the owner a re-review fee.
+        SparkPool.objects.update_or_create(
+            user=self.owner,
+            defaults={"sparks": 5000, "token_balance": 0, "is_active": True},
+        )
+
+        self.update_url = f"/api/v1/characters/{self.character.character_id}/update/"
+        self.gallery_upload_url = f"/api/v1/characters/{self.character.character_id}/gallery/upload/"
+        self.avatar_generate_url = f"/api/v1/characters/{self.character.character_id}/generate-avatar/"
+        self.gallery_generate_url = f"/api/v1/characters/{self.character.character_id}/gallery/generate/"
+
+    def _patch_avatar(self, token):
+        return self.client.patch(
+            self.update_url,
+            data=encode_multipart(BOUNDARY, {"avatar": _image_upload("avatar.png")}),
+            content_type=MULTIPART_CONTENT,
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+    def _post_gallery_image(self, token):
+        return self.client.post(
+            self.gallery_upload_url,
+            data={"image": _image_upload("gallery.png")},
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+    # ── Character avatar upload ──────────────────────────────────────────────
+
+    @mock.patch("capp.classes.auth.recaptcha.RecaptchaService.verify_token", return_value=RECAPTCHA_OK)
+    def test_owner_cannot_upload_character_avatar(self, _recaptcha):
+        """Owning the character does not grant the right to upload a file for it."""
+        token = _bearer_token(self.client, "imgowner")
+        resp = self._patch_avatar(token)
+
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.json()["data"], "permission_denied")
+
+        self.character.refresh_from_db()
+        self.assertFalse(self.character.avatar)
+
+    @mock.patch("capp.classes.auth.recaptcha.RecaptchaService.verify_token", return_value=RECAPTCHA_OK)
+    def test_admin_can_upload_character_avatar(self, _recaptcha):
+        token = _bearer_token(self.client, "imgadmin")
+        resp = self._patch_avatar(token)
+
+        self.assertEqual(resp.status_code, 200)
+
+        self.character.refresh_from_db()
+        self.assertTrue(self.character.avatar)
+        self.assertIn("characters/avatars/", self.character.avatar.name)
+
+    def test_anonymous_cannot_upload_character_avatar(self):
+        resp = self.client.patch(
+            self.update_url,
+            data=encode_multipart(BOUNDARY, {"avatar": _image_upload("avatar.png")}),
+            content_type=MULTIPART_CONTENT,
+        )
+
+        self.assertEqual(resp.status_code, 401)
+
+        self.character.refresh_from_db()
+        self.assertFalse(self.character.avatar)
+
+    @mock.patch("capp.classes.auth.recaptcha.RecaptchaService.verify_token", return_value=RECAPTCHA_OK)
+    def test_non_admin_cannot_upload_avatar_while_creating_a_character(self, _recaptcha):
+        """The create endpoint takes the same multipart ``avatar`` part."""
+        token = _bearer_token(self.client, "imgowner")
+        resp = self.client.post(
+            "/api/v1/characters/create/",
+            data={"name": "Baraka", "avatar": _image_upload("avatar.png")},
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.json()["data"], "permission_denied")
+        self.assertFalse(Character.objects.filter(name="Baraka").exists())
+
+    @mock.patch("capp.classes.auth.recaptcha.RecaptchaService.verify_token", return_value=RECAPTCHA_OK)
+    def test_owner_can_still_edit_a_character_without_uploading(self, _recaptcha):
+        """The fix gates the file, not the whole edit form."""
+        token = _bearer_token(self.client, "imgowner")
+        resp = self.client.patch(
+            self.update_url,
+            data={"mood": "playful"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token}",
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        self.character.refresh_from_db()
+        self.assertEqual(self.character.mood, "playful")
+
+    # ── Gallery upload ───────────────────────────────────────────────────────
+
+    @mock.patch("capp.classes.auth.recaptcha.RecaptchaService.verify_token", return_value=RECAPTCHA_OK)
+    def test_non_admin_cannot_upload_gallery_image(self, _recaptcha):
+        token = _bearer_token(self.client, "imgowner")
+        resp = self._post_gallery_image(token)
+
+        self.assertEqual(resp.status_code, 403)
+        self.assertFalse(CharacterGalleryImage.objects.filter(character=self.character).exists())
+
+    def test_anonymous_cannot_upload_gallery_image(self):
+        resp = self.client.post(self.gallery_upload_url, data={"image": _image_upload("gallery.png")})
+
+        self.assertEqual(resp.status_code, 401)
+        self.assertFalse(CharacterGalleryImage.objects.filter(character=self.character).exists())
+
+    @mock.patch("capp.classes.auth.recaptcha.RecaptchaService.verify_token", return_value=RECAPTCHA_OK)
+    def test_admin_can_upload_gallery_image(self, _recaptcha):
+        token = _bearer_token(self.client, "imgadmin")
+        resp = self._post_gallery_image(token)
+
+        self.assertEqual(resp.status_code, 201)
+
+        image = CharacterGalleryImage.objects.get(character=self.character)
+        self.assertEqual(image.created_by, self.admin)
+        self.assertEqual(image.source, Character.AvatarSource.UPLOADED)
+
+    # ── Generation stays open to any signed-in user ──────────────────────────
+    #
+    # Only the caller-supplied file is admin-only. The AI generators are the
+    # sanctioned route to artwork for everyone else, so they must keep working
+    # for a non-admin; a fix that quietly closed them would break the feature
+    # rather than secure it.
+
+    @mock.patch("capp.classes.auth.recaptcha.RecaptchaService.verify_token", return_value=RECAPTCHA_OK)
+    def test_non_admin_can_still_generate_a_character_avatar(self, _recaptcha):
+        token = _bearer_token(self.client, "imgowner")
+        with mock.patch.object(
+            CharacterService, "_generate_fal_seedream_image", return_value=b"generated-avatar"
+        ), mock.patch.object(CharacterService, "_generate_ai_image", return_value=b"generated-avatar"):
+            resp = self.client.post(
+                self.avatar_generate_url,
+                data={"prompt": "portrait, high quality, detailed"},
+                content_type="application/json",
+                HTTP_AUTHORIZATION=f"Bearer {token}",
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        self.character.refresh_from_db()
+        self.assertTrue(self.character.avatar)
+
+    @mock.patch("capp.classes.auth.recaptcha.RecaptchaService.verify_token", return_value=RECAPTCHA_OK)
+    def test_non_admin_can_still_generate_a_gallery_image(self, _recaptcha):
+        token = _bearer_token(self.client, "imgowner")
+        with mock.patch.object(
+            CharacterService, "_generate_fal_seedream_image", return_value=b"generated-gallery"
+        ), mock.patch.object(CharacterService, "_generate_ai_image", return_value=b"generated-gallery"):
+            resp = self.client.post(
+                self.gallery_generate_url,
+                data={"prompt": "portrait, high quality, detailed"},
+                content_type="application/json",
+                HTTP_AUTHORIZATION=f"Bearer {token}",
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(CharacterGalleryImage.objects.filter(character=self.character).exists())
+
+    def test_generation_services_accept_a_non_admin_actor(self):
+        """The service layer, not just the view, still lets a non-admin generate."""
+        with mock.patch.object(
+            CharacterService, "_generate_fal_seedream_image", return_value=b"generated"
+        ), mock.patch.object(CharacterService, "_generate_ai_image", return_value=b"generated"):
+            avatar = CharacterService.generate_avatar(character=self.character, prompt="portrait", actor=self.owner)
+            gallery = CharacterService.generate_gallery_image(
+                character=self.character, prompt="portrait", actor=self.owner
+            )
+
+        self.assertEqual(avatar["status"], "success")
+        self.assertEqual(gallery["status"], "success")
+
+    # ── Service layer, independent of the view decorators ────────────────────
+
+    def test_service_layer_refuses_a_non_admin_avatar_upload(self):
+        """Defence in depth: the check does not rely on the view decorator."""
+        request = mock.Mock(user=self.owner, FILES={"avatar": _image_upload("avatar.png")})
+
+        result = CharacterService.update_character(self.character, {}, request=request)
+
+        self.assertEqual(result["status"], "fail")
+        self.assertEqual(result["data"], "permission_denied")
+
+
+class ProactiveChatServiceTests(TestCase):
+    """Behavioural coverage for the proactive (AI-initiated) chat pipeline.
+
+    Previously only queue routing was tested. The decision logic, the
+    billing-adjacent send path (reserve -> settle/refund), the idempotency
+    guard, and the beat task's eligibility filter had no coverage.
+    """
+
+    def setUp(self):
+        cache.clear()
+        self.user = _make_user(username="proactive", email="proactive@example.com", verified=True)
+        self.character = _make_character(name="Zuri", slug="zuri")
+        self.conversation = Conversation.objects.create(user=self.user, character=self.character)
+        self.pref = ProactiveChatPreference.objects.create(
+            user=self.user, character=self.character, enabled=True, interval_hours=24
+        )
+
+    # ── Helpers ─────────────────────────────────────────────────────────────
+
+    def _fund(self, user, sparks):
+        pool, _ = SparkPool.objects.get_or_create(
+            user=user, defaults={"sparks": 0, "token_balance": 0, "is_active": True}
+        )
+        pool.sparks = sparks
+        pool.save(update_fields=["sparks"])
+        return pool
+
+    def _stale_message(self, hours=25):
+        """A user message old enough to satisfy the default 24 h interval."""
+        return _make_message(
+            self.conversation,
+            Message.SenderType.USER,
+            "hey",
+            created_at=timezone.now() - timedelta(hours=hours),
+        )
+
+    @staticmethod
+    def _llm_ok(content="Habari! Nimekukumbuka."):
+        return {"choices": [{"message": {"content": content}}]}
+
+    @staticmethod
+    def _operation_id(pref, last_msg):
+        return str(uuid.uuid5(PROACTIVE_NAMESPACE, f"{pref.pk}:{last_msg.pk}"))
+
+    # ── _should_send_proactive ───────────────────────────────────────────────
+
+    def test_should_send_requires_prior_conversation(self):
+        stranger = _make_character(name="New", slug="new")
+        pref = ProactiveChatPreference.objects.create(
+            user=self.user, character=stranger, enabled=True, interval_hours=24
+        )
+        self.assertFalse(ProactiveChatService._should_send_proactive(pref, timezone.now()))
+
+    def test_should_send_false_when_interval_not_elapsed(self):
+        _make_message(
+            self.conversation,
+            Message.SenderType.USER,
+            "recent",
+            created_at=timezone.now() - timedelta(hours=1),
+        )
+        self.assertFalse(ProactiveChatService._should_send_proactive(self.pref, timezone.now()))
+
+    def test_should_send_true_after_interval_elapses(self):
+        self._stale_message()
+        self.assertTrue(ProactiveChatService._should_send_proactive(self.pref, timezone.now()))
+
+    def test_should_send_false_at_consecutive_cap(self):
+        self._stale_message()
+        self.pref.consecutive_proactive_without_reply = ProactiveChatService.MAX_PROACTIVE_WITHOUT_REPLY
+        self.pref.save(update_fields=["consecutive_proactive_without_reply", "updated_at"])
+        self.assertFalse(ProactiveChatService._should_send_proactive(self.pref, timezone.now()))
+
+    # ── _send_proactive_message ─────────────────────────────────────────────
+
+    @mock.patch.object(ProactiveChatService, "_send_websocket_notification")
+    @mock.patch("capp.classes.chat.proactive_chat_service.unread_service.broadcast_unread")
+    @mock.patch("capp.classes.chat.proactive_chat_service.CortecsClient.chat_completion")
+    def test_send_persists_settles_and_bumps_counter(self, mock_llm, _unread, _ws):
+        mock_llm.return_value = self._llm_ok()
+        self._fund(self.user, 2000)
+        last = self._stale_message()
+
+        ProactiveChatService._send_proactive_message(self.pref)
+
+        ai_msg = Message.objects.get(conversation=self.conversation, sender_type=Message.SenderType.AI)
+        self.assertTrue(ai_msg.metadata["proactive"])
+        self.assertEqual(ai_msg.client_operation_id, self._operation_id(self.pref, last))
+
+        reservation = BillingReservation.objects.get(user=self.user)
+        self.assertEqual(reservation.status, BillingReservation.Status.SETTLED)
+        self.assertEqual(SparkPool.objects.get(user=self.user).sparks, 2000 - MESSAGE_PAIR_COST)
+
+        self.pref.refresh_from_db()
+        self.assertEqual(self.pref.consecutive_proactive_without_reply, 1)
+        self.assertIsNotNone(self.pref.last_proactive_sent_at)
+
+        self.conversation.refresh_from_db()
+        self.assertEqual(self.conversation.last_message_at, ai_msg.created_at)
+
+    def test_send_is_idempotent_per_operation(self):
+        """A redelivered beat task in the same window must not pay or send twice."""
+        self._fund(self.user, 2000)
+        last = self._stale_message()
+        Message.objects.create(
+            conversation=self.conversation,
+            sender_type=Message.SenderType.AI,
+            content="already sent",
+            status=Message.StatusChoices.SENT,
+            client_operation_id=self._operation_id(self.pref, last),
+            metadata={"proactive": True},
+        )
+
+        with mock.patch("capp.classes.chat.proactive_chat_service.CortecsClient.chat_completion") as mock_llm:
+            ProactiveChatService._send_proactive_message(self.pref)
+
+        mock_llm.assert_not_called()
+        # Still just the original user message + the one proactive AI message.
+        self.assertEqual(Message.objects.filter(conversation=self.conversation).count(), 2)
+        self.assertFalse(BillingReservation.objects.filter(user=self.user).exists())
+        self.assertEqual(SparkPool.objects.get(user=self.user).sparks, 2000)
+
+    @mock.patch.object(ProactiveChatService, "_send_websocket_notification")
+    @mock.patch("capp.classes.chat.proactive_chat_service.unread_service.broadcast_unread")
+    @mock.patch("capp.classes.chat.proactive_chat_service.CortecsClient.chat_completion")
+    def test_redelivery_after_successful_send_does_not_resend(self, mock_llm, _unread, _ws):
+        """A redelivered task after a completed send must derive the same operation ID.
+
+        Regression: the operation ID was anchored to the newest message, which
+        after a send is the proactive message itself — a redelivery derived a
+        fresh ID and paid for a second uninvited message.
+        """
+        mock_llm.return_value = self._llm_ok()
+        self._fund(self.user, 2000)
+        self._stale_message()
+
+        ProactiveChatService._send_proactive_message(self.pref)
+        ProactiveChatService._send_proactive_message(self.pref)  # redelivery
+
+        self.assertEqual(mock_llm.call_count, 1)
+        self.assertEqual(
+            Message.objects.filter(conversation=self.conversation, sender_type=Message.SenderType.AI).count(), 1
+        )
+        self.assertEqual(BillingReservation.objects.filter(user=self.user).count(), 1)
+        self.assertEqual(SparkPool.objects.get(user=self.user).sparks, 2000 - MESSAGE_PAIR_COST)
+
+    @mock.patch.object(ProactiveChatService, "_send_websocket_notification")
+    @mock.patch("capp.classes.chat.proactive_chat_service.unread_service.broadcast_unread")
+    @mock.patch("capp.classes.chat.proactive_chat_service.CortecsClient.chat_completion")
+    def test_send_refunds_when_provider_returns_nothing(self, mock_llm, _unread, _ws):
+        mock_llm.return_value = {"choices": []}
+        self._fund(self.user, 2000)
+        self._stale_message()
+
+        ProactiveChatService._send_proactive_message(self.pref)
+
+        self.assertFalse(
+            Message.objects.filter(conversation=self.conversation, sender_type=Message.SenderType.AI).exists()
+        )
+        reservation = BillingReservation.objects.get(user=self.user)
+        self.assertEqual(reservation.status, BillingReservation.Status.REFUNDED)
+        # Reserve debited, refund credited: the balance ends where it started.
+        self.assertEqual(SparkPool.objects.get(user=self.user).sparks, 2000)
+
+    @mock.patch("capp.classes.chat.proactive_chat_service.CortecsClient.chat_completion")
+    def test_send_skips_on_insufficient_balance(self, mock_llm):
+        self._fund(self.user, MESSAGE_PAIR_COST - 1)
+        self._stale_message()
+
+        ProactiveChatService._send_proactive_message(self.pref)
+
+        mock_llm.assert_not_called()
+        self.assertFalse(BillingReservation.objects.filter(user=self.user).exists())
+        self.assertEqual(Message.objects.filter(conversation=self.conversation).count(), 1)
+
+    # ── Beat task eligibility filter ─────────────────────────────────────────
+
+    @mock.patch.object(ProactiveChatService, "_send_websocket_notification")
+    @mock.patch("capp.classes.chat.proactive_chat_service.unread_service.broadcast_unread")
+    @mock.patch("capp.classes.chat.proactive_chat_service.CortecsClient.chat_completion")
+    def test_beat_task_skips_ineligible_preferences(self, mock_llm, _unread, _ws):
+        mock_llm.return_value = self._llm_ok()
+        self._fund(self.user, 2000)
+        self._stale_message()  # eligible: active user + active character
+
+        banned = _make_user(username="banned", email="banned@example.com", verified=True)
+        banned.is_active = False
+        banned.account_status = CustomUser.AccountStatus.BANNED
+        banned.save(update_fields=["is_active", "account_status", "updated_at"])
+
+        deleted = _make_user(username="deleted", email="deleted@example.com", verified=True)
+        deleted.soft_delete()
+
+        inactive_char = _make_character(name="Pending", slug="pending")
+        inactive_char.is_active = False
+        inactive_char.save(update_fields=["is_active", "updated_at"])
+
+        for user, character in (
+            (banned, self.character),
+            (deleted, self.character),
+            (self.user, inactive_char),
+        ):
+            conv = Conversation.objects.create(user=user, character=character)
+            _make_message(
+                conv,
+                Message.SenderType.USER,
+                "hey",
+                created_at=timezone.now() - timedelta(hours=25),
+            )
+            ProactiveChatPreference.objects.create(user=user, character=character, enabled=True, interval_hours=24)
+            self._fund(user, 2000)
+
+        # Disabled preference on an otherwise eligible pair.
+        disabled_char = _make_character(name="Off", slug="off")
+        conv = Conversation.objects.create(user=self.user, character=disabled_char)
+        _make_message(
+            conv,
+            Message.SenderType.USER,
+            "hey",
+            created_at=timezone.now() - timedelta(hours=25),
+        )
+        ProactiveChatPreference.objects.create(
+            user=self.user, character=disabled_char, enabled=False, interval_hours=24
+        )
+
+        result = check_and_send_proactive_messages()
+
+        self.assertEqual(result["sent_count"], 1)
+        # Exactly one AI message across every conversation: the eligible pair's.
+        self.assertEqual(Message.objects.filter(sender_type=Message.SenderType.AI).count(), 1)
+        self.assertFalse(
+            Message.objects.filter(conversation__user__in=[banned, deleted], sender_type=Message.SenderType.AI).exists()
+        )
+
+    # ── reset_counter ────────────────────────────────────────────────────────
+
+    def test_reset_counter_clears_consecutive_count(self):
+        self.pref.consecutive_proactive_without_reply = 3
+        self.pref.save(update_fields=["consecutive_proactive_without_reply", "updated_at"])
+
+        ProactiveChatService.reset_counter(self.user, self.character)
+
+        self.pref.refresh_from_db()
+        self.assertEqual(self.pref.consecutive_proactive_without_reply, 0)

@@ -157,7 +157,33 @@ export const privacySw = {
     },
     {
       id: "7",
-      heading: "7. Picha: uzalishaji, picha za rejeleo, hifadhi na ufikiaji",
+      heading: "7. Utafutaji wa Wavuti (kipengele cha hiari)",
+      blocks: [
+        {
+          type: "p",
+          text: "Unapowasha kitufe cha utafutaji wa wavuti kwenye mazungumzo, tunatuma hoja ya utafutaji inayotokana na ujumbe wako kwa mtoa huduma wetu wa utafutaji, Staan, inayoendeshwa na European Perspective SAS (42 avenue de la Porte de Clichy, 75017 Paris, Ufaransa), ili kupata taarifa za kisasa kutoka kwenye wavuti. Hoja ya utafutaji pekee ndiyo inayotumwa — kamwe si jina lako, taarifa za akaunti yako, wala historia ya mazungumzo yako.",
+        },
+        {
+          type: "p",
+          text: "Staan ni mtoa huduma wa Ulaya: hoja huchakatwa kwenye seva zilizoko katika Umoja wa Ulaya (OVHcloud, Ufaransa), hazitumiki kufundisha miundo ya AI, na hazishirikiwi na wahusika wengine kwa madhumuni ya kibiashara. Pale ambapo faharasa ya utafutaji ya Staan haiwezi kujibu hoja, Staan inaweza kutumia mtoa huduma mbadala wa utafutaji; kwa mujibu wa Staan, hoja hizo hazihifadhiwi na mtoa huduma huyo mbadala. Kwa maelezo zaidi, soma sera ya faragha ya Staan: https://staan.ai/privacy-policy.",
+        },
+        {
+          type: "p",
+          text: "Maswali yanayoulizwa mara kwa mara ya Staan yanapatikana hapa: https://staan.ai/faq.",
+        },
+        {
+          type: "p",
+          text: "Msaidizi wa AI anapofungua ukurasa mahususi wa wavuti ili kujibu swali lako, seva yetu ndiyo inayopakua ukurasa huo moja kwa moja. Tovuti husika inaona tu ombi la kiufundi la seva yetu — kamwe si anwani yako ya IP, utambulisho wako, wala taarifa za akaunti yako.",
+        },
+        {
+          type: "p",
+          text: "Utafutaji wa wavuti umezimwa kwa chaguo-msingi. Unaweza kuuwasha au kuuzima wakati wowote katika mipangilio ya kila mazungumzo. Msingi wa kisheria wa uchakataji huu: utekelezaji wa mkataba wetu nawe (Kifungu cha 6(1)(b) cha GDPR) — kipengele hiki hufanya kazi tu pale unapokiwasha mwenyewe.",
+        },
+      ],
+    },
+    {
+      id: "8",
+      heading: "8. Picha: uzalishaji, picha za rejeleo, hifadhi na ufikiaji",
       blocks: [
         {
           type: "p",
@@ -182,8 +208,8 @@ export const privacySw = {
       ],
     },
     {
-      id: "8",
-      heading: "8. Usimbaji fiche — na kile ambacho hakimaanishi",
+      id: "9",
+      heading: "9. Usimbaji fiche — na kile ambacho hakimaanishi",
       blocks: [
         {
           type: "p",
@@ -211,8 +237,8 @@ export const privacySw = {
       ],
     },
     {
-      id: "9",
-      heading: "9. Ni nani anaweza kuona maudhui yako",
+      id: "10",
+      heading: "10. Ni nani anaweza kuona maudhui yako",
       blocks: [
         {
           type: "ul",
@@ -227,8 +253,8 @@ export const privacySw = {
       ],
     },
     {
-      id: "10",
-      heading: "10. Watoa huduma na uhamisho wa data kimataifa",
+      id: "11",
+      heading: "11. Watoa huduma na uhamisho wa data kimataifa",
       blocks: [
         {
           type: "p",
@@ -245,8 +271,8 @@ export const privacySw = {
       ],
     },
     {
-      id: "11",
-      heading: "11. Malipo",
+      id: "12",
+      heading: "12. Malipo",
       blocks: [
         {
           type: "p",
@@ -263,8 +289,8 @@ export const privacySw = {
       ],
     },
     {
-      id: "12",
-      heading: "12. Kuki, hifadhi ya kifaa na uchanganuzi",
+      id: "13",
+      heading: "13. Kuki, hifadhi ya kifaa na uchanganuzi",
       blocks: [
         {
           type: "p",
@@ -289,8 +315,8 @@ export const privacySw = {
       ],
     },
     {
-      id: "13",
-      heading: "13. Muda tunaobakiza taarifa",
+      id: "14",
+      heading: "14. Muda tunaobakiza taarifa",
       blocks: [
         {
           type: "ul",
@@ -309,8 +335,8 @@ export const privacySw = {
       ],
     },
     {
-      id: "14",
-      heading: "14. Kufuta akaunti yako — na mipaka ya ufutaji",
+      id: "15",
+      heading: "15. Kufuta akaunti yako — na mipaka ya ufutaji",
       blocks: [
         {
           type: "p",
@@ -337,8 +363,8 @@ export const privacySw = {
       ],
     },
     {
-      id: "15",
-      heading: "15. Haki zako",
+      id: "16",
+      heading: "16. Haki zako",
       blocks: [
         {
           type: "p",
@@ -363,8 +389,8 @@ export const privacySw = {
       ],
     },
     {
-      id: "16",
-      heading: "16. Usalama",
+      id: "17",
+      heading: "17. Usalama",
       blocks: [
         {
           type: "ul",
@@ -384,8 +410,8 @@ export const privacySw = {
       ],
     },
     {
-      id: "17",
-      heading: "17. Ikiwa kuna uvunjaji wa data",
+      id: "18",
+      heading: "18. Ikiwa kuna uvunjaji wa data",
       blocks: [
         {
           type: "p",
@@ -394,8 +420,8 @@ export const privacySw = {
       ],
     },
     {
-      id: "18",
-      heading: "18. Watoto",
+      id: "19",
+      heading: "19. Watoto",
       blocks: [
         {
           type: "p",
@@ -404,8 +430,8 @@ export const privacySw = {
       ],
     },
     {
-      id: "19",
-      heading: "19. Mabadiliko kwenye sera hii",
+      id: "20",
+      heading: "20. Mabadiliko kwenye sera hii",
       blocks: [
         {
           type: "p",
@@ -414,8 +440,8 @@ export const privacySw = {
       ],
     },
     {
-      id: "20",
-      heading: "20. Mawasiliano na malalamiko",
+      id: "21",
+      heading: "21. Mawasiliano na malalamiko",
       blocks: [
         {
           type: "p",

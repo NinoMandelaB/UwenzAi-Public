@@ -5,6 +5,7 @@ import requests
 from typing import Dict, Any, Optional
 
 from django.conf import settings
+from capp.classes.ai import reasoning
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,7 @@ class MistralClient:
         max_tokens: int = 2048,
         temperature: float = 0.7,
         model: Optional[str] = None,
+        reasoning_effort: Optional[str] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -31,6 +33,13 @@ class MistralClient:
             max_tokens: Maximum tokens to generate.
             temperature: Sampling temperature.
             model: Override default model.
+            reasoning_effort: the conversation's Fast/Deep toggle value
+                ("fast"/"deep"). Mapped to Mistral's `reasoning_effort`
+                request parameter via
+                capp.classes.ai.reasoning.mistral_reasoning_kwargs -- a
+                no-op unless the configured model is one of the exact
+                models the current Mistral docs confirm support it for.
+                See that module for cited docs.
             **kwargs: Additional parameters passed to the API.
 
         Returns:
@@ -66,6 +75,7 @@ class MistralClient:
         }
         # Include any extra API parameters passed as kwargs
         payload.update(kwargs)
+        payload.update(reasoning.mistral_reasoning_kwargs(model, reasoning_effort or "fast"))
 
         try:
             logger.debug(

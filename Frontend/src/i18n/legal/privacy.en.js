@@ -157,7 +157,33 @@ export const privacyEn = {
     },
     {
       id: "7",
-      heading: "7. Images: generation, reference images, storage and access",
+      heading: "7. Web Search (optional feature)",
+      blocks: [
+        {
+          type: "p",
+          text: "When you enable the web search toggle in a conversation, we send a search query derived from your message to our search provider, Staan, operated by European Perspective SAS (42 avenue de la Porte de Clichy, 75017 Paris, France), in order to retrieve up-to-date information from the web. Only the search query is transmitted — never your name, account details, or conversation history.",
+        },
+        {
+          type: "p",
+          text: "Staan is a European provider: queries are processed on servers located in the European Union (OVHcloud, France), are not used to train AI models, and are not shared with third parties for commercial purposes. Where Staan's own search index cannot answer a query, Staan may use a fallback search provider; according to Staan, such queries are not retained by the fallback provider. For details, see Staan's privacy policy at https://staan.ai/privacy-policy.",
+        },
+        {
+          type: "p",
+          text: "Staan's FAQ is available at https://staan.ai/faq.",
+        },
+        {
+          type: "p",
+          text: "When the AI assistant opens a specific web page to answer your question, our server fetches that page directly. The website you are reading about sees only our server's technical request — never your IP address, identity, or account information.",
+        },
+        {
+          type: "p",
+          text: "Web search is switched off by default. You can enable or disable it at any time in each conversation's settings. Legal basis for this processing: performance of our contract with you (Art. 6(1)(b) GDPR) — the feature runs only when you actively enable it.",
+        },
+      ],
+    },
+    {
+      id: "8",
+      heading: "8. Images: generation, reference images, storage and access",
       blocks: [
         {
           type: "p",
@@ -182,8 +208,8 @@ export const privacyEn = {
       ],
     },
     {
-      id: "8",
-      heading: "8. Encryption — and what it does not mean",
+      id: "9",
+      heading: "9. Encryption — and what it does not mean",
       blocks: [
         {
           type: "p",
@@ -211,8 +237,8 @@ export const privacyEn = {
       ],
     },
     {
-      id: "9",
-      heading: "9. Who can see your content",
+      id: "10",
+      heading: "10. Who can see your content",
       blocks: [
         {
           type: "ul",
@@ -227,8 +253,8 @@ export const privacyEn = {
       ],
     },
     {
-      id: "10",
-      heading: "10. Service providers and international transfers",
+      id: "11",
+      heading: "11. Service providers and international transfers",
       blocks: [
         {
           type: "p",
@@ -245,8 +271,8 @@ export const privacyEn = {
       ],
     },
     {
-      id: "11",
-      heading: "11. Payments",
+      id: "12",
+      heading: "12. Payments",
       blocks: [
         {
           type: "p",
@@ -263,8 +289,8 @@ export const privacyEn = {
       ],
     },
     {
-      id: "12",
-      heading: "12. Cookies, local storage and analytics",
+      id: "13",
+      heading: "13. Cookies, local storage and analytics",
       blocks: [
         {
           type: "p",
@@ -289,8 +315,8 @@ export const privacyEn = {
       ],
     },
     {
-      id: "13",
-      heading: "13. How long we keep information",
+      id: "14",
+      heading: "14. How long we keep information",
       blocks: [
         {
           type: "ul",
@@ -309,8 +335,8 @@ export const privacyEn = {
       ],
     },
     {
-      id: "14",
-      heading: "14. Deleting your account — and the limits of deletion",
+      id: "15",
+      heading: "15. Deleting your account — and the limits of deletion",
       blocks: [
         {
           type: "p",
@@ -337,8 +363,8 @@ export const privacyEn = {
       ],
     },
     {
-      id: "15",
-      heading: "15. Your rights",
+      id: "16",
+      heading: "16. Your rights",
       blocks: [
         {
           type: "p",
@@ -363,8 +389,8 @@ export const privacyEn = {
       ],
     },
     {
-      id: "16",
-      heading: "16. Security",
+      id: "17",
+      heading: "17. Security",
       blocks: [
         {
           type: "ul",
@@ -384,8 +410,8 @@ export const privacyEn = {
       ],
     },
     {
-      id: "17",
-      heading: "17. If there is a data breach",
+      id: "18",
+      heading: "18. If there is a data breach",
       blocks: [
         {
           type: "p",
@@ -394,8 +420,8 @@ export const privacyEn = {
       ],
     },
     {
-      id: "18",
-      heading: "18. Children",
+      id: "19",
+      heading: "19. Children",
       blocks: [
         {
           type: "p",
@@ -404,8 +430,8 @@ export const privacyEn = {
       ],
     },
     {
-      id: "19",
-      heading: "19. Changes to this policy",
+      id: "20",
+      heading: "20. Changes to this policy",
       blocks: [
         {
           type: "p",
@@ -414,8 +440,8 @@ export const privacyEn = {
       ],
     },
     {
-      id: "20",
-      heading: "20. Contact and complaints",
+      id: "21",
+      heading: "21. Contact and complaints",
       blocks: [
         {
           type: "p",

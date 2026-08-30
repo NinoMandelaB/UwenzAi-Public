@@ -1,6 +1,7 @@
 # capp/classes/chat/proactive_chat_service.py
 import logging
 import uuid
+from celery.exceptions import SoftTimeLimitExceeded
 from django.utils import timezone
 from django.db import transaction
 from django.db.models import Q
@@ -16,6 +17,7 @@ from capp.models import (
 )
 from capp.classes.ai.cortecs_client import CortecsClient
 from capp.classes.chat import unread_service
+from capp.classes.push.push_service import PushService
 from capp.classes.billing.paid_features import (
     InsufficientBalance,
     PaidFeature,
@@ -94,7 +96,15 @@ class ProactiveChatService:
         Returns the number of messages sent.
         """
         now = timezone.now()
-        preferences = ProactiveChatPreference.objects.filter(enabled=True).select_related("user", "character")
+        # Only live accounts and live characters: banned/suspended users have
+        # is_active=False, soft-deleted users have is_deleted=True, and
+        # characters are inactive while pending review, rejected, or archived.
+        preferences = ProactiveChatPreference.objects.filter(
+            enabled=True,
+            user__is_active=True,
+            user__is_deleted=False,
+            character__is_active=True,
+        ).select_related("user", "character")
         sent_count = 0
 
         for pref in preferences:
@@ -102,6 +112,8 @@ class ProactiveChatService:
                 if cls._should_send_proactive(pref, now):
                     cls._send_proactive_message(pref)
                     sent_count += 1
+            except SoftTimeLimitExceeded:
+                raise
             except Exception as e:
                 logger.exception(
                     "Error checking proactive for pref %s (user=%s, char=%s): %s",
@@ -198,8 +210,16 @@ class ProactiveChatService:
 
             # A proactive send is identified by the message it follows, so a
             # redelivered beat task in the same window reuses the reservation
-            # instead of paying for a second uninvited message.
-            last_msg = Message.objects.filter(conversation=conversation).order_by("-created_at").first()
+            # instead of paying for a second uninvited message. Anchor to the
+            # last organic (non-proactive) message: after a send, the newest
+            # message is our own proactive one, which would otherwise derive a
+            # fresh operation ID and defeat the guard below.
+            last_msg = (
+                Message.objects.filter(conversation=conversation)
+                .exclude(sender_type=Message.SenderType.AI, metadata__proactive=True)
+                .order_by("-created_at")
+                .first()
+            )
             operation_id = str(uuid.uuid5(PROACTIVE_NAMESPACE, f"{pref.pk}:{last_msg.pk if last_msg else 'none'}"))
 
             existing = Message.objects.filter(conversation=conversation, client_operation_id=operation_id).first()
@@ -287,6 +307,16 @@ class ProactiveChatService:
             except Exception:
                 logger.exception("Proactive broadcast failed for message %s", ai_message.message_id)
 
+            # Push reaches users whose app is closed; the WebSocket above only
+            # reaches open sessions. Same rule as the broadcast: a failed push
+            # must never undo a persisted message.
+            try:
+                PushService.send_new_message_push(user, character, conversation)
+            except SoftTimeLimitExceeded:
+                raise
+            except Exception:
+                logger.exception("Proactive push failed for message %s", ai_message.message_id)
+
             unread_service.broadcast_unread(conversation)
 
             logger.info(
@@ -297,6 +327,8 @@ class ProactiveChatService:
                 cls.MAX_PROACTIVE_WITHOUT_REPLY,
             )
 
+        except SoftTimeLimitExceeded:
+            raise
         except Exception:
             logger.exception("Failed to send proactive message for pref %s", pref.id)
             if reservation is not None:

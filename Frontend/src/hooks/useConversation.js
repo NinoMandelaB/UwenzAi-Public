@@ -11,6 +11,8 @@ import { useMarkConversationRead } from "./useMarkConversationRead";
 import {
   sendMessage as sendMessageApi,
   generateChatImage as generateChatImageApi,
+  acceptPhotoOffer as acceptPhotoOfferApi,
+  declinePhotoOffer as declinePhotoOfferApi,
 } from "../services/conversationService";
 
 function isCharacterUnavailableError(error) {
@@ -36,6 +38,11 @@ export function useConversation(
   const imageOperationRef = useRef(null);
   const [isCharacterActive, setIsCharacterActive] = useState(true);
 
+  // A pending character-initiated photo offer, surfaced as a popup. Arrives
+  // over the chat WebSocket as a message with type "photo_offer".
+  const [photoOffer, setPhotoOffer] = useState(null);
+  const [isRespondingToOffer, setIsRespondingToOffer] = useState(false);
+
   const {
     messages,
     setMessages,
@@ -58,6 +65,24 @@ export function useConversation(
         : character.is_active !== false,
     );
   }, [character]);
+
+  // ---------- Re-open a pending photo offer after a reload ----------
+  // Live offers arrive over the socket (below); a page refresh only sees them
+  // in history, so surface the newest still-pending one as the popup again.
+  useEffect(() => {
+    if (loadingHistory || historyError) return;
+    const pending = [...messages]
+      .reverse()
+      .find((m) => m.type === "photo_offer" && m.offer?.status === "pending");
+    if (pending && !photoOffer) {
+      setPhotoOffer({
+        messageId: pending.message_id,
+        prompt: pending.offer.prompt || "",
+        cost: pending.offer.cost ?? null,
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadingHistory, historyError, messages]);
 
   useEffect(() => {
     if (!historyError) return;
@@ -84,6 +109,18 @@ export function useConversation(
     onOpen: () => setConnecting(false),
     onError: () => setError("Live connection error"),
     onMessage: (msg) => {
+      // Photo offers are not transcript bubbles: they open the accept/decline
+      // popup instead of being appended to the message list.
+      if (msg.type === "photo_offer" && msg.offer?.status === "pending") {
+        setPhotoOffer({
+          messageId: msg.message_id,
+          prompt: msg.offer.prompt || "",
+          cost: msg.offer.cost ?? null,
+        });
+        markReadOnLiveMessage();
+        return;
+      }
+
       setMessages((prev) => appendLiveMessage(prev, msg));
 
       // Instantly deactivate the conversation when the farewell message arrives
@@ -175,6 +212,55 @@ export function useConversation(
     [conversationId, isAuthenticated],
   );
 
+  // ---------- Character-initiated photo offers ----------
+  const acceptPhotoOffer = useCallback(async () => {
+    if (
+      !photoOffer ||
+      !conversationId ||
+      !isAuthenticated ||
+      isRespondingToOffer
+    )
+      return { ok: false };
+
+    setIsRespondingToOffer(true);
+    setError(null);
+    try {
+      await acceptPhotoOfferApi(conversationId, photoOffer.messageId);
+      setPhotoOffer(null);
+      window.dispatchEvent(new Event("token-balance-update"));
+      return { ok: true };
+    } catch (err) {
+      console.error("useConversation acceptPhotoOffer error:", err);
+      // Keep the popup open on failure so the user can retry or decline; only
+      // an already-resolved offer is dropped.
+      const code = err?.code || err?.payload?.data;
+      if (typeof code === "string" && code.startsWith("photo_offer_already_")) {
+        setPhotoOffer(null);
+      }
+      setError(err?.message || "Failed to accept photo");
+      return { ok: false, code, message: err?.message };
+    } finally {
+      setIsRespondingToOffer(false);
+    }
+  }, [photoOffer, conversationId, isAuthenticated, isRespondingToOffer]);
+
+  const declinePhotoOffer = useCallback(async () => {
+    if (!photoOffer || !conversationId || isRespondingToOffer) return;
+
+    setIsRespondingToOffer(true);
+    const offerId = photoOffer.messageId;
+    setPhotoOffer(null);
+    try {
+      await declinePhotoOfferApi(conversationId, offerId);
+    } catch (err) {
+      // Declining is free and idempotent server-side; a failed call only means
+      // the transcript card stays "pending", which is harmless.
+      console.error("useConversation declinePhotoOffer error:", err);
+    } finally {
+      setIsRespondingToOffer(false);
+    }
+  }, [photoOffer, conversationId, isRespondingToOffer]);
+
   // ---------- Message management helpers ----------
   const clearMessages = useCallback(() => {
     resetHistory();
@@ -192,6 +278,10 @@ export function useConversation(
     error,
     sendMessage: sendUserMessage,
     generateImage,
+    photoOffer,
+    acceptPhotoOffer,
+    declinePhotoOffer,
+    isRespondingToOffer,
     isSending,
     clearMessages,
     deleteMessage,

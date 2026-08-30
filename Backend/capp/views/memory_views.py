@@ -33,7 +33,10 @@ def api_clear_memory_for_character(request, character_id):
             "data": {
                 "message": "Memory cleared successfully.",
                 "facts_deleted": result["facts_deleted"],
+                "relations_deleted": result.get("relations_deleted", 0),
                 "summaries_deleted": result["summaries_deleted"],
+                "relationship_reset": result.get("relationship_reset", 0),
+                "entities_deleted": result.get("entities_deleted", 0),
             },
         },
         status=200,

@@ -8,7 +8,7 @@ export const subprocessorsEn = {
   intro: [
     {
       type: "p",
-      text: "UwenzAi Limited uses the third-party providers below to operate the Service. They process personal data on our instructions and under contract, only to deliver the function described. This page supports section 10 of our [Privacy Policy](/privacy).",
+      text: "UwenzAi Limited uses the third-party providers below to operate the Service. They process personal data on our instructions and under contract, only to deliver the function described. This page supports section 11 of our [Privacy Policy](/privacy).",
     },
     {
       type: "p",
@@ -88,7 +88,24 @@ export const subprocessorsEn = {
     },
     {
       id: "4",
-      heading: "4. Payments",
+      heading: "4. Web search",
+      blocks: [
+        {
+          type: "table",
+          head: ["Provider", "Purpose", "Data involved"],
+          rows: [
+            [
+              'European Perspective SAS ("Staan")',
+              "Web search retrieval (only when the user enables web search in a conversation). Location: France / EU (OVHcloud).",
+              "Search queries derived from user messages; no account data, no conversation history. May use a fallback search provider that does not retain queries. Privacy policy: https://staan.ai/privacy-policy",
+            ],
+          ],
+        },
+      ],
+    },
+    {
+      id: "5",
+      heading: "5. Payments",
       blocks: [
         {
           type: "table",
@@ -104,8 +121,8 @@ export const subprocessorsEn = {
       ],
     },
     {
-      id: "5",
-      heading: "5. Sign-in, email and abuse prevention",
+      id: "6",
+      heading: "6. Sign-in, email and abuse prevention",
       blocks: [
         {
           type: "table",
@@ -126,8 +143,8 @@ export const subprocessorsEn = {
       ],
     },
     {
-      id: "6",
-      heading: "6. Error monitoring (optional)",
+      id: "7",
+      heading: "7. Error monitoring (optional)",
       blocks: [
         {
           type: "table",
@@ -143,12 +160,12 @@ export const subprocessorsEn = {
       ],
     },
     {
-      id: "7",
-      heading: "7. Changes to this list",
+      id: "8",
+      heading: "8. Changes to this list",
       blocks: [
         {
           type: "p",
-          text: "We may add or replace a provider as the Service develops. When we do, we will update this page and change the “Last updated” date. If a change materially affects how your personal data is processed, we will give notice as described in section 19 of the [Privacy Policy](/privacy).",
+          text: "We may add or replace a provider as the Service develops. When we do, we will update this page and change the “Last updated” date. If a change materially affects how your personal data is processed, we will give notice as described in section 20 of the [Privacy Policy](/privacy).",
         },
         {
           type: "p",

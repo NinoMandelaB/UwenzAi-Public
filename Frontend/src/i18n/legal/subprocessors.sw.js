@@ -8,7 +8,7 @@ export const subprocessorsSw = {
   intro: [
     {
       type: "p",
-      text: "UwenzAi Limited hutumia watoa huduma wa nje walioorodheshwa hapa chini kuendesha Huduma. Wanachakata data binafsi kwa maagizo yetu na chini ya mkataba, kwa lengo la kutoa kazi iliyoelezwa pekee. Ukurasa huu unaunga mkono kifungu cha 10 cha [Sera yetu ya Faragha](/privacy).",
+      text: "UwenzAi Limited hutumia watoa huduma wa nje walioorodheshwa hapa chini kuendesha Huduma. Wanachakata data binafsi kwa maagizo yetu na chini ya mkataba, kwa lengo la kutoa kazi iliyoelezwa pekee. Ukurasa huu unaunga mkono kifungu cha 11 cha [Sera yetu ya Faragha](/privacy).",
     },
     {
       type: "p",
@@ -88,7 +88,24 @@ export const subprocessorsSw = {
     },
     {
       id: "4",
-      heading: "4. Malipo",
+      heading: "4. Utafutaji wa wavuti",
+      blocks: [
+        {
+          type: "table",
+          head: ["Mtoa huduma", "Lengo", "Data inayohusika"],
+          rows: [
+            [
+              'European Perspective SAS ("Staan")',
+              "Upataji wa matokeo ya utafutaji wa wavuti (tu pale mtumiaji anapowasha utafutaji wa wavuti kwenye mazungumzo). Mahali: Ufaransa / Umoja wa Ulaya (OVHcloud).",
+              "Hoja za utafutaji zinazotokana na jumbe za mtumiaji; hakuna data ya akaunti, hakuna historia ya mazungumzo. Inaweza kutumia mtoa huduma mbadala wa utafutaji asiyehifadhi hoja. Sera ya faragha: https://staan.ai/privacy-policy",
+            ],
+          ],
+        },
+      ],
+    },
+    {
+      id: "5",
+      heading: "5. Malipo",
       blocks: [
         {
           type: "table",
@@ -104,8 +121,8 @@ export const subprocessorsSw = {
       ],
     },
     {
-      id: "5",
-      heading: "5. Kuingia, barua pepe na kuzuia matumizi mabaya",
+      id: "6",
+      heading: "6. Kuingia, barua pepe na kuzuia matumizi mabaya",
       blocks: [
         {
           type: "table",
@@ -126,8 +143,8 @@ export const subprocessorsSw = {
       ],
     },
     {
-      id: "6",
-      heading: "6. Ufuatiliaji wa hitilafu (hiari)",
+      id: "7",
+      heading: "7. Ufuatiliaji wa hitilafu (hiari)",
       blocks: [
         {
           type: "table",
@@ -143,12 +160,12 @@ export const subprocessorsSw = {
       ],
     },
     {
-      id: "7",
-      heading: "7. Mabadiliko kwenye orodha hii",
+      id: "8",
+      heading: "8. Mabadiliko kwenye orodha hii",
       blocks: [
         {
           type: "p",
-          text: "Tunaweza kuongeza au kubadilisha mtoa huduma kadri Huduma inavyoendelea. Tutakapofanya hivyo, tutasasisha ukurasa huu na kubadilisha tarehe ya “Ilisasishwa mwisho”. Ikiwa mabadiliko yanaathiri kwa kiasi kikubwa jinsi data yako binafsi inachakatwa, tutatoa taarifa kama ilivyoelezwa katika kifungu cha 19 cha [Sera ya Faragha](/privacy).",
+          text: "Tunaweza kuongeza au kubadilisha mtoa huduma kadri Huduma inavyoendelea. Tutakapofanya hivyo, tutasasisha ukurasa huu na kubadilisha tarehe ya “Ilisasishwa mwisho”. Ikiwa mabadiliko yanaathiri kwa kiasi kikubwa jinsi data yako binafsi inachakatwa, tutatoa taarifa kama ilivyoelezwa katika kifungu cha 20 cha [Sera ya Faragha](/privacy).",
         },
         {
           type: "p",

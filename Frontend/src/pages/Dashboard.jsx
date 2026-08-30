@@ -6,6 +6,7 @@ import PrimaryButton from "../components/PrimaryButton";
 import SectionTitle from "../components/SectionTitle";
 import StatCard from "../components/StatCard";
 import StatusBadge from "../components/StatusBadge";
+import GuestModeUpsellText from "../components/GuestModeUpsellText";
 import { useLanguage } from "../context/LanguageContext";
 import { useAuth } from "../context/AuthContext";
 import { listConversations } from "../services/conversationService";
@@ -208,9 +209,10 @@ export default function Dashboard() {
                 </h2>
                 <StatusBadge status={t("common.guest")} />
               </div>
-              <p className="mt-2 text-sm leading-6 theme-text-muted">
-                {t("dashboard.guestModeText")}
-              </p>
+              <GuestModeUpsellText
+                text={t("dashboard.guestModeText")}
+                className="mt-2 text-sm leading-6 theme-text-muted"
+              />
             </div>
           </div>
           <div className="mt-4 grid grid-cols-2 gap-3">

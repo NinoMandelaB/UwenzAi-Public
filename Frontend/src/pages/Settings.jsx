@@ -5,6 +5,7 @@ import { useLocation, useNavigate, Link } from "react-router-dom";
 import {
   Bell,
   ChevronRight,
+  Download,
   Sparkles as SparkPool,
   Globe,
   Info,
@@ -29,12 +30,13 @@ import SupportSection from "../components/SupportSection";
 import { useTheme } from "../context/ThemeContext";
 import { useLanguage } from "../context/LanguageContext";
 import { useAuth } from "../context/AuthContext";
+import { usePWAInstall } from "../hooks/usePWAInstall";
+import { usePushNotifications } from "../hooks/usePushNotifications";
 
 import { deleteAccount } from "../services/authService";
 import { getAuthMessage } from "../utils/authMessageMapper";
 import { STORAGE_KEYS } from "../config/constants";
 import { getPricing, getSparkPoolBalance } from "../services/billingService";
-import { clearAccessToken } from "../services/apiClient";
 import BYOKSection from "../components/BYOKSection";
 
 function ToggleItem({ title, subtitle, checked, onChange, icon: Icon, t }) {
@@ -280,7 +282,9 @@ export default function Settings() {
 
   const { isDark, toggleTheme } = useTheme();
   const { t, language } = useLanguage();
-  const { user, isAuthenticated, isAdmin } = useAuth();
+  const { user, isAuthenticated, isAdmin, clearAuthState } = useAuth();
+  const { canInstall, promptInstall } = usePWAInstall();
+  const push = usePushNotifications();
 
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [isDeletingAccount, setIsDeletingAccount] = useState(false);
@@ -359,7 +363,7 @@ export default function Settings() {
 
       await deleteAccount();
 
-      clearAccessToken();
+      clearAuthState();
       localStorage.removeItem(STORAGE_KEYS.ACCESS_TOKEN);
 
       setIsDeleteDialogOpen(false);
@@ -584,8 +588,42 @@ export default function Settings() {
               icon={MoonStar}
               t={t}
             />
+
+            {/* Only rendered once the browser has confirmed installability
+                (fired beforeinstallprompt); hidden again after install. */}
+            {canInstall && (
+              <SettingsItem
+                title={t("settings.installApp")}
+                subtitle={t("settings.installAppSubtitle")}
+                icon={Download}
+                onClick={promptInstall}
+              />
+            )}
           </div>
         </section>
+
+        {/* Push needs sign-in (subscriptions are per-account) and browser
+            support; without either, the section stays hidden. */}
+        {isAuthenticated && push.supported && (
+          <section className="space-y-3">
+            <SectionTitle>{t("settings.notifications")}</SectionTitle>
+
+            <div className="space-y-3">
+              <ToggleItem
+                title={t("settings.pushNotifications")}
+                subtitle={
+                  push.permission === "denied"
+                    ? t("settings.pushDeniedHint")
+                    : t("settings.pushNotificationsSubtitle")
+                }
+                checked={push.enabled}
+                onChange={() => push.setPushEnabled(!push.enabled)}
+                icon={Bell}
+                t={t}
+              />
+            </div>
+          </section>
+        )}
 
         <section className="space-y-3">
           <SectionTitle>{t("settings.privacyAndSafety")}</SectionTitle>

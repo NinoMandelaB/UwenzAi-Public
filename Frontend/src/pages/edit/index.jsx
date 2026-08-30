@@ -368,6 +368,7 @@ export default function CharacterEdit() {
           previewUrl={previewUrl}
           avatarFile={form.avatar}
           visualStyle={form.visual_style}
+          isAdmin={isAdmin}
           onAvatarChange={(file) => updateField("avatar", file)}
           onPreviewChange={setPreviewUrl}
           onError={setSubmitError}
@@ -397,6 +398,7 @@ export default function CharacterEdit() {
           characterId={character.character_id}
           images={galleryImages}
           visualStyle={form.visual_style}
+          isAdmin={isAdmin}
           onRefresh={async () => {
             const res = await listGalleryImages(character.character_id);
             setGalleryImages(res?.data?.images || []);

@@ -7,10 +7,13 @@ from capp.views.conversation_views import (
     api_start_conversation,
     api_send_message,
     api_generate_chat_image,
+    api_accept_photo_offer,
+    api_decline_photo_offer,
     api_list_conversations,
     api_list_messages,
     api_mark_conversation_read,
     api_unread_summary,
+    api_conversation_settings,
 )
 
 urlpatterns = [
@@ -30,6 +33,17 @@ urlpatterns = [
         api_generate_chat_image,
         name="generate-chat-image",
     ),
+    # Accept or decline a photo the character offered to send (POST)
+    path(
+        "<uuid:conversation_id>/photo-offers/<uuid:message_id>/accept/",
+        api_accept_photo_offer,
+        name="accept-photo-offer",
+    ),
+    path(
+        "<uuid:conversation_id>/photo-offers/<uuid:message_id>/decline/",
+        api_decline_photo_offer,
+        name="decline-photo-offer",
+    ),
     # Get message history for a conversation (GET)
     path("<uuid:conversation_id>/messages-list/", api_list_messages, name="list-messages"),
     path(
@@ -41,5 +55,11 @@ urlpatterns = [
         "<uuid:conversation_id>/messages/<uuid:message_id>/delete/",
         api_delete_message,
         name="delete-message",
+    ),
+    # Get/update per-chat toggles: web search + reasoning effort (GET, PATCH)
+    path(
+        "<uuid:conversation_id>/settings/",
+        api_conversation_settings,
+        name="conversation-settings",
     ),
 ]

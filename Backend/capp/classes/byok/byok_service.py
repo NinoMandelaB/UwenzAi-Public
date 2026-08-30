@@ -199,7 +199,46 @@ class BYOKService:
 
             return {"status": "fail", "data": reason}
 
-    # ── Execute BYOK chat completion ──────────────────────────────────────────
+    # ── Execute BYOK chat completion ────────────────────────────────────────
+
+    # Substrings looked for (case-insensitively) in a 400 error message to
+    # recognize "this endpoint doesn't know about the `reasoning_effort`
+    # parameter" style rejections. Kept narrow and specific on purpose: we
+    # must NOT retry-without-reasoning on unrelated 400s (bad model name,
+    # bad messages, content policy, etc.), only on this exact class of
+    # rejection, so real errors still surface to the user immediately.
+    _UNKNOWN_PARAM_MARKERS = (
+        "unknown parameter",
+        "unrecognized parameter",
+        "unexpected keyword argument",
+        "unsupported parameter",
+        "extra fields not permitted",
+        "additional properties",
+        "reasoning_effort",
+    )
+
+    @classmethod
+    def _is_unknown_reasoning_param_error(cls, exc: Exception) -> bool:
+        """
+        True only for a 400-class error whose message indicates the
+        endpoint rejected an unrecognized/unsupported request parameter
+        (almost certainly `reasoning_effort`, the only extra param we ever
+        add for BYOK). Any other error (auth, rate limit, 5xx, bad model,
+        content filtering, network) returns False so it propagates as-is.
+        """
+        import openai
+
+        status_code = getattr(exc, "status_code", None)
+        if isinstance(exc, openai.BadRequestError):
+            status_code = status_code or 400
+        if status_code != 400:
+            return False
+
+        try:
+            message = str(exc).lower()
+        except Exception:
+            return False
+        return any(marker in message for marker in cls._UNKNOWN_PARAM_MARKERS)
 
     @classmethod
     def chat_completion(
@@ -208,26 +247,81 @@ class BYOKService:
         messages: list,
         max_tokens: int = 1000,
         temperature: float = 0.7,
+        reasoning_effort: str = None,
+        tools: list = None,
     ) -> Dict[str, Any]:
         """
-        Call the user's own API endpoint. No fallback — if it fails, raise.
-        The caller (tasks.py) must handle the exception and surface it to the user.
+        Call the user's own API endpoint.
+
+        ``reasoning_effort``: the conversation's Fast/Deep toggle value
+        ("fast"/"deep"). Mapped to a BEST-EFFORT OpenAI-compatible kwarg via
+        capp.classes.ai.reasoning.byok_reasoning_kwargs -- unlike the
+        Cortecs/Mistral mappings this is NOT verified against the specific
+        endpoint's docs (arbitrary third-party endpoint). If the endpoint
+        rejects the request because it doesn't recognize the reasoning
+        parameter (400, "unknown/unrecognized parameter"-style message), we
+        catch exactly that case, log a warning, and retry once without the
+        reasoning kwargs so the chat never breaks. Any other error
+        (including other 400s) is not retried and propagates to the caller.
+
+        ``tools``: optional OpenAI-compatible tool/function specs (e.g. the
+        web_search / open_url tool specs). Passed through unchanged; search
+        execution is provider-independent so no BYOK-specific handling is
+        needed here beyond forwarding the parameter.
+
+        No fallback to another provider -- if the (possibly retried) call
+        still fails, raise. The caller (tasks.py) must handle the exception
+        and surface it to the user.
         """
+        from capp.classes.ai import reasoning as reasoning_module
+
         api_key = byok_config.get_decrypted_api_key()
         client = OpenAI(api_key=api_key, base_url=byok_config.api_url)
-        response = client.chat.completions.create(
-            model=byok_config.model_name,
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
+
+        reasoning_kwargs = reasoning_module.byok_reasoning_kwargs((reasoning_effort or "fast").lower())
+
+        request_kwargs = {}
+        if tools:
+            request_kwargs["tools"] = tools
+
+        try:
+            response = client.chat.completions.create(
+                model=byok_config.model_name,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                **reasoning_kwargs,
+                **request_kwargs,
+            )
+        except Exception as exc:
+            if reasoning_kwargs and cls._is_unknown_reasoning_param_error(exc):
+                logger.warning(
+                    "BYOK endpoint rejected reasoning param (url=%s model=%s): %s -- " "retrying once without it",
+                    byok_config.api_url,
+                    byok_config.model_name,
+                    exc,
+                )
+                response = client.chat.completions.create(
+                    model=byok_config.model_name,
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    **request_kwargs,
+                )
+            else:
+                raise
+
+        message = response.choices[0].message
+        message_dict = {"content": message.content}
+        tool_calls = getattr(message, "tool_calls", None)
+        if tool_calls:
+            message_dict["tool_calls"] = tool_calls
+
         return {
             "id": response.id,
             "choices": [
                 {
-                    "message": {
-                        "content": response.choices[0].message.content,
-                    }
+                    "message": message_dict,
                 }
             ],
             "usage": {

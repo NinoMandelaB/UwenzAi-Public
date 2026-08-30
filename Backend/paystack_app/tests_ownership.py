@@ -39,12 +39,44 @@ def auth_header(user):
     return {"HTTP_AUTHORIZATION": f"Bearer {RefreshToken.for_user(user).access_token}"}
 
 
+# DRF throttle counters live in the default cache and their key includes only
+# the client IP, which in tests is always 127.0.0.1. Django's parallel test
+# runner reuses a single LocMemCache per worker process across every test
+# class, so a rapid burst of requests from one earlier test can leave the
+# anonymous throttle already spent before a later class's very first request
+# arrives. Two defences applied together on each ownership TestCase:
+#
+#   1. ThrottleFreeMixin clears the cache in setUp/tearDown so stray counters
+#      from other tests in the same worker cannot bleed in.
+#   2. TEST_THROTTLES_OVERRIDE lifts the anonymous rate to an unreachable
+#      ceiling — belt-and-braces against a stale counter beating the clear()
+#      to the throttle instance under concurrent subsuite scheduling.
+TEST_THROTTLES_OVERRIDE = {
+    "REST_FRAMEWORK": {
+        **settings.REST_FRAMEWORK,
+        "DEFAULT_THROTTLE_RATES": {
+            **settings.REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"],
+            "anon": "10000/min",
+            "user": "10000/min",
+        },
+    }
+}
+
+
 class ThrottleFreeMixin:
-    """Anonymous throttles share the process cache; reset so tests do not starve."""
+    """Anonymous throttles share the process cache; reset so tests do not starve.
+
+    Combine with ``@override_settings(**TEST_THROTTLES_OVERRIDE)`` on each
+    TestCase subclass — see module-level comment for why both are needed.
+    """
 
     def setUp(self):
         cache.clear()
         super().setUp()
+
+    def tearDown(self):
+        cache.clear()
+        super().tearDown()
 
 
 def make_spark_package(slug="starter", sparks=1000, price="100.00", active=True):
@@ -74,10 +106,12 @@ def make_txn(reference, *, user=None, guest_session_id=None, status=None, **extr
     )
 
 
+@override_settings(**TEST_THROTTLES_OVERRIDE)
 class VerifyOwnershipTests(ThrottleFreeMixin, TestCase):
     """Authenticated callers see only their own payments."""
 
     def setUp(self):
+        super().setUp()
         self.url = reverse("paystack_verify")
         self.owner = make_user("owner", "owner@example.com")
         self.stranger = make_user("stranger", "stranger@example.com")
@@ -128,10 +162,12 @@ class VerifyOwnershipTests(ThrottleFreeMixin, TestCase):
         self.assertEqual(resp.json()["data"], "guest_session_required")
 
 
+@override_settings(**TEST_THROTTLES_OVERRIDE)
 class GuestVerifyOwnershipTests(ThrottleFreeMixin, TestCase):
     """Guest ownership comes from the HttpOnly cookie, never from the URL."""
 
     def setUp(self):
+        super().setUp()
         self.url = reverse("paystack_verify")
         self.identity, self.credential = GuestIdentityService.mint()
         self.other_identity, self.other_credential = GuestIdentityService.mint()
@@ -200,10 +236,12 @@ class GuestVerifyOwnershipTests(ThrottleFreeMixin, TestCase):
         self.assertEqual(resp.status_code, 401)
 
 
+@override_settings(**TEST_THROTTLES_OVERRIDE)
 class ClaimedPurchaseTests(ThrottleFreeMixin, TestCase):
     """Claiming moves the purchase to the account and closes the guest door."""
 
     def setUp(self):
+        super().setUp()
         self.url = reverse("paystack_verify")
         self.identity, self.credential = GuestIdentityService.mint()
         GuestTokenQuota.objects.create(session_id=self.identity.owner_key, sparks=500)
@@ -261,10 +299,12 @@ class ClaimedPurchaseTests(ThrottleFreeMixin, TestCase):
     PAYMENT_CALLBACK_ALLOWED_PATHS=["/payment/verify"],
     PAYMENT_CALLBACK_DEFAULT_PATH="/payment/verify",
 )
+@override_settings(**TEST_THROTTLES_OVERRIDE)
 class InitiatePaymentCallbackTests(ThrottleFreeMixin, TestCase):
     """The initiation endpoint refuses a destination it did not offer."""
 
     def setUp(self):
+        super().setUp()
         self.url = reverse("paystack_initiate")
         self.user = make_user()
         make_spark_package()

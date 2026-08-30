@@ -18,6 +18,7 @@ export default function EditAvatarSection({
   previewUrl,
   avatarFile,
   visualStyle,
+  isAdmin = false,
   onAvatarChange,
   onPreviewChange,
   onError,
@@ -146,17 +147,19 @@ export default function EditAvatarSection({
           {t("characters.generate")}
         </button>
 
-        {/* Upload button */}
-        <label className="flex cursor-pointer items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium bg-[var(--color-soft)] text-[var(--color-text)] border border-[var(--color-border)] transition hover:opacity-90">
-          <Upload size={16} />
-          {t("characters.upload")}
-          <input
-            type="file"
-            accept="image/jpeg,image/png,image/webp"
-            onChange={handleFileChange}
-            className="hidden"
-          />
-        </label>
+        {/* Upload button — admins only, mirroring the server-side restriction */}
+        {isAdmin && (
+          <label className="flex cursor-pointer items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium bg-[var(--color-soft)] text-[var(--color-text)] border border-[var(--color-border)] transition hover:opacity-90">
+            <Upload size={16} />
+            {t("characters.upload")}
+            <input
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              onChange={handleFileChange}
+              className="hidden"
+            />
+          </label>
+        )}
       </div>
 
       {/* ── Crop Modal ── */}

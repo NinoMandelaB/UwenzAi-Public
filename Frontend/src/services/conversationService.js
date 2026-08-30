@@ -130,6 +130,28 @@ export async function generateChatImage(conversationId, payload, operationId) {
   return handleResponse(response);
 }
 
+// Character-initiated photo offers: the offer message carries its own
+// operation key server-side (offer:<uuid>), so the client does not mint an
+// idempotency key here — retrying the accept replays the same reservation.
+
+export async function acceptPhotoOffer(conversationId, messageId) {
+  await ensureAuth();
+  const response = await apiFetch(
+    API.CONVERSATIONS.ACCEPT_PHOTO_OFFER(conversationId, messageId),
+    { method: "POST" },
+  );
+  return handleResponse(response);
+}
+
+export async function declinePhotoOffer(conversationId, messageId) {
+  await ensureAuth();
+  const response = await apiFetch(
+    API.CONVERSATIONS.DECLINE_PHOTO_OFFER(conversationId, messageId),
+    { method: "POST" },
+  );
+  return handleResponse(response);
+}
+
 // Guests are identified by their HttpOnly credential cookie, which apiFetch
 // sends on every request, so none of these take a session id any more.
 
@@ -164,6 +186,48 @@ export async function deleteMessage(conversationId, messageId) {
   const url = API.CONVERSATIONS.DELETE_MESSAGE(conversationId, messageId);
   const response = await apiFetch(url, { method: "DELETE" });
   return response.json();
+}
+
+// ---------- Per-chat search & reasoning-effort toggles ----------
+
+/**
+ * Get the per-chat web-search and reasoning-effort (Fast/Deep) toggle state.
+ * @param {string} conversationId - UUID of the conversation.
+ * @returns {Promise<Object>} - { web_search_enabled: boolean, reasoning_effort: "fast" | "deep" }
+ */
+export async function getConversationSettings(conversationId) {
+  const url = API.CONVERSATIONS.SETTINGS(conversationId);
+  const response = await apiFetch(url, { method: "GET" });
+  const data = await handleResponse(response);
+  return data.data;
+}
+
+/**
+ * Update the per-chat web-search and/or reasoning-effort toggle state.
+ * Either field may be omitted to leave it unchanged. Takes effect starting
+ * with the conversation's next message.
+ * @param {string} conversationId - UUID of the conversation.
+ * @param {Object} updates
+ * @param {boolean} [updates.webSearchEnabled]
+ * @param {"fast"|"deep"} [updates.reasoningEffort]
+ * @returns {Promise<Object>} - { web_search_enabled: boolean, reasoning_effort: "fast" | "deep" }
+ */
+export async function updateConversationSettings(
+  conversationId,
+  { webSearchEnabled, reasoningEffort } = {},
+) {
+  const url = API.CONVERSATIONS.SETTINGS(conversationId);
+  const body = {};
+  if (webSearchEnabled !== undefined)
+    body.web_search_enabled = webSearchEnabled;
+  if (reasoningEffort !== undefined) body.reasoning_effort = reasoningEffort;
+
+  const response = await apiFetch(url, {
+    method: "PATCH",
+    body,
+  });
+  const data = await handleResponse(response);
+  return data.data;
 }
 
 // ---------- Message history ----------

@@ -1,11 +1,12 @@
 # capp/views/conversation_views.py
 
 import logging
+import time
 import uuid
 
 from django.conf import settings
 from django.core.files.storage import default_storage
-from django.db import IntegrityError
+from django.db import IntegrityError, OperationalError
 from django.db.models import F, OuterRef, Subquery
 from django.shortcuts import get_object_or_404
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
@@ -22,10 +23,28 @@ from capp.classes.billing.paid_features import InsufficientBalance, PaidFeature,
 from capp.classes.characters.character_service import CharacterService
 from capp.classes.chat import message_history, unread_service
 from capp.classes.moderation.image_prompt_policy import ImagePromptPolicy
+from capp.constants import CHARACTER_PHOTO_OFFER_COST
 from capp.tasks import process_ai_response, generate_chat_image
 from capp.throttles import ChatMessageThrottle
 
 logger = logging.getLogger(__name__)
+
+
+def _reserve_chat_image(**kwargs):
+    deadline = time.monotonic() + float(getattr(settings, "IMAGE_BILLING_DB_MAX_WAIT_SECONDS", 2))
+    return CharacterService._run_image_billing_operation(
+        lambda: PaidFeature.reserve(**kwargs),
+        deadline,
+    )
+
+
+def _refund_chat_image(reservation, reason):
+    deadline = time.monotonic() + float(getattr(settings, "IMAGE_BILLING_DB_MAX_WAIT_SECONDS", 2))
+    CharacterService._refund_image_reservation(
+        reservation,
+        reason=reason,
+        deadline=deadline,
+    )
 
 
 def get_character_chat_state(character):
@@ -149,6 +168,8 @@ def api_list_conversations(request):
         msg_type = meta.get("type")
         if msg_type in ("generated_image", "image", "image_request"):
             return "\U0001f4f7 Photo"
+        if msg_type == "photo_offer":
+            return "\U0001f4f7 Photo offer"
         return ""
 
     result = []
@@ -315,7 +336,7 @@ def api_list_messages(request, conversation_id):
 
     def _serialize(msg):
         meta = msg.metadata if isinstance(msg.metadata, dict) else {}
-        return {
+        row = {
             "message_id": str(msg.message_id),
             "sender_type": msg.sender_type,
             "content": msg.content,
@@ -329,6 +350,16 @@ def api_list_messages(request, conversation_id):
             # WebSocket sends, so history renders in the user's language too.
             "code": meta.get("code") or "",
         }
+        # Photo offers are actionable cards: history must carry the same
+        # payload the WebSocket pushes so a reloaded page can still show the
+        # accept/decline state.
+        if row["type"] == "photo_offer":
+            row["offer"] = {
+                "prompt": meta.get("prompt") or "",
+                "cost": meta.get("offer_cost"),
+                "status": meta.get("offer_status") or "pending",
+            }
+        return row
 
     messages_list = [_serialize(msg) for msg in page]
 
@@ -746,15 +777,15 @@ def api_generate_chat_image(request, conversation_id):
     # message minutes later. The task presents the same operation ID and gets
     # this reservation back; it settles or refunds it.
     try:
-        reservation = PaidFeature.reserve(
+        reservation = _reserve_chat_image(
             feature=BillingReservation.Feature.IMAGE_GENERATION,
             operation_id=operation_id,
             user=request.user,
-            operation_reference=f"gallery_image:{conversation.character.character_id}:{operation_id}",
+            operation_reference=f"chat_image:{conversation.conversation_id}:{operation_id}",
         )
     except InsufficientBalance:
         return Response({"status": "fail", "data": "insufficient_sparks"}, status=400)
-    except ReservationError:
+    except (ReservationError, OperationalError):
         logger.exception("Could not reserve sparks for chat image")
         return Response({"status": "fail", "data": "billing_error"}, status=400)
 
@@ -777,15 +808,20 @@ def api_generate_chat_image(request, conversation_id):
         conversation.save(update_fields=["last_message_at", "updated_at"])
     except Exception:
         logger.exception("Failed to record chat image request")
-        PaidFeature.refund(reservation, reason="request_persist_failed")
+        _refund_chat_image(reservation, "request_persist_failed")
         raise
 
-    generate_chat_image.delay(
-        conversation_id=str(conversation.conversation_id),
-        user_message_id=str(user_message.message_id),
-        prompt=prompt,
-        operation_id=operation_id,
-    )
+    try:
+        generate_chat_image.delay(
+            conversation_id=str(conversation.conversation_id),
+            user_message_id=str(user_message.message_id),
+            prompt=prompt,
+            operation_id=operation_id,
+        )
+    except Exception:
+        logger.exception("Failed to enqueue chat image")
+        _refund_chat_image(reservation, "image_task_dispatch_failed")
+        return Response({"status": "fail", "data": "service_unavailable"}, status=503)
 
     return idempotency.echo(
         Response(
@@ -799,4 +835,249 @@ def api_generate_chat_image(request, conversation_id):
             status=202,
         ),
         operation_id,
+    )
+
+
+@csrf_protect_for_guests
+@api_view(["GET", "PATCH"])
+@permission_classes([AllowAny])
+def api_conversation_settings(request, conversation_id):
+    """
+    Get or update the per-chat toggles: web search and reasoning effort
+    (Fast/Deep). Both are changeable mid-conversation at any time and take
+    effect starting with the next message (process_ai_response reads them
+    fresh from the Conversation row on every call).
+
+    GET  -> {"status": "success", "data": {"web_search_enabled": bool, "reasoning_effort": "fast"|"deep"}}
+    PATCH body: any subset of the same two keys.
+    """
+    try:
+        conversation = Conversation.objects.get(conversation_id=conversation_id)
+    except Conversation.DoesNotExist:
+        return Response({"status": "fail", "data": "conversation_not_found"}, status=404)
+
+    # Permission check (same pattern as api_reset_conversation / api_delete_message)
+    if request.user.is_authenticated:
+        if conversation.user != request.user:
+            return Response({"status": "fail", "data": "permission_denied"}, status=403)
+    else:
+        identity = GuestIdentityService.resolve(request)
+        if identity is None or conversation.guest_session_id != identity.owner_key:
+            return Response({"status": "fail", "data": "permission_denied"}, status=403)
+
+    if request.method == "GET":
+        # Guest conversations may predate this restriction or have been
+        # modified outside this endpoint.  Do not expose a stale enabled state:
+        # guests can read their settings but their effective configuration is
+        # always search off and fast reasoning.
+        is_guest = not request.user.is_authenticated
+        return Response(
+            {
+                "status": "success",
+                "data": {
+                    "web_search_enabled": False if is_guest else conversation.web_search_enabled,
+                    "reasoning_effort": (
+                        Conversation.ReasoningEffort.FAST if is_guest else conversation.reasoning_effort
+                    ),
+                },
+            }
+        )
+
+    # PATCH
+    is_guest = not request.user.is_authenticated
+    if is_guest:
+        if request.data.get("web_search_enabled") is True:
+            return Response({"status": "fail", "data": "web_search_requires_login"}, status=403)
+        if request.data.get("reasoning_effort") == Conversation.ReasoningEffort.DEEP:
+            return Response({"status": "fail", "data": "deep_reasoning_requires_login"}, status=403)
+
+    update_fields = []
+
+    if "web_search_enabled" in request.data:
+        value = request.data["web_search_enabled"]
+        if not isinstance(value, bool):
+            return Response({"status": "fail", "data": "web_search_enabled must be a boolean"}, status=400)
+        conversation.web_search_enabled = value
+        update_fields.append("web_search_enabled")
+
+    if "reasoning_effort" in request.data:
+        value = request.data["reasoning_effort"]
+        valid_values = {choice.value for choice in Conversation.ReasoningEffort}
+        if value not in valid_values:
+            return Response(
+                {"status": "fail", "data": f"reasoning_effort must be one of {sorted(valid_values)}"},
+                status=400,
+            )
+        conversation.reasoning_effort = value
+        update_fields.append("reasoning_effort")
+
+    if not update_fields:
+        return Response({"status": "fail", "data": "no_valid_fields_provided"}, status=400)
+
+    conversation.save(update_fields=update_fields + ["updated_at"])
+
+    return Response(
+        {
+            "status": "success",
+            "data": {
+                "web_search_enabled": False if is_guest else conversation.web_search_enabled,
+                "reasoning_effort": (Conversation.ReasoningEffort.FAST if is_guest else conversation.reasoning_effort),
+            },
+        }
+    )
+
+
+# ----------------------------------------------------------------------
+# Character-initiated photo offers
+# ----------------------------------------------------------------------
+#
+# When a reply carries the [PHOTO_OFFER:...] marker (see tasks.py), the worker
+# stores a separate AI message with metadata.type="photo_offer", the model's
+# generation-ready description, and its own ``offer_operation_id`` key. The
+# client renders that message as an accept/decline card. Accepting reserves the
+# discounted CHARACTER_PHOTO_OFFER_COST against the offer's key and queues the
+# normal generate_chat_image task, so charging, policy gates, storage and
+# replay behaviour are identical to a user-requested picture — only the price
+# and who "asked" differ.
+
+
+def _get_owned_photo_offer(request, conversation_id, message_id):
+    """Fetch the conversation + offer message for the authenticated owner."""
+    conversation = get_object_or_404(
+        Conversation.objects.filter(user=request.user),
+        conversation_id=conversation_id,
+    )
+    offer_message = get_object_or_404(
+        Message.objects.filter(conversation=conversation, metadata__type="photo_offer"),
+        message_id=message_id,
+    )
+    return conversation, offer_message
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@throttle_classes([ChatMessageThrottle])
+def api_accept_photo_offer(request, conversation_id, message_id):
+    """
+    Accept a photo the character offered to send.
+
+    Reserves the discounted CHARACTER_PHOTO_OFFER_COST (cheaper than the
+    regular image_generation price, because the character initiated it) and
+    queues generate_chat_image with the description the character wrote. The
+    offer's own operation key is the idempotency anchor: a retried accept
+    replays the same reservation and can never bill twice for one offer.
+    """
+    conversation, offer_message = _get_owned_photo_offer(request, conversation_id, message_id)
+
+    if conversation.status == Conversation.StatusChoices.CLOSED:
+        return Response({"status": "fail", "data": "conversation_closed"}, status=400)
+
+    meta = dict(offer_message.metadata or {})
+    status_ = meta.get("offer_status") or "pending"
+    if status_ != "pending":
+        # Already resolved (accepted or declined): replay the outcome rather
+        # than reserving again.
+        return Response(
+            {"status": "fail", "data": f"photo_offer_already_{status_}"},
+            status=400,
+        )
+
+    prompt = (meta.get("prompt") or "").strip()
+    operation_id = meta.get("offer_operation_id") or f"offer:{offer_message.message_id}"
+    if not prompt:
+        return Response({"status": "fail", "data": "photo_offer_invalid"}, status=400)
+
+    # Prohibited-subject policy, re-asserted before any spark moves: the marker
+    # description was model-written, so it is screened here exactly like a
+    # user-typed prompt (and the task gates it once more before the provider).
+    violation = ImagePromptPolicy.find_violation(
+        prompt,
+        *CharacterService.image_policy_texts(conversation.character),
+    )
+    if violation:
+        logger.warning(
+            "photo offer accept blocked by image policy conversation=%s user=%s category=%s",
+            conversation_id,
+            getattr(request.user, "user_id", None),
+            violation,
+        )
+        return Response({"status": "fail", "data": ImagePromptPolicy.ERROR_CODE}, status=400)
+
+    try:
+        reservation = _reserve_chat_image(
+            feature=BillingReservation.Feature.IMAGE_GENERATION,
+            operation_id=operation_id,
+            user=request.user,
+            operation_reference=f"chat_photo_offer:{conversation.conversation_id}:{operation_id}",
+            cost_override=CHARACTER_PHOTO_OFFER_COST,
+        )
+    except InsufficientBalance:
+        return Response({"status": "fail", "data": "insufficient_sparks"}, status=400)
+    except (ReservationError, OperationalError):
+        logger.exception("Could not reserve sparks for photo offer accept")
+        return Response({"status": "fail", "data": "billing_error"}, status=400)
+
+    if reservation.status != BillingReservation.Status.RESERVED:
+        return Response({"status": "fail", "data": "previous_attempt_failed"}, status=400)
+
+    # In-progress now; the image task flips it to "accepted" when the picture
+    # is delivered. If the task later refunds, the hold — not this status — is
+    # the source of truth, and the user can see the failure system message.
+    meta["offer_status"] = "accepted"
+    offer_message.metadata = meta
+    offer_message.save(update_fields=["metadata", "updated_at"])
+
+    try:
+        generate_chat_image.delay(
+            conversation_id=str(conversation.conversation_id),
+            user_message_id=str(offer_message.message_id),
+            prompt=prompt,
+            operation_id=operation_id,
+            offer_message_id=str(offer_message.message_id),
+        )
+    except Exception:
+        logger.exception("Failed to enqueue accepted photo offer")
+        _refund_chat_image(reservation, "image_task_dispatch_failed")
+        meta["offer_status"] = "pending"
+        offer_message.metadata = meta
+        offer_message.save(update_fields=["metadata", "updated_at"])
+        return Response({"status": "fail", "data": "service_unavailable"}, status=503)
+
+    return Response(
+        {
+            "status": "success",
+            "data": {
+                "message_id": str(offer_message.message_id),
+                "offer_status": "accepted",
+            },
+        },
+        status=202,
+    )
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@throttle_classes([ChatMessageThrottle])
+def api_decline_photo_offer(request, conversation_id, message_id):
+    """
+    Decline a photo the character offered to send. Costs nothing; the card
+    stays in the transcript marked as declined.
+    """
+    conversation, offer_message = _get_owned_photo_offer(request, conversation_id, message_id)
+
+    meta = dict(offer_message.metadata or {})
+    if (meta.get("offer_status") or "pending") == "pending":
+        meta["offer_status"] = "declined"
+        offer_message.metadata = meta
+        offer_message.save(update_fields=["metadata", "updated_at"])
+
+    return Response(
+        {
+            "status": "success",
+            "data": {
+                "message_id": str(offer_message.message_id),
+                "offer_status": meta.get("offer_status"),
+            },
+        },
+        status=200,
     )

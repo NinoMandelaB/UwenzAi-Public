@@ -192,6 +192,10 @@ export const termsSw = {
             "Kujifanya mtu au taasisi yoyote, ikijumuisha wafanyakazi wa UwenzAi, au kutoa taarifa za uongo kuhusu uhusiano wako na mtu au taasisi yoyote.",
           ],
         },
+        {
+          type: "p",
+          text: "6.6. Matumizi Yanayokubalika ya Utafutaji wa Wavuti. Hairuhusiwi kutumia vipengele vya utafutaji wa wavuti au ufunguzi wa kurasa kutafuta, kupata, au kusambaza maudhui haramu, kukiuka haki za wengine, kukwepa vizuizi vya kiufundi au vya kisheria vya upatikanaji, au kuchunguza, kuskani, au kushambulia mifumo ya wahusika wengine. Tunaweza kuzuia, kusimamisha, au kuzima vipengele hivi kwa mtumiaji au mazungumzo wakati wowote, ikiwa ni pamoja na kwa madhumuni ya kuzingatia masharti ya matumizi yanayokubalika ya mtoa huduma wetu wa utafutaji.",
+        },
       ],
     },
     {
@@ -268,7 +272,7 @@ export const termsSw = {
         },
         {
           type: "p",
-          text: "8.7. Muda. Leseni hii inadumu kwa muda wote tunapohifadhi Maingizo Yako. Inaisha maudhui yanayohusika yanapofutwa, isipokuwa kwa kiwango ambacho tunapaswa kubakiza nakala kama ilivyoelezwa katika vifungu vya 13 na 14 vya [Sera ya Faragha](/privacy) — kwa mfano kwenye nakala rudufu kwa kipindi kifupi, au kwenye rekodi tunazolazimika kisheria kuzihifadhi.",
+          text: "8.7. Muda. Leseni hii inadumu kwa muda wote tunapohifadhi Maingizo Yako. Inaisha maudhui yanayohusika yanapofutwa, isipokuwa kwa kiwango ambacho tunapaswa kubakiza nakala kama ilivyoelezwa katika vifungu vya 14 na 15 vya [Sera ya Faragha](/privacy) — kwa mfano kwenye nakala rudufu kwa kipindi kifupi, au kwenye rekodi tunazolazimika kisheria kuzihifadhi.",
         },
         {
           type: "p",
@@ -299,6 +303,10 @@ export const termsSw = {
         {
           type: "p",
           text: "9.3. UwenzAi haiwajibiki kwa vitendo au kushindwa kwa watoa huduma wa nje, na matumizi yako ya huduma zao ni kwa hatari yako mwenyewe, kwa kufuata masharti na sera zao.",
+        },
+        {
+          type: "p",
+          text: "9.4. Maudhui ya Utafutaji wa Wavuti. Kipengele cha utafutaji wa wavuti hupata taarifa kutoka kwenye tovuti za wahusika wengine kwa wakati halisi. Hatudhibiti, hatuidhinishi, wala hatuhakikishi usahihi, ukamilifu, au uhalali wa maudhui yanayopatikana kutoka kwenye wavuti. Majibu ya AI yanayotegemea matokeo ya utafutaji wa wavuti yanaweza kuwa na taarifa zilizopitwa na wakati, zisizo kamili, au zisizo sahihi, na unapaswa kuthibitisha taarifa muhimu kwa njia nyingine. Maudhui ya wahusika wengine yanabaki chini ya masharti na haki za wamiliki wake husika.",
         },
       ],
     },

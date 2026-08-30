@@ -7,6 +7,7 @@ import openai
 from openai import OpenAI
 from django.conf import settings
 from capp.classes.ai.mistral_client import MistralClient
+from capp.classes.ai import reasoning
 
 logger = logging.getLogger(__name__)
 
@@ -36,25 +37,44 @@ class CortecsClient:
         model: Optional[str] = None,
         max_tokens: int = 1024,
         temperature: float = 0.7,
+        reasoning_effort: Optional[str] = None,
+        **kwargs,
     ) -> Dict:
         """
         Send a chat completion request via Cortecs.
         Falls back to MistralClient on failure.
+
+        ``reasoning_effort``: the conversation's Fast/Deep toggle value
+        ("fast"/"deep"). Mapped to provider-specific kwargs via
+        capp.classes.ai.reasoning.cortecs_reasoning_kwargs -- a no-op unless
+        the configured model is a documented-supported DeepSeek model. See
+        that module for cited docs.
         """
         api_key = getattr(settings, "CORTECS_API_KEY", None)
         base_url = getattr(settings, "CORTECS_BASE_URL", "https://api.cortecs.ai/v1")
         model = model or getattr(settings, "CORTECS_MODEL", None)
 
-        # If no Cortecs key is configured, skip straight to Mistral
+        # If no Cortecs key is configured, skip straight to Mistral.
+        # `**kwargs` MUST be forwarded: it carries `tools` / `tool_choice`,
+        # and dropping them silently disables web search and open_url on the
+        # Mistral path (the model is simply never told the tools exist, so it
+        # answers from memory and the user sees no error). `kwargs` is used
+        # rather than `request_kwargs` because the latter adds Cortecs-
+        # specific reasoning parameters Mistral does not accept.
         if not api_key:
             logger.info("CORTECS_API_KEY not set – using Mistral directly")
             return MistralClient.chat_completion(
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                reasoning_effort=reasoning_effort,
+                **kwargs,
             )
 
         timeout = getattr(settings, "CORTECS_TIMEOUT", 60.0)
+
+        reasoning_kwargs = reasoning.cortecs_reasoning_kwargs(model, reasoning_effort or "fast")
+        request_kwargs = {**kwargs, **reasoning_kwargs}
 
         # Try Cortecs with an explicit timeout and bounded retry/backoff for
         # transient errors before falling back to Mistral.
@@ -66,15 +86,22 @@ class CortecsClient:
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                **request_kwargs,
             )
             logger.info("Cortecs response received: id=%s model=%s", response.id, model)
+            message = response.choices[0].message
+            message_dict = {"content": message.content}
+            # Surface tool calls (e.g. the web_search tool) so tasks.py can
+            # execute them and continue the loop. Absent unless the caller
+            # passed `tools=[...]` and the model chose to call one.
+            tool_calls = getattr(message, "tool_calls", None)
+            if tool_calls:
+                message_dict["tool_calls"] = tool_calls
             return {
                 "id": response.id,
                 "choices": [
                     {
-                        "message": {
-                            "content": response.choices[0].message.content,
-                        },
+                        "message": message_dict,
                     }
                 ],
                 "usage": {
@@ -91,10 +118,16 @@ class CortecsClient:
                 model,
                 e,
             )
+            # Forward `**kwargs` (tools/tool_choice) so a Cortecs outage
+            # degrades the provider, not the feature set. Without this the
+            # fallback answer loses web search entirely and can confidently
+            # state stale information instead of looking it up.
             return MistralClient.chat_completion(
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                reasoning_effort=reasoning_effort,
+                **kwargs,
             )
 
     @classmethod

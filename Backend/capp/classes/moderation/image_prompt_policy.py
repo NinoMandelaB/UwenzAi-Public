@@ -9,8 +9,12 @@ sexual or not, incidental or central — is any image that requests or
 materially involves:
 
   * ``minors``   – children, babies, teenagers, or any under-18 person;
-  * ``animals``  – pets, livestock, wildlife, insects, or any non-human animal;
+  * ``bestiality`` – sexual acts or fetishised sexual contexts involving animals;
   * ``deceased`` – corpses, cadavers, dead or dying people, funerary subjects.
+
+Non-sexual depictions that include animals (e.g. someone riding a horse,
+walking a dog, farm scenes with livestock, or wildlife in East Africa) are
+allowed. Only sexual/bestiality content involving animals is prohibited.
 
 This module is the single source of truth for that policy. Every image
 generation path (in-chat generation, character gallery generation, avatar
@@ -35,8 +39,8 @@ trip the filter. Numeric ages below 18 are detected via age-expression
 patterns rather than bare digits.
 
 This is a lexical filter, not a semantic classifier. It cannot recognise
-paraphrase, novel euphemism, non-English phrasings beyond the Kiswahili terms
-listed below, or a prohibited subject implied purely by context. It is a strong
+paraphrase, novel euphemism, non-English phrasings beyond the terms listed
+below, or a prohibited subject implied purely by context. It is a strong
 deterministic floor, not a complete semantic guarantee. See the module-level
 notes in the PR description for the documented gaps.
 """
@@ -53,7 +57,7 @@ PROHIBITED_SUBJECT_ERROR_CODE = "image_prompt_prohibited_subject"
 
 # Policy categories, in evaluation order.
 CATEGORY_MINORS = "minors"
-CATEGORY_ANIMALS = "animals"
+CATEGORY_BESTIALITY = "bestiality"
 CATEGORY_DECEASED = "deceased"
 
 
@@ -165,293 +169,108 @@ MINOR_TERMS: Tuple[str, ...] = (
     "shule ya msingi",
 )
 
-ANIMAL_TERMS: Tuple[str, ...] = (
-    # Generic
-    "animal",
-    "beast",
-    "creature",
-    "critter",
-    "pet",
-    "puppy",
-    "puppies",
-    "kitten",
-    "cub",
-    "livestock",
-    "cattle",
-    "poultry",
-    "wildlife",
-    "fauna",
-    "mammal",
-    "reptile",
-    "amphibian",
-    "rodent",
-    "primate",
-    "insect",
-    "arachnid",
-    "bird",
-    "fish",
-    "zoo",
-    "safari animal",
-    "game reserve animal",
-    "herd",
-    "flock",
-    "swarm",
-    "veterinary",
-    "veterinarian",
+# Bestiality / zoophilia-related terms only.
+# This list intentionally blocks sexual/bestiality content while allowing
+# normal, non-sexual interactions with animals (riding, walking, farming,
+# wildlife scenes, etc.).
+BESTIALITY_TERMS: Tuple[str, ...] = (
+    # Core clinical / slang terms
     "bestiality",
     "zoophilia",
-    # Pets / domestic
-    "dog",
-    "doggy",
-    "hound",
-    "canine",
-    "cat",
-    "feline",
-    "hamster",
-    "guinea pig",
-    "gerbil",
-    "ferret",
-    "rabbit",
-    "bunny",
-    "parrot",
-    "parakeet",
-    "budgie",
-    "canary",
-    "goldfish",
-    "turtle",
-    "tortoise",
-    "lizard",
-    "gecko",
-    "iguana",
-    "snake",
-    "python",
-    "cobra",
-    "viper",
-    "mamba",
-    # Livestock / farm
-    "cow",
-    "bull",
-    "ox",
-    "oxen",
-    "calf",
-    "calves",
-    "heifer",
-    "goat",
-    "sheep",
-    "lamb",
-    "ram",
-    "ewe",
-    "pig",
-    "piglet",
-    "hog",
-    "boar",
-    "horse",
-    "foal",
-    "mare",
-    "stallion",
-    "donkey",
-    "mule",
-    "camel",
-    "chicken",
-    "hen",
-    "rooster",
-    "cockerel",
-    "duck",
-    "duckling",
-    "goose",
-    "geese",
-    "turkey",
-    "guinea fowl",
-    # Wildlife
-    "lion",
-    "lioness",
-    "tiger",
-    "leopard",
-    "cheetah",
-    "jaguar",
-    "panther",
-    "lynx",
-    "hyena",
-    "jackal",
-    "wolf",
-    "wolves",
-    "fox",
-    "bear",
-    "elephant",
-    "rhino",
-    "rhinoceros",
-    "hippo",
-    "hippopotamus",
-    "giraffe",
-    "zebra",
-    "buffalo",
-    "wildebeest",
-    "antelope",
-    "gazelle",
-    "impala",
-    "kudu",
-    "eland",
-    "warthog",
-    "baboon",
-    "monkey",
-    "chimpanzee",
-    "chimp",
-    "gorilla",
-    "orangutan",
-    "lemur",
-    "meerkat",
-    "mongoose",
-    "porcupine",
-    "aardvark",
-    "pangolin",
-    "hedgehog",
-    "badger",
-    "otter",
-    "beaver",
-    "squirrel",
-    "chipmunk",
-    "rat",
-    "mouse",
-    "mice",
-    "bat",
-    "deer",
-    "elk",
-    "moose",
-    "bison",
-    "yak",
-    "llama",
-    "alpaca",
-    "kangaroo",
-    "koala",
-    "panda",
-    "sloth",
-    "armadillo",
-    "raccoon",
-    "possum",
-    "opossum",
-    "skunk",
-    "weasel",
-    "seal",
-    "walrus",
-    "whale",
-    "dolphin",
-    "porpoise",
-    "shark",
-    "octopus",
-    "squid",
-    "jellyfish",
-    "crab",
-    "lobster",
-    "shrimp",
-    "prawn",
-    "starfish",
-    "eagle",
-    "hawk",
-    "falcon",
-    "vulture",
-    "owl",
-    "ostrich",
-    "flamingo",
-    "pelican",
-    "stork",
-    "crane bird",
-    "heron",
-    "ibis",
-    "peacock",
-    "pigeon",
-    "dove",
-    "sparrow",
-    "crow",
-    "raven",
-    "seagull",
-    "penguin",
-    "swan",
-    "hornbill",
-    "weaver bird",
-    "crocodile",
-    "alligator",
-    "chameleon",
-    "frog",
-    "toad",
-    "salamander",
-    "newt",
-    "spider",
-    "tarantula",
-    "scorpion",
-    "ant",
-    "bee",
-    "wasp",
-    "hornet",
-    "butterfly",
-    "butterflies",
-    "moth",
-    "beetle",
-    "cockroach",
-    "grasshopper",
-    "locust",
-    "cricket insect",
-    "dragonfly",
-    "dragonflies",
-    "mosquito",
-    "fly insect",
-    "housefly",
-    "tsetse",
-    "termite",
-    "centipede",
-    "millipede",
-    "snail",
-    "slug",
-    "worm",
-    "earthworm",
-    "leech",
-    "tick insect",
-    "flea",
-    "louse",
-    "lice",
-    # Kiswahili
-    "mnyama",
-    "wanyama",
-    "ndege",
-    "samaki",
-    "mbwa",
-    "paka",
-    "ng ombe",
-    "ngombe",
-    "mbuzi",
-    "kondoo",
-    "nguruwe",
-    "farasi",
-    "punda",
-    "ngamia",
-    "kuku",
-    "bata",
-    "simba",
-    "chui",
-    "duma",
-    "fisi",
-    "mbweha",
-    "tembo",
-    "ndovu",
-    "kifaru",
-    "kiboko",
-    "twiga",
-    "pundamilia",
-    "nyati",
-    "swala",
-    "nyani",
-    "tumbili",
-    "sokwe",
-    "panya",
-    "popo",
-    "nyoka",
-    "mamba wa maji",
-    "chura",
-    "buibui",
-    "nyuki",
-    "kipepeo",
-    "mdudu",
-    "wadudu",
-    "sungura",
+    "zoophile",
+    # Extra-cautious explicit phrases involving sexual acts with animals
+    "animal sex",
+    "sex with animal",
+    "sex with animals",
+    "sex with dog",
+    "sex with dogs",
+    "sex with cat",
+    "sex with cats",
+    "sex with horse",
+    "sex with horses",
+    "sex with livestock",
+    "sex with cattle",
+    "sex with goat",
+    "sex with goats",
+    "sex with sheep",
+    "sex with pig",
+    "sex with pigs",
+    "sex with donkey",
+    "sex with donkeys",
+    "sex with mule",
+    "sex with mules",
+    "sex with camel",
+    "sex with camels",
+    "sex with chicken",
+    "sex with chickens",
+    "sex with bird",
+    "sex with birds",
+    "sex with wildlife",
+    "sex with wild animal",
+    "sex with wild animals",
+    "fucking animal",
+    "fucking animals",
+    "fucking dog",
+    "fucking dogs",
+    "fucking cat",
+    "fucking cats",
+    "fucking horse",
+    "fucking horses",
+    "fucking livestock",
+    "fucking cattle",
+    "fucking goat",
+    "fucking goats",
+    "fucking sheep",
+    "fucking pig",
+    "fucking pigs",
+    "fucking donkey",
+    "fucking donkeys",
+    "fucking mule",
+    "fucking mules",
+    "fucking camel",
+    "fucking camels",
+    "fucking chicken",
+    "fucking chickens",
+    "fucking bird",
+    "fucking birds",
+    "fucking wildlife",
+    "fucking wild animal",
+    "fucking wild animals",
+    "having sex with animal",
+    "having sex with animals",
+    "having sex with dog",
+    "having sex with dogs",
+    "having sex with cat",
+    "having sex with cats",
+    "having sex with horse",
+    "having sex with horses",
+    "having sex with livestock",
+    "having sex with cattle",
+    "having sex with goat",
+    "having sex with goats",
+    "having sex with sheep",
+    "having sex with pig",
+    "having sex with pigs",
+    "having sex with donkey",
+    "having sex with donkeys",
+    "having sex with mule",
+    "having sex with mules",
+    "having sex with camel",
+    "having sex with camels",
+    "having sex with chicken",
+    "having sex with chickens",
+    "having sex with bird",
+    "having sex with birds",
+    "having sex with wildlife",
+    "having sex with wild animal",
+    "having sex with wild animals",
+    # Kiswahili (explicit sexual formulations)
+    "kujamiiana na mnyama",
+    "kujamiiana na wanyama",
+    "kufanya ngono na mnyama",
+    "kufanya ngono na wanyama",
+    "ngono na mnyama",
+    "ngono na wanyama",
 )
 
 DECEASED_TERMS: Tuple[str, ...] = (
@@ -578,6 +397,40 @@ _LEET_MAP = str.maketrans(
     }
 )
 
+_CONFUSABLE_MAP = str.maketrans(
+    {
+        # Conservative Cyrillic/Greek lookalikes found in Latin policy terms.
+        "а": "a",
+        "е": "e",
+        "і": "i",
+        "о": "o",
+        "р": "p",
+        "с": "c",
+        "х": "x",
+        "у": "y",
+        "Α": "a",
+        "Β": "b",
+        "Ε": "e",
+        "Ι": "i",
+        "Κ": "k",
+        "Μ": "m",
+        "Ν": "n",
+        "Ο": "o",
+        "Ρ": "p",
+        "Τ": "t",
+        "Χ": "x",
+        "α": "a",
+        "β": "b",
+        "ε": "e",
+        "ι": "i",
+        "κ": "k",
+        "ο": "o",
+        "ρ": "p",
+        "τ": "t",
+        "χ": "x",
+    }
+)
+
 _NON_WORD_RE = re.compile(r"[^a-z0-9]+")
 _REPEAT_RE = re.compile(r"([a-z])\1{2,}")
 # Three or more single letters separated by spaces: "c h i l d".
@@ -602,6 +455,25 @@ def _normalise(text: str) -> str:
     return f" {' '.join(lowered.split())} "
 
 
+def _canonical_source(text: str, *, map_leet: bool) -> str:
+    """Canonicalize confusables while preserving whitespace boundaries."""
+    source = unicodedata.normalize("NFKD", str(text)).translate(_CONFUSABLE_MAP).lower()
+    source = "".join(ch for ch in source if not unicodedata.combining(ch) and unicodedata.category(ch) != "Cf")
+    return source.translate(_LEET_MAP) if map_leet else source
+
+
+def _separator_elided(text: str) -> str:
+    """Remove punctuation inside words without joining real whitespace."""
+    chars = []
+    for ch in text:
+        if ch.isspace():
+            chars.append(" ")
+        elif ch.isascii() and ch.isalnum():
+            chars.append(ch)
+    compact = _REPEAT_RE.sub(r"\1", "".join(chars))
+    return f" {' '.join(compact.split())} "
+
+
 def _normalised_variants(text: str) -> Tuple[str, ...]:
     """
     Return the normalised forms of ``text`` that patterns are matched against.
@@ -613,14 +485,18 @@ def _normalised_variants(text: str) -> Tuple[str, ...]:
     2. the same text with leet/homoglyph substitutions reversed ("ch1ld");
     3. variant 2 with spaced-out letter runs rejoined ("c h i l d" -> "child").
     """
-    plain = _normalise(text)
+    canonical = _canonical_source(text, map_leet=False)
+    plain = _normalise(canonical)
     variants = [plain]
-    unleet = plain.translate(_LEET_MAP)
+    unleet = _normalise(_canonical_source(text, map_leet=True))
     if unleet != plain:
         variants.append(unleet)
     despaced = _SPACED_LETTERS_RE.sub(lambda m: m.group(0).replace(" ", ""), unleet)
     if despaced != unleet:
         variants.append(despaced)
+    elided = _separator_elided(_canonical_source(text, map_leet=True))
+    if elided not in variants:
+        variants.append(elided)
     return tuple(variants)
 
 
@@ -644,8 +520,19 @@ def _build_term_pattern(terms: Iterable[str]) -> Pattern[str]:
 
 
 _MINOR_PATTERN = _build_term_pattern(MINOR_TERMS)
-_ANIMAL_PATTERN = _build_term_pattern(ANIMAL_TERMS)
+_BESTIALITY_PATTERN = _build_term_pattern(BESTIALITY_TERMS)
 _DECEASED_PATTERN = _build_term_pattern(DECEASED_TERMS)
+
+_SEXUAL_ACT = (
+    r"(?:sex(?:ual)?|intercourse|oral\s+sex|penetrat(?:e|es|ed|ing)|"
+    r"erotic|mating|mate[ds]?|copulat(?:e|es|ed|ing)|genital)"
+)
+_ANIMAL_WORD = r"(?:animal|dog|cat|horse|goat|sheep|pig|donkey|mule|camel|" r"chicken|bird|livestock|cattle|wildlife)"
+_SEXUAL_GAP = r"(?:\s+[a-z0-9]+){0,6}\s+"
+_BESTIALITY_PROXIMITY_PATTERNS: Tuple[Pattern[str], ...] = (
+    re.compile(rf"(?<![a-z0-9]){_SEXUAL_ACT}{_SEXUAL_GAP}{_ANIMAL_WORD}(?![a-z0-9])"),
+    re.compile(rf"(?<![a-z0-9]){_ANIMAL_WORD}{_SEXUAL_GAP}{_SEXUAL_ACT}(?![a-z0-9])"),
+)
 
 # "boy"/"girl"/"male"/"female" are only prohibited when qualified by a
 # youth modifier, because unqualified they routinely describe adults.
@@ -668,7 +555,7 @@ _NUMERIC_AGE_PATTERNS: Tuple[Pattern[str], ...] = (
     re.compile(rf"(?<![0-9]){_UNDER_18}\s*(?:year|yr|y)s?\s*(?:o|old)(?![a-z0-9])"),
     # "aged 14", "age 7", "age of 13", "13 years of age"
     re.compile(rf"(?<![a-z0-9])age[ds]?\s+(?:of\s+)?{_UNDER_18}(?![0-9])"),
-    re.compile(rf"(?<![0-9]){_UNDER_18}\s*(?:year|yr)s?\s+of\s+age(?![a-z0-9])"),
+    re.compile(rf"(?<![0-9]){_UNDER_18}\s*(?:year|yr)s?\s+of\s+age(?![0-9])"),
     # "she is 15 years old", "he is only 12", "just 9"
     re.compile(rf"(?<![a-z0-9])(?:is|only|just|barely)\s+{_UNDER_18}\s*(?:year|yr)s?\s*old(?![a-z0-9])"),
     re.compile(rf"(?<![a-z0-9])(?:only|just|barely)\s+{_UNDER_18}(?![0-9])"),
@@ -689,6 +576,7 @@ _PERSON_WORD = (
     r"lady|ladies|wife|wives|husband|father|mother|dad|mum|mom|parent|"
     r"grandmother|grandfather|granny|sibling|brother|sister|friend|lover|"
     r"victim|soldier|patient|bride|groom|widow|widower|face|corpse|"
+    r"actor|actress|model|celebrity|teacher|doctor|nurse|student|"
     r"mtu|watu|mwanamke|mwanamume|mume|mke|mzazi|rafiki|mwathirika)"
 )
 _GAP = r"(?:\s+[a-z0-9]+){0,3}\s+"
@@ -700,7 +588,7 @@ _DEATH_PROXIMITY_PATTERNS: Tuple[Pattern[str], ...] = (
 # Checked in this order; the first match wins.
 _CATEGORY_PATTERNS: Tuple[Tuple[str, Tuple[Pattern[str], ...]], ...] = (
     (CATEGORY_MINORS, (_MINOR_PATTERN,) + _MINOR_MODIFIER_PATTERNS + _NUMERIC_AGE_PATTERNS),
-    (CATEGORY_ANIMALS, (_ANIMAL_PATTERN,)),
+    (CATEGORY_BESTIALITY, (_BESTIALITY_PATTERN,) + _BESTIALITY_PROXIMITY_PATTERNS),
     (CATEGORY_DECEASED, (_DECEASED_PATTERN,) + _DEATH_PROXIMITY_PATTERNS),
 )
 
@@ -724,11 +612,12 @@ class ImagePromptPolicy:
     Prohibited-subject policy for every AI image generation path.
 
     Adult NSFW / explicit content is deliberately NOT screened here. Only the
-    three prohibited subject categories (minors, animals, deceased people) are.
+    three prohibited subject categories (minors, bestiality, deceased people)
+    are.
     """
 
     ERROR_CODE = PROHIBITED_SUBJECT_ERROR_CODE
-    CATEGORIES = (CATEGORY_MINORS, CATEGORY_ANIMALS, CATEGORY_DECEASED)
+    CATEGORIES = (CATEGORY_MINORS, CATEGORY_BESTIALITY, CATEGORY_DECEASED)
 
     @staticmethod
     def find_violation(*texts: Optional[str]) -> Optional[str]:

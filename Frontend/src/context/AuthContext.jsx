@@ -16,6 +16,10 @@ import {
 } from "../services/authService";
 import { API, STORAGE_KEYS } from "../config/constants";
 import { ensureGuestSession, resetGuestSession } from "../utils/session";
+import {
+  reconcilePushSubscription,
+  unsubscribePushLocally,
+} from "../services/pushService";
 
 const AuthContext = createContext(null);
 
@@ -156,13 +160,23 @@ export function AuthProvider({ children }) {
     }
   }, [isLoading, isAuthenticated]);
 
+  useEffect(() => {
+    if (isLoading || !isAuthenticated || !user?.user_id || !accessToken) return;
+    reconcilePushSubscription().catch(() => {
+      // Reconciliation fails closed by removing the local subscription.
+      // Authentication itself must remain available.
+    });
+  }, [isLoading, isAuthenticated, user?.user_id, accessToken]);
+
   // ---------- Global session‑expiry handler ----------
   useEffect(() => {
-    setSessionExpiredCallback(() => {
-      clearStoredAuth(); // removes user & spark_pool from localStorage
-      clearAccessToken(); // clears the in‑memory access token
+    setSessionExpiredCallback(async () => {
+      clearAuthState();
+      resetGuestSession();
+      await unsubscribePushLocally().catch(() => {});
       window.location.href = "/characters"; // full page redirect to public area
     });
+    return () => setSessionExpiredCallback(null);
   }, []);
 
   const isAdmin = Boolean(user?.is_staff || user?.is_superuser);
