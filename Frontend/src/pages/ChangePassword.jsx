@@ -7,6 +7,7 @@ import { useLanguage } from "../context/LanguageContext";
 import { useAuth } from "../context/AuthContext";
 import { changePassword } from "../services/authService";
 import { getAuthMessage, getAuthTitle } from "../utils/authMessageMapper";
+import { characterCount } from "../utils/textLimits";
 
 function Input({
   label,
@@ -105,7 +106,7 @@ function safeT(t, key, fallback) {
 }
 
 export default function ChangePassword() {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const navigate = useNavigate();
   const { accessToken } = useAuth();
 
@@ -171,11 +172,10 @@ export default function ChangePassword() {
 
     if (!formData.new_password) {
       nextErrors.new_password = "Please enter your new password.";
-    } else if (formData.new_password.length < 6) {
-      nextErrors.new_password =
-        "Your password must be at least 6 characters long.";
-    } else if (formData.new_password.length > 20) {
-      nextErrors.new_password = "Your password must not exceed 20 characters.";
+    } else if (characterCount(formData.new_password) < 8) {
+      nextErrors.new_password = t("auth.passwordMinLength");
+    } else if (characterCount(formData.new_password) > 128) {
+      nextErrors.new_password = t("auth.passwordMaxLength");
     }
 
     if (!formData.confirm_password) {
@@ -249,6 +249,7 @@ export default function ChangePassword() {
         message: getAuthMessage(
           err,
           "We could not change your password right now. Please try again.",
+          language,
         ),
       });
     } finally {
@@ -296,7 +297,7 @@ export default function ChangePassword() {
           <div>
             <p className="text-sm font-medium theme-text">Password rules</p>
             <p className="mt-1 text-sm theme-text-muted">
-              Use 6 to 20 characters and choose something you will remember.
+              {t("auth.passwordLengthHint")}
             </p>
           </div>
         </div>
@@ -323,8 +324,7 @@ export default function ChangePassword() {
           autoComplete="new-password"
           icon={KeyRound}
           error={errors.new_password}
-          hint="Use 6 to 20 characters."
-          maxLength={20}
+          hint={t("auth.passwordLengthHint")}
         />
 
         <Input
@@ -336,7 +336,6 @@ export default function ChangePassword() {
           autoComplete="new-password"
           icon={LockKeyhole}
           error={errors.confirm_password}
-          maxLength={20}
         />
 
         <div className="grid grid-cols-1 gap-3 pt-1 sm:grid-cols-2">

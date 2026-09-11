@@ -16,7 +16,7 @@
 import logging
 from typing import Optional
 
-from django.db import transaction
+from django.db.models import Max
 from django.utils import timezone
 
 from capp.models import (
@@ -25,6 +25,7 @@ from capp.models import (
     Message,
 )
 from capp.classes.ai.mistral_client import MistralClient
+from capp.classes.memory.mutation_guard import memory_write_lock, generation, advance_summary
 
 logger = logging.getLogger(__name__)
 
@@ -59,14 +60,15 @@ class ConversationSummaryService:
             return
 
         latest_summary = cls.get_latest_summary(conversation)
-
+        cutoff = cls._source_cutoff(conversation)
         if latest_summary and latest_summary.covered_until_message:
-            # Count messages in ANY conversation between this user+character
-            # that are newer than the last summary checkpoint
+            checkpoint = latest_summary.covered_until_message.created_at
+            cutoff = max(cutoff, checkpoint) if cutoff else checkpoint
+        if cutoff:
             newer_count = Message.objects.filter(
                 conversation__user=conversation.user,
                 conversation__character=conversation.character,
-                created_at__gt=latest_summary.covered_until_message.created_at,
+                created_at__gt=cutoff,
             ).count()
         else:
             # No summary yet — count all messages across all conversations for this pair
@@ -103,6 +105,10 @@ class ConversationSummaryService:
             return
 
         try:
+            expected_generation = generation(conversation, "summary_generation")
+            if expected_generation is None:
+                return
+            cutoff = cls._source_cutoff(conversation)
             # Gather all messages across all conversations for this user+character pair,
             # ordered chronologically so the summary covers the full relationship history
             messages = (
@@ -110,17 +116,19 @@ class ConversationSummaryService:
                     conversation__user=conversation.user,
                     conversation__character=conversation.character,
                 )
-                .order_by("created_at")
+                .order_by("created_at", "message_id")
                 .select_related("conversation")
             )
+            if cutoff:
+                messages = messages.filter(created_at__gt=cutoff)
 
-            if not messages.exists():
+            # One bounded read, then restore chronology. A separate count and
+            # open-ended offset slice can exceed the limit if messages arrive
+            # between those two queries.
+            messages = list(messages.order_by("-created_at", "-message_id")[:SUMMARY_MAX_MESSAGES])
+            messages.reverse()
+            if not messages:
                 return
-
-            # Limit to most recent SUMMARY_MAX_MESSAGES to stay within token budget
-            total = messages.count()
-            if total > SUMMARY_MAX_MESSAGES:
-                messages = messages[total - SUMMARY_MAX_MESSAGES]
 
             # Build conversation text
             conv_lines = []
@@ -136,7 +144,7 @@ class ConversationSummaryService:
             if latest_summary:
                 prev_summary_text = (  # noqa: E231 (colon in string literal)
                     f"Existing summary (build on this, don't repeat it):\n"  # noqa: E231
-                    f"{latest_summary.summary_text}\n\n"  # noqa: E231
+                    f"{latest_summary.summary_text[:12000]}\n\n"  # noqa: E231
                 )
 
             prompt = (
@@ -162,7 +170,12 @@ class ConversationSummaryService:
 
             summary_text = response["choices"][0]["message"]["content"].strip()
 
-            with transaction.atomic():
+            if not summary_text:
+                return
+            with memory_write_lock(conversation.user):
+                if generation(conversation, "summary_generation") != expected_generation:
+                    logger.info("Discarded stale summary generation for conversation %s", conversation.pk)
+                    return
                 # Deactivate all previous summaries for this user+character pair
                 # (not just this conversation — the old per-conversation scope)
                 ConversationSummary.objects.filter(
@@ -176,13 +189,11 @@ class ConversationSummaryService:
                     conversation=conversation,
                     summary_text=summary_text,
                     summary_type=ConversationSummary.SummaryType.ROLLING,
-                    covered_until_message=messages.last(),
+                    covered_until_message=messages[-1],
                     is_current=True,
                 )
-
-            # Update last_summarized_at on the conversation
-            conversation.last_summarized_at = timezone.now()
-            conversation.save(update_fields=["last_summarized_at", "updated_at"])
+                advance_summary(conversation.user, conversation.character, manual=False)
+                Conversation.objects.filter(pk=conversation.pk).update(last_summarized_at=timezone.now())
 
             logger.info(
                 "Generated cross-session summary for user=%s character=%s",
@@ -197,6 +208,13 @@ class ConversationSummaryService:
             )
 
     # ---------- Retrieval ----------
+
+    @classmethod
+    def _source_cutoff(cls, conversation):
+        # Newly created conversations still honor a tombstone on older ones.
+        return Conversation.objects.filter(user=conversation.user, character=conversation.character).aggregate(
+            cutoff=Max("summary_source_cutoff")
+        )["cutoff"]
 
     @classmethod
     def get_latest_summary(cls, conversation: Conversation) -> Optional[ConversationSummary]:

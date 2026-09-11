@@ -1,6 +1,7 @@
 // src/services/conversationService.js
 
 import { API } from "../config/constants";
+import { validUserMessage } from "../utils/textLimits";
 import { apiFetch, getAccessToken } from "./apiClient";
 import { refreshAccessToken } from "./authService";
 import { idempotencyHeaders } from "../utils/idempotency";
@@ -93,6 +94,13 @@ export async function startConversation(payload) {
 
 export async function sendMessage(conversationId, payload, operationId) {
   // payload: { content }
+  if (!validUserMessage(payload?.content)) {
+    throw createApiError({
+      message: "invalid_user_message",
+      code: "invalid_user_message",
+      status: 400,
+    });
+  }
   await ensureAuth();
 
   let response;

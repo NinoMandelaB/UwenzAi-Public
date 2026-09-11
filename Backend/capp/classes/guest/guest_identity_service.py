@@ -230,7 +230,7 @@ class GuestIdentityService:
             return {"status": "fail", "data": "legacy_session_already_migrated"}
 
         quota = GuestTokenQuota.objects.filter(session_id=owner_key).first()
-        if quota is not None and quota.claimed_by_id is not None:
+        if quota is not None and (quota.claimed_by_id is not None or quota.claimed_at is not None):
             return {"status": "fail", "data": "legacy_session_already_claimed"}
 
         has_conversations = Conversation.objects.filter(

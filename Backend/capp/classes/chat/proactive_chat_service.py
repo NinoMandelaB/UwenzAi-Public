@@ -3,7 +3,7 @@ import logging
 import uuid
 from celery.exceptions import SoftTimeLimitExceeded
 from django.utils import timezone
-from django.db import transaction
+from django.db import OperationalError, transaction
 from django.db.models import Q
 
 from capp.models import (
@@ -16,6 +16,11 @@ from capp.models import (
     MemoryFact,
 )
 from capp.classes.ai.cortecs_client import CortecsClient
+from capp.classes.ai.background_prompts import (
+    build_background_messages,
+    untrusted_facts,
+    untrusted_history,
+)
 from capp.classes.chat import unread_service
 from capp.classes.push.push_service import PushService
 from capp.classes.billing.paid_features import (
@@ -113,6 +118,22 @@ class ProactiveChatService:
                     cls._send_proactive_message(pref)
                     sent_count += 1
             except SoftTimeLimitExceeded:
+                raise
+            except OperationalError:
+                # The DB connection died mid-sweep (e.g. a managed Postgres
+                # instance suspending itself while idle, then taking a beat
+                # to wake back up). Abort the whole sweep instead of
+                # silently swallowing this and every subsequent pref's
+                # failure one-by-one -- letting this propagate lets the
+                # Celery task's own retry/backoff (see capp/tasks.py) pick
+                # the sweep back up shortly, once the connection is healthy.
+                # Nothing is lost: a proactive send derives its idempotency
+                # key from the last non-proactive message, so a retried
+                # sweep can never double-send.
+                logger.warning(
+                    "DB connection lost while checking proactive pref %s; aborting sweep for retry",
+                    pref.id,
+                )
                 raise
             except Exception as e:
                 logger.exception(
@@ -248,12 +269,14 @@ class ProactiveChatService:
             # Build context
             context = cls._build_context(conversation, character, user)
 
-            # Build prompt with NSFW instructions
+            # Build the task prompt, then wrap it in the same trusted envelope
+            # the chat path uses (platform rules, NSFW flag, safety sandwich).
             prompt = cls._build_prompt(context, character)
+            messages = build_background_messages(prompt, character)
 
             # Generate message
             response = CortecsClient.chat_completion(
-                messages=[{"role": "user", "content": prompt}],
+                messages=messages,
                 max_tokens=150,
                 temperature=0.8,
             )
@@ -270,8 +293,8 @@ class ProactiveChatService:
                 PaidFeature.refund(reservation, reason="provider_returned_empty")
                 return
 
-            # Optional: Run through moderation (if service exists)
-            # For now, we assume it's safe
+            # Output moderation is prompt-only by operator decision (no text
+            # classifier exists in this codebase); see background_prompts.py.
 
             # Create the AI message
             with transaction.atomic():
@@ -329,6 +352,16 @@ class ProactiveChatService:
 
         except SoftTimeLimitExceeded:
             raise
+        except OperationalError:
+            # Propagate so the sweep-level handler above (and ultimately the
+            # Celery task's retry/backoff) can react to the DB outage
+            # instead of this being logged as an ordinary per-user failure.
+            # Deliberately does NOT refund the reservation here: PaidFeature
+            # reserve/settle/refund are themselves DB writes that would
+            # likely fail the same way right now: the next retried sweep
+            # re-derives the same idempotent operation_id, finds the
+            # reservation still RESERVED, and picks the send back up.
+            raise
         except Exception:
             logger.exception("Failed to send proactive message for pref %s", pref.id)
             if reservation is not None:
@@ -344,11 +377,13 @@ class ProactiveChatService:
         # Get last 5 messages
         recent_messages = Message.objects.filter(conversation=conversation).order_by("-created_at")[:5]
 
-        history_lines = []
-        for msg in reversed(recent_messages):
-            sender = "You" if msg.sender_type == Message.SenderType.USER else character.name
-            history_lines.append(f"{sender}: {msg.content}")
-        history = "\n".join(history_lines) if history_lines else "No prior conversation."
+        # History and facts are user-influenced text echoed into the prompt:
+        # escape prompt-boundary syntax and cap each field at the leaf level.
+        history_pairs = [
+            ("You" if msg.sender_type == Message.SenderType.USER else character.name, msg.content)
+            for msg in reversed(recent_messages)
+        ]
+        history = untrusted_history(history_pairs) or "No prior conversation."
 
         # Get memory facts (top 5 by importance, limited to this character or general)
         memory_facts = MemoryFact.objects.filter(
@@ -356,7 +391,7 @@ class ProactiveChatService:
             is_active=True,
         ).order_by("-importance_score")[:5]
 
-        facts_text = "\n".join([f"- {f.fact_text}" for f in memory_facts]) if memory_facts else "No specific facts."
+        facts_text = untrusted_facts(f.fact_text for f in memory_facts) or "No specific facts."
 
         return {
             "character_name": character.name,
@@ -370,12 +405,16 @@ class ProactiveChatService:
 
     @classmethod
     def _build_prompt(cls, context: dict, character: Character) -> str:
-        """Build the AI prompt for proactive message with NSFW instruction."""
-        nsfw_instruction = ""
+        """Build the task prompt for a proactive message.
+
+        The NSFW policy, platform rules, and safety sandwich are supplied by
+        ``build_background_messages`` as trusted system turns; this prompt
+        only carries the task and its (escaped) context.
+        """
         if character.nsfw_enabled:
             nsfw_instruction = (
-                "The character may be flirtatious, romantic, or explict depending on previous conversation. "
-                "avoid illegal content."
+                "The character may be flirtatious or romantic if the previous conversation "
+                "supports it, within the platform rules and NSFW flag above."
             )
         else:
             nsfw_instruction = (

@@ -1,9 +1,14 @@
 # capp/classes/ai/token_utils.py
 import logging
+import json
 from typing import List, Dict, Optional
 from capp.classes.ai.tokenizer_factory import get_tokenizer_for_model
 
 logger = logging.getLogger(__name__)
+
+
+class PromptBudgetExceeded(ValueError):
+    """Mandatory instructions/current turn cannot safely fit the context."""
 
 
 class TokenUtils:
@@ -18,15 +23,25 @@ class TokenUtils:
         return len(tokenizer.encode(text))
 
     @classmethod
-    def count_message_tokens(cls, messages: List[Dict[str, str]], model: Optional[str] = None) -> int:
+    def count_message_tokens(
+        cls, messages: List[Dict[str, str]], model: Optional[str] = None, tools: Optional[List[Dict]] = None
+    ) -> int:
         """Count tokens for a list of chat messages."""
-        if not messages:
+        if not messages and not tools:
             return 0
         tokenizer = get_tokenizer_for_model(model)
-        # Build a single string representation to tokenize (simplified; for exact counts we'd need chat templates)
-        # For consistent behaviour, we concatenate all message contents with spaces
-        combined = " ".join(msg.get("content", "") for msg in messages)
-        return len(tokenizer.encode(combined))
+        # Count every message independently, including tool metadata. Reserve
+        # framing per message and reply priming; concatenation undercounted
+        # boundaries and entirely ignored tool-call arguments/results.
+        total = 3
+        for msg in messages:
+            total += 8
+            for value in msg.values():
+                text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+                total += len(tokenizer.encode(text))
+        if tools:
+            total += 8 + len(tokenizer.encode(json.dumps(tools, ensure_ascii=False, sort_keys=True)))
+        return total
 
     @classmethod
     def truncate_messages(
@@ -36,7 +51,7 @@ class TokenUtils:
         min_messages: int = 2,
         model: Optional[str] = None,
     ) -> List[Dict[str, str]]:
-        """Truncate messages so total tokens <= max_tokens, preserving system message."""
+        """Preserve the system and minimum newest messages, or fail closed."""
         if not messages:
             return []
 
@@ -48,24 +63,14 @@ class TokenUtils:
         if cls.count_message_tokens(messages, model) <= max_tokens:
             return messages
 
-        kept = []
-        for msg in reversed(other_msgs):
-            tentative = []
-            if system_msg:
-                tentative.append(system_msg)
-            tentative = tentative + [msg] + kept
-
-            if len(kept) + 1 < min_messages:
-                kept.insert(0, msg)
-                continue
-
-            if cls.count_message_tokens(tentative, model) <= max_tokens:
-                kept.insert(0, msg)
-            else:
+        minimum = min(max(0, min_messages), len(other_msgs))
+        prefix = [system_msg] if system_msg else []
+        kept = other_msgs[-minimum:] if minimum else []
+        if cls.count_message_tokens(prefix + kept, model) > max_tokens:
+            raise PromptBudgetExceeded("prompt_budget_exceeded")
+        remaining = other_msgs[:-minimum] if minimum else other_msgs
+        for msg in reversed(remaining):
+            if cls.count_message_tokens(prefix + [msg] + kept, model) > max_tokens:
                 break
-
-        result = []
-        if system_msg:
-            result.append(system_msg)
-        result.extend(kept)
-        return result
+            kept.insert(0, msg)
+        return prefix + kept

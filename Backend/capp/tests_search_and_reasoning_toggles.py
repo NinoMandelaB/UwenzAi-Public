@@ -458,7 +458,11 @@ class SearchToolLoopTests(TestCase):
 
         chat_completion.assert_called_once()
         _, kwargs = chat_completion.call_args
-        self.assertNotIn("tools", kwargs)
+        # Web-search tools must stay withheld, but the reminder tool is always
+        # offered to non-guest conversations regardless of the search toggle.
+        self.assertIn("tools", kwargs)
+        tool_names = {spec["function"]["name"] for spec in kwargs["tools"]}
+        self.assertEqual(tool_names, {"create_reminder", "update_reminder", "cancel_reminder", "update_timezone"})
         self.assertTrue(any("WEB SEARCH UNAVAILABLE" in message.get("content", "") for message in kwargs["messages"]))
 
 
@@ -589,14 +593,14 @@ class ReasoningEffortMappingTests(TestCase):
 
 
 class QueryBuilderPrivacyTests(TestCase):
-    """Privacy requirement: outbound search queries must never carry user identifiers."""
+    """Privacy requirement: outbound search queries must never carry the
+    requesting user's own identifiers or UUIDs."""
 
-    def test_strips_email_addresses(self):
+    def test_allows_email_addresses(self):
         from capp.classes.search.query_builder import build_search_query
 
-        query = build_search_query("weather for nino.bachmann@pm.me today")
-        self.assertNotIn("@", query)
-        self.assertNotIn("pm.me", query)
+        query = build_search_query("German embassy Bern email contact@example.org")
+        self.assertIn("contact@example.org", query)
 
     def test_does_not_accept_user_object_fields_into_query(self):
         from capp.classes.search.query_builder import build_search_query
@@ -870,7 +874,19 @@ class BYOKToggleEnablementTests(TestCase):
         _, kwargs = chat_completion.call_args
         self.assertIn("tools", kwargs)
         tool_names = {spec["function"]["name"] for spec in kwargs["tools"]}
-        self.assertEqual(tool_names, {"web_search", "open_url"})
+        # The reminder tool is always offered to non-guest conversations, in
+        # addition to the web-search tools enabled here.
+        self.assertEqual(
+            tool_names,
+            {
+                "web_search",
+                "open_url",
+                "create_reminder",
+                "update_reminder",
+                "cancel_reminder",
+                "update_timezone",
+            },
+        )
         self.assertFalse(any("WEB SEARCH UNAVAILABLE" in message.get("content", "") for message in kwargs["messages"]))
 
     @mock.patch.dict(
@@ -908,7 +924,11 @@ class BYOKToggleEnablementTests(TestCase):
 
         chat_completion.assert_called_once()
         _, kwargs = chat_completion.call_args
-        self.assertNotIn("tools", kwargs)
+        # Web-search tools must stay withheld, but the reminder tool is always
+        # offered to non-guest conversations regardless of the search toggle.
+        self.assertIn("tools", kwargs)
+        tool_names = {spec["function"]["name"] for spec in kwargs["tools"]}
+        self.assertEqual(tool_names, {"create_reminder", "update_reminder", "cancel_reminder", "update_timezone"})
 
     @mock.patch.dict(
         os.environ,

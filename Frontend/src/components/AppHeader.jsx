@@ -14,6 +14,7 @@ import {
   ArrowLeftRight,
   AlertTriangle,
   Ticket,
+  Mail,
 } from "lucide-react";
 import { useTheme } from "../context/ThemeContext";
 import { useAuth } from "../context/AuthContext";
@@ -234,6 +235,13 @@ export default function AppHeader({ compact = false, className = "" }) {
                     <span>{t("common.transactions")}</span>
                   </button>
                   <button
+                    onClick={() => handleNavigate("/contact")}
+                    className="theme-text flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left text-[14px] font-bold whitespace-nowrap transition-all hover:bg-indigo-500/10 hover:text-indigo-600 dark:hover:bg-indigo-400/10 dark:hover:text-indigo-400"
+                  >
+                    <Mail size={18} className="opacity-70" />
+                    <span>{t("common.contactFeedback")}</span>
+                  </button>
+                  <button
                     onClick={handleLogout}
                     disabled={isLoggingOut}
                     className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left text-[14px] font-bold whitespace-nowrap text-red-500 transition-all hover:bg-red-500/10 disabled:opacity-60"
@@ -275,6 +283,13 @@ export default function AppHeader({ compact = false, className = "" }) {
                   >
                     <UserPlus size={18} className="opacity-70" />
                     <span>{t("common.signUp")}</span>
+                  </button>
+                  <button
+                    onClick={() => handleNavigate("/contact")}
+                    className="theme-text flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left text-[14px] font-bold whitespace-nowrap transition-all hover:bg-indigo-500/10 hover:text-indigo-600 dark:hover:bg-indigo-400/10 dark:hover:text-indigo-400"
+                  >
+                    <Mail size={18} className="opacity-70" />
+                    <span>{t("common.contactFeedback")}</span>
                   </button>
                 </div>
               </div>

@@ -1,6 +1,14 @@
 // src/context/AuthContext.jsx
 
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   setAccessToken,
   clearAccessToken,
@@ -8,11 +16,15 @@ import {
   getAccessToken,
   apiFetch,
   setSessionExpiredCallback, // <-- NEW
+  invalidateAuthRequests,
 } from "../services/apiClient";
 import {
   clearStoredAuth,
   getStoredUser,
   signoutUser,
+  departingAccessToken,
+  getFeaturePreferences,
+  updateFeaturePreferences,
 } from "../services/authService";
 import { API, STORAGE_KEYS } from "../config/constants";
 import { ensureGuestSession, resetGuestSession } from "../utils/session";
@@ -28,8 +40,12 @@ export function AuthProvider({ children }) {
   const [accessToken, setAccessTokenState] = useState(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const session = useRef({ generation: 0, user: getStoredUser() });
+  const [sessionGeneration, setSessionGeneration] = useState(0);
+  const preferenceRequest = useRef(0);
 
   const syncUserState = (nextUser) => {
+    session.current.user = nextUser || null;
     setUser(nextUser || null);
     setIsAuthenticated(Boolean(nextUser));
   };
@@ -41,6 +57,9 @@ export function AuthProvider({ children }) {
   };
 
   const setAuthSession = ({ user: nextUser, accessToken: nextAccessToken }) => {
+    invalidateAuthRequests();
+    session.current.generation += 1;
+    setSessionGeneration(session.current.generation);
     if (nextUser) {
       localStorage.setItem(STORAGE_KEYS.AUTH_USER, JSON.stringify(nextUser));
       syncUserState(nextUser);
@@ -52,12 +71,62 @@ export function AuthProvider({ children }) {
   };
 
   const clearAuthState = () => {
+    invalidateAuthRequests();
+    session.current.generation += 1;
+    setSessionGeneration(session.current.generation);
     clearStoredAuth();
     syncUserState(null);
     syncAccessToken(null);
+    // Local retirement must not wait on any network call.
+    void unsubscribePushLocally().catch(() => {});
   };
 
+  // The shared preference action owns identity checks; a captured profile can
+  // never restore auth. A newer GET/PATCH supersedes any older request.
+  const syncFeaturePreferences = useCallback(
+    async (updates, { signal } = {}) => {
+      const scope = { ...session.current };
+      if (!scope.user?.user_id || !getAccessToken()) return null;
+      const request = ++preferenceRequest.current;
+      const options = { signal };
+      const data =
+        updates === undefined
+          ? await getFeaturePreferences(options)
+          : await updateFeaturePreferences(updates, options);
+      if (
+        signal?.aborted ||
+        request !== preferenceRequest.current ||
+        scope.generation !== session.current.generation ||
+        scope.user.user_id !== session.current.user?.user_id
+      )
+        return null;
+      const prefs = data?.data?.feature_preferences;
+      if (!prefs || typeof prefs !== "object" || Array.isArray(prefs)) {
+        throw new Error("Invalid feature preferences response.");
+      }
+      const validated = Object.fromEntries(
+        ["reminders", "deepthink", "websearch", "memory_editor"]
+          .filter((key) => typeof prefs[key] === "boolean")
+          .map((key) => [key, prefs[key]]),
+      );
+      const nextUser = {
+        ...session.current.user,
+        feature_preferences: {
+          ...session.current.user.feature_preferences,
+          ...validated,
+        },
+      };
+      session.current.user = nextUser;
+      setUser(nextUser);
+      localStorage.setItem(STORAGE_KEYS.AUTH_USER, JSON.stringify(nextUser));
+      return nextUser.feature_preferences;
+    },
+    [],
+  );
+
   const refreshCurrentUser = async () => {
+    const generation = session.current.generation;
+    const preferencesAtStart = preferenceRequest.current;
     try {
       const tokenInMemory = getAccessToken();
       if (!tokenInMemory) {
@@ -69,6 +138,7 @@ export function AuthProvider({ children }) {
         method: "GET",
         skipAuthRefresh: true,
       });
+      if (generation !== session.current.generation) return null;
 
       let data = null;
       try {
@@ -76,28 +146,34 @@ export function AuthProvider({ children }) {
       } catch {
         data = null;
       }
+      if (generation !== session.current.generation) return null;
 
-      if (!response.ok || data?.status !== "success") {
+      if ([401, 403].includes(response.status)) {
         clearAuthState();
         return null;
       }
+      if (!response.ok || data?.status !== "success") return null;
 
       const nextUser = data?.data?.user || null;
       if (!nextUser) {
         clearAuthState();
         return null;
       }
+      if (preferencesAtStart !== preferenceRequest.current) {
+        nextUser.feature_preferences =
+          session.current.user?.feature_preferences;
+      }
 
       localStorage.setItem(STORAGE_KEYS.AUTH_USER, JSON.stringify(nextUser));
       syncUserState(nextUser);
       return nextUser;
     } catch {
-      clearAuthState();
       return null;
     }
   };
 
   const initializeAuth = async () => {
+    const generation = session.current.generation;
     try {
       const storedUser = getStoredUser();
       if (!storedUser) {
@@ -108,6 +184,7 @@ export function AuthProvider({ children }) {
       setUser(storedUser);
 
       const refreshed = await refreshAccessToken();
+      if (generation !== session.current.generation) return;
       if (!refreshed?.accessToken) {
         clearAuthState();
         return;
@@ -117,6 +194,13 @@ export function AuthProvider({ children }) {
         user: refreshed.user || storedUser,
         accessToken: refreshed.accessToken,
       });
+    } catch {
+      // Connectivity loss is not evidence of expired credentials. Keep the
+      // stored profile/subscription for retry, without claiming authenticated.
+      if (generation === session.current.generation) {
+        syncUserState(null);
+        syncAccessToken(null);
+      }
     } finally {
       setIsLoading(false);
     }
@@ -130,23 +214,23 @@ export function AuthProvider({ children }) {
   };
 
   const logout = async () => {
+    // Renew a verifiably expired departing token (bounded), start cleanup with
+    // that token, then invalidate locally immediately.
+    const authToken = await departingAccessToken();
+    const cleanup = signoutUser({ authToken });
+    clearAuthState();
+    resetGuestSession();
     try {
-      await signoutUser();
+      return await cleanup;
     } catch {
       // Even if backend signout fails, clear client auth state.
-    } finally {
-      clearAuthState();
-      // The cookie may or may not have survived this session: it is cleared only
-      // when logging in actually transferred a guest session into the account.
-      // Dropping the cached bootstrap makes the next guest action ask the server
-      // which it was, instead of assuming.
-      resetGuestSession();
     }
   };
 
   useEffect(() => {
     initializeAuth();
     return () => {
+      session.current.generation += 1;
       clearAccessToken();
     };
   }, []);
@@ -188,14 +272,34 @@ export function AuthProvider({ children }) {
       isAuthenticated,
       isAdmin,
       isLoading,
-      setUser: syncUserState,
+      setUser: (nextUser) => {
+        // Profile-editor callbacks must obey the same identity boundary.
+        if (
+          sessionGeneration !== session.current.generation ||
+          !getAccessToken() ||
+          !nextUser ||
+          nextUser.user_id !== session.current.user?.user_id
+        )
+          return;
+        syncUserState(nextUser);
+      },
       setAuthSession,
       login,
       logout,
       refreshCurrentUser,
       clearAuthState,
+      sessionGeneration,
+      syncFeaturePreferences,
     }),
-    [user, accessToken, isAuthenticated, isAdmin, isLoading],
+    [
+      user,
+      accessToken,
+      isAuthenticated,
+      isAdmin,
+      isLoading,
+      sessionGeneration,
+      syncFeaturePreferences,
+    ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

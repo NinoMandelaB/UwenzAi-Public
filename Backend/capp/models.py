@@ -1,16 +1,15 @@
 import uuid
+import logging
 from decimal import Decimal
-import random
-import string
 from datetime import timedelta
 
-from django.db.models.signals import pre_save, post_delete
+from django.db.models.signals import pre_save, pre_delete, post_delete
 from django.dispatch import receiver
 
 from django.contrib.auth.base_user import BaseUserManager
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin
 from django.core.validators import MaxValueValidator, MinValueValidator
-from django.db import models
+from django.db import models, router, transaction
 from capp.fields import EncryptedTextField
 from django.db.models import Q
 from django.utils import timezone
@@ -236,6 +235,18 @@ class CustomUser(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
         help_text="IANA timezone name (e.g., Africa/Nairobi, America/New_York)",
     )
 
+    # Per-account feature visibility toggles (Settings → Advanced). Keys are
+    # managed by capp.classes.auth.feature_preferences — arbitrary keys are
+    # rejected there, so this field only ever holds known feature flags.
+    # Default: {} → use FeaturePreferences availability defaults, without
+    # enabling per-chat search/deep reasoning. Saved choices override defaults.
+    # BYOK keeps its own always-available section and is not a flag here.
+    feature_preferences = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Optional chat features the user has enabled (reminders, deepthink, websearch, memory_editor)",
+    )
+
     USERNAME_FIELD = "username"
     REQUIRED_FIELDS = []
 
@@ -441,7 +452,7 @@ class PasswordRecovery(models.Model):
         on_delete=models.CASCADE,
         related_name="password_recoveries",
     )
-    code = models.CharField(max_length=6, db_index=True)
+    code = models.CharField(max_length=128, db_index=True)
     is_used = models.BooleanField(default=False)
     expires_at = models.DateTimeField()
     used_at = models.DateTimeField(blank=True, null=True)
@@ -460,10 +471,22 @@ class PasswordRecovery(models.Model):
 
     @classmethod
     def generate_code(cls, length=6) -> str:
-        return "".join(random.choices(string.digits, k=length))
+        from capp.classes.auth.codes import generate_code
+
+        return generate_code(length)
+
+    def save(self, *args, **kwargs):
+        from capp.classes.auth.codes import digest_code
+
+        if isinstance(self.code, str) and len(self.code) == 6 and self.code.isascii() and self.code.isdigit():
+            self.raw_code = self.code  # transient: email only; never persisted
+            self.code = digest_code(self.code, self.user_id, "password_reset")
+        super().save(*args, **kwargs)
 
     @classmethod
+    @transaction.atomic
     def create_for_user(cls, user, expiry_minutes=10):
+        CustomUser.objects.select_for_update().get(pk=user.pk)
         cls.objects.filter(user=user, is_used=False).update(
             is_used=True,
             used_at=timezone.now(),
@@ -536,7 +559,7 @@ class EmailChangeRequest(TimeStampedModel):
     user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name="email_change_requests")
     new_email_hash = models.CharField(max_length=64)
     new_email_encrypted = models.TextField()
-    code = models.CharField(max_length=6)
+    code = models.CharField(max_length=128)
     expires_at = models.DateTimeField()
     is_used = models.BooleanField(default=False)
     attempts = models.PositiveIntegerField(default=0)
@@ -550,7 +573,16 @@ class EmailChangeRequest(TimeStampedModel):
 
     @classmethod
     def generate_code(cls, length=6) -> str:
-        return "".join(random.choices(string.digits, k=length))
+        from capp.classes.auth.codes import generate_code
+
+        return generate_code(length)
+
+    def save(self, *args, **kwargs):
+        from capp.classes.auth.codes import digest_code
+
+        if isinstance(self.code, str) and len(self.code) == 6 and self.code.isascii() and self.code.isdigit():
+            self.code = digest_code(self.code, self.user_id, "email_change")
+        super().save(*args, **kwargs)
 
     def is_expired(self) -> bool:
         return timezone.now() >= self.expires_at
@@ -991,7 +1023,28 @@ class Character(TimeStampedModel):
     def save(self, *args, **kwargs):
         if not self.slug:
             self.slug = self._generate_unique_slug(self.name, self.character_id)
-        super().save(*args, **kwargs)
+        using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        update_fields = kwargs.get("update_fields")
+        pending_avatar = (
+            self.avatar
+            if (update_fields is None or "avatar" in update_fields) and self.avatar and not self.avatar._committed
+            else None
+        )
+        # Avatar replacement queues erasure in pre_save. Commit that job only
+        # together with the replacement row, never before the new save succeeds.
+        try:
+            with transaction.atomic(using=using):
+                super().save(*args, **kwargs)
+        except BaseException:
+            # FileField can finish an upload before the SQL write fails. Queue
+            # its actual storage key outside the failed savepoint, not the old
+            # avatar whose replacement (and deletion job) was rolled back.
+            if pending_avatar is not None and pending_avatar._committed:
+                try:
+                    delete_file_after_commit(pending_avatar, using)
+                except Exception:
+                    logging.getLogger(__name__).error("Could not enqueue failed avatar upload cleanup")
+            raise
 
     @classmethod
     def _generate_unique_slug(cls, name: str, character_id=None) -> str:
@@ -1029,6 +1082,134 @@ class ProactiveChatPreference(TimeStampedModel):
 
     def __str__(self):
         return f"{self.user.username} - {self.character.name} ({'enabled' if self.enabled else 'disabled'})"
+
+
+class Reminder(TimeStampedModel):
+    """
+    A one-off, user-requested reminder ("remind me to call Paul tomorrow
+    evening"), extracted via the create_reminder tool call in
+    capp/classes/reminders/tool_loop.py.
+
+    Deliberately independent of ProactiveChatPreference: a reminder is
+    something the user explicitly asked for in this exact conversation turn,
+    not an unprompted re-engagement nudge, so it must still fire even if the
+    user has proactive/re-engagement messages switched off for this
+    character. Never gate delivery on ProactiveChatPreference.enabled.
+    """
+
+    class StatusChoices(models.TextChoices):
+        PENDING = "pending", "Pending"
+        SENT = "sent", "Sent"
+        CANCELLED = "cancelled", "Cancelled"
+        FAILED_INSUFFICIENT_SPARKS = "failed_insufficient_sparks", "Failed - insufficient sparks"
+        FAILED_ERROR = "failed_error", "Failed - error"
+
+    reminder_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name="reminders")
+    character = models.ForeignKey(Character, on_delete=models.CASCADE, related_name="reminders")
+    conversation = models.ForeignKey("Conversation", on_delete=models.CASCADE, related_name="reminders")
+    source_message = models.ForeignKey(
+        "Message",
+        on_delete=models.SET_NULL,
+        related_name="+",
+        blank=True,
+        null=True,
+        help_text="The user message this reminder was extracted from, for audit/debugging.",
+    )
+
+    reminder_text = EncryptedTextField(help_text="What to remind the user about, e.g. 'call Paul'.")
+
+    due_at = models.DateTimeField(help_text="Absolute UTC time the reminder should fire.")
+    timezone_snapshot = models.CharField(
+        max_length=50,
+        help_text="IANA timezone used to resolve the user's relative request at creation time.",
+    )
+
+    status = models.CharField(max_length=30, choices=StatusChoices.choices, default=StatusChoices.PENDING)
+    # Every edit invalidates an in-flight delivery snapshot.
+    revision = models.PositiveIntegerField(default=1)
+    sent_at = models.DateTimeField(blank=True, null=True)
+    failure_reason = models.TextField(blank=True, null=True)
+    notice_sent = models.BooleanField(
+        default=False,
+        help_text=(
+            "Whether the user has already been sent a zero-cost 'still retrying' "
+            "system notice for this reminder. Guards against re-notifying on every "
+            "5-minute retry tick during the grace period -- the notice should fire "
+            "at most once per reminder, not once per failed attempt."
+        ),
+    )
+
+    delivery_message = models.ForeignKey(
+        "Message",
+        on_delete=models.SET_NULL,
+        related_name="+",
+        blank=True,
+        null=True,
+        help_text="The AI message actually delivered when this reminder fired.",
+    )
+
+    class Meta:
+        db_table = "reminders"
+        ordering = ["due_at"]
+        indexes = [
+            models.Index(fields=["status", "due_at"]),
+            models.Index(fields=["user", "status"]),
+        ]
+
+    def __str__(self):
+        return f"Reminder({self.user.username} @ {self.due_at.isoformat()}: {self.reminder_text[:40]!r})"
+
+
+class ReminderDeliveryAttempt(TimeStampedModel):
+    """Durable recovery record, deliberately not cascade-linked to a schedule."""
+
+    class Status(models.TextChoices):
+        ACTIVE = "active", "Active"
+        REFUND_PENDING = "refund_pending", "Refund pending"
+        REFUNDED = "refunded", "Closed without delivery"
+        DELIVERED = "delivered", "Delivered"
+
+    attempt_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    reminder_key = models.UUIDField(db_index=True)
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name="+")
+    revision = models.PositiveIntegerField()
+    lease_until = models.DateTimeField(db_index=True)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.ACTIVE, db_index=True)
+    reservation = models.OneToOneField(
+        "BillingReservation", on_delete=models.PROTECT, null=True, blank=True, related_name="reminder_attempt"
+    )
+
+    class Meta:
+        db_table = "reminder_delivery_attempts"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["reminder_key"], condition=Q(status="active"), name="unique_active_reminder_attempt"
+            ),
+        ]
+
+
+class ReminderToolExecution(TimeStampedModel):
+    """One logical mutation per source turn/family, independent of provider IDs.
+
+    Source UUID is not a foreign key: deleting the source or reminder must not
+    permit a delayed task to repeat a previously acknowledged side effect.
+    Results include private reminder text and are encrypted just like Messages.
+    """
+
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name="+")
+    source_message_key = models.UUIDField()
+    family = models.CharField(max_length=20)
+    tool_name = models.CharField(max_length=40)
+    result = EncryptedTextField()
+
+    class Meta:
+        db_table = "reminder_tool_executions"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "source_message_key", "family"], name="unique_reminder_tool_execution"
+            ),
+        ]
 
 
 # ============================================================
@@ -1295,6 +1476,11 @@ class Conversation(TimeStampedModel):
     started_at = models.DateTimeField(default=timezone.now)
     last_message_at = models.DateTimeField(blank=True, null=True)
     last_summarized_at = models.DateTimeField(blank=True, null=True)
+    # Persisted fences survive summary deletion. Writers lock the owning user
+    # before comparing/updating these values across the relevant conversations.
+    memory_generation = models.PositiveBigIntegerField(default=0)
+    summary_generation = models.PositiveBigIntegerField(default=0)
+    summary_source_cutoff = models.DateTimeField(blank=True, null=True)
     # Read watermark for the single owner of this conversation. Unread is
     # derived from it rather than stored as a counter so that deleting or
     # resetting messages can never leave a badge stuck on a stale number.
@@ -1458,6 +1644,9 @@ class MemoryFact(TimeStampedModel):
     )
 
     fact_text = EncryptedTextField()  # encrypted at rest with MESSAGE_ENCRYPTION_KEY
+    # Keyed digest for exact deduplication without querying encrypted text.
+    # Legacy rows are matched lazily; no automatic-memory storage cap.
+    content_key = models.CharField(max_length=64, blank=True, default="", db_index=True)
     fact_type = models.CharField(max_length=30, choices=FactType.choices, default=FactType.OTHER)
 
     confidence_score = models.DecimalField(
@@ -2217,8 +2406,13 @@ class SparkTransaction(TimeStampedModel):
         BONUS = "bonus", "Bonus"
 
     spark_transaction_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    spark_pool = models.ForeignKey(SparkPool, on_delete=models.CASCADE, related_name="transactions")
-    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name="spark_transactions")
+    # Retain ledger entries when the private account and its balance are erased.
+    spark_pool = models.ForeignKey(
+        SparkPool, on_delete=models.SET_NULL, related_name="transactions", null=True, blank=True
+    )
+    user = models.ForeignKey(
+        CustomUser, on_delete=models.SET_NULL, related_name="spark_transactions", null=True, blank=True
+    )
 
     entry_type = models.CharField(max_length=20, choices=EntryType.choices)
     source = models.CharField(max_length=30, choices=SourceChoices.choices)
@@ -2248,7 +2442,7 @@ class SparkTransaction(TimeStampedModel):
         ]
 
     def __str__(self):
-        name = self.user.get_display_name()
+        name = self.user.get_display_name() if self.user_id else "Deleted account"
         return f"{name} - {self.entry_type} - sparks:{self.spark_amount} tokens:{self.token_amount}"  # noqa: E231
 
 
@@ -2271,7 +2465,9 @@ class PaymentTransaction(TimeStampedModel):
         TOKEN_PURCHASE = "token_purchase", "Token Purchase"
 
     payment_transaction_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name="payment_transactions")
+    user = models.ForeignKey(
+        CustomUser, on_delete=models.SET_NULL, related_name="payment_transactions", null=True, blank=True
+    )
     spark_pool = models.ForeignKey(
         SparkPool,
         on_delete=models.SET_NULL,
@@ -2319,7 +2515,7 @@ class PaymentTransaction(TimeStampedModel):
         ]
 
     def __str__(self):
-        name = self.user.get_display_name()
+        name = self.user.get_display_name() if self.user_id else "Deleted account"
         return f"{name} - {self.amount} {self.currency} - {self.status}"
 
 
@@ -2440,7 +2636,7 @@ class UsageCharge(TimeStampedModel):
     usage_charge_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(
         CustomUser,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
         related_name="usage_charges",
         null=True,  # ← allow for guests
         blank=True,
@@ -2452,7 +2648,7 @@ class UsageCharge(TimeStampedModel):
     claimed_from_guest_at = models.DateTimeField(blank=True, null=True)
     token_usage_log = models.OneToOneField(
         TokenUsageLog,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
         related_name="usage_charge",
         null=True,
         blank=True,
@@ -2489,7 +2685,7 @@ class UsageCharge(TimeStampedModel):
         ]
 
     def __str__(self):
-        name = self.user.get_display_name()
+        name = self.user.get_display_name() if self.user_id else "Guest or Deleted account"
         return (  # noqa: E231
             f"{name} - sparks:{self.sparks_charged} tokens:{self.tokens_charged} - {self.charge_source}"
         )
@@ -2593,8 +2789,9 @@ class BillingReservation(TimeStampedModel):
 
     # Ledger rows this reservation produced. One-to-one so a single reservation
     # can never be double-posted to the Spark ledger. Only populated for
-    # authenticated principals: SparkTransaction requires a pool and a user, so
-    # for unclaimed guests this reservation row is itself the audit record.
+    # authenticated principals: SparkTransaction is posted against an account
+    # pool (its links are nulled on erasure). For unclaimed guests this
+    # reservation row is itself the audit record.
     debit_spark_transaction = models.OneToOneField(
         SparkTransaction,
         on_delete=models.SET_NULL,
@@ -2727,8 +2924,10 @@ class AdminActionLog(TimeStampedModel):
     # The admin who performed the action.
     admin_user = models.ForeignKey(
         CustomUser,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
         related_name="admin_actions_performed",
+        null=True,
+        blank=True,
     )
 
     action_type = models.CharField(max_length=40, choices=ActionType.choices)
@@ -2763,7 +2962,8 @@ class AdminActionLog(TimeStampedModel):
         ]
 
     def __str__(self):
-        return f"{self.admin_user.username} — {self.action_type} — {self.created_at:%Y-%m-%d %H:%M}"  # noqa: E231
+        admin = self.admin_user.username if self.admin_user_id else "Deleted account"
+        return f"{admin} — {self.action_type} — {self.created_at:%Y-%m-%d %H:%M}"  # noqa: E231
 
 
 # ============================================================
@@ -2796,22 +2996,90 @@ class PushSubscription(TimeStampedModel):
         return f"{self.user.username} — {self.endpoint[:60]}"
 
 
-# Signal to delete image file when gallery image is deleted
+class MediaDeletionJob(TimeStampedModel):
+    """Retryable storage erasure; removed only after the object is deleted."""
+
+    model_label = models.CharField(max_length=100)
+    field_name = models.CharField(max_length=100)
+    file_name = models.CharField(max_length=1024)
+
+    def perform(self):
+        from django.apps import apps
+
+        # This table is populated only from server-owned FieldFile instances.
+        try:
+            model = apps.get_model(self.model_label)
+            field = model._meta.get_field(self.field_name)
+            # Do not destroy an object still used by a surviving shared image.
+            for owner_model, owner_field in (
+                (CustomUser, "avatar"),
+                (Character, "avatar"),
+                (CharacterGalleryImage, "image"),
+            ):
+                if owner_model.objects.using(self._state.db).filter(**{owner_field: self.file_name}).exists():
+                    self.delete()
+                    return True
+            field.storage.delete(self.file_name)
+        except Exception:
+            # Log the queue ID, not possibly identifying file names/provider
+            # exception payloads. The retained job remains available to retry.
+            logging.getLogger(__name__).error("Media erasure job %s needs retry", self.pk)
+            return False
+        self.delete()
+        return True
+
+
+def delete_file_after_commit(field_file, using=None):
+    """Never delete storage objects before a database deletion commits.
+
+    The durable outbox shares the caller's DB transaction. A rollback drops the
+    job; a crash or storage failure leaves it for the periodic retry worker.
+    """
+    if field_file:
+        job = MediaDeletionJob.objects.using(using).create(
+            model_label=field_file.field.model._meta.label,
+            field_name=field_file.field.name,
+            file_name=field_file.name,
+        )
+        transaction.on_commit(job.perform, using=using, robust=True)
+
+
+@receiver(pre_delete, sender=CustomUser)
+def scrub_deleted_account_metadata(sender, instance, using, **kwargs):
+    from capp.classes.auth.account_erasure import scrub_retained_personal_data
+
+    scrub_retained_personal_data(instance, using)
+
+
 @receiver(post_delete, sender=CharacterGalleryImage)
-def delete_gallery_image_file(sender, instance, **kwargs):
-    if instance.image:
-        instance.image.delete(save=False)
+def delete_gallery_image_file(sender, instance, using, **kwargs):
+    delete_file_after_commit(instance.image, using)
+
+
+@receiver(post_delete, sender=CustomUser)
+@receiver(post_delete, sender=Character)
+def delete_avatar_file(sender, instance, using, **kwargs):
+    delete_file_after_commit(instance.avatar, using)
 
 
 # Signal to delete old avatar when changed
 @receiver(pre_save, sender=Character)
 def delete_old_avatar_on_change(sender, instance, **kwargs):
-    if not instance.pk:
+    update_fields = kwargs.get("update_fields")
+    if not instance.pk or (update_fields is not None and "avatar" not in update_fields):
         return
     try:
-        old_avatar = Character.objects.get(pk=instance.pk).avatar
+        # Character.save supplies the atomic boundary. Lock before taking the
+        # storage snapshot, just as generation and account erasure do.
+        current = Character.objects.using(kwargs.get("using")).select_for_update().get(pk=instance.pk)
     except Character.DoesNotExist:
+        if not instance._state.adding:
+            # A stale plain save must not fall back to INSERT after deletion.
+            raise
         return
+    old_avatar = current.avatar
     new_avatar = instance.avatar
+    if current.status == Character.StatusChoices.ARCHIVED and new_avatar and new_avatar != old_avatar:
+        raise ValueError("Cannot publish an avatar on an archived character")
     if old_avatar and old_avatar != new_avatar:
-        old_avatar.delete(save=False)
+        delete_file_after_commit(old_avatar, kwargs.get("using"))

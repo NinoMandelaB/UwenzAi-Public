@@ -1,0 +1,110 @@
+# UwenzAi – robots.txt
+# https://uwenzai.com/robots.txt
+# Last updated: 2026-09-03
+
+# UwenzAi Limited — registered in Kenya, founded 2026
+# For AI assistant context see:    https://uwenzai.com/llms.txt
+
+# ──────────────────────────────────────────
+# STANDARD & REGIONAL SEARCH ENGINES
+# Allow indexing of public marketing pages only.
+# ──────────────────────────────────────────
+
+User-agent: Googlebot
+User-agent: Bingbot
+User-agent: YandexBot
+User-agent: Slurp
+User-agent: Baiduspider
+User-agent: DuckDuckBot
+User-agent: DuckAssistBot
+User-agent: Yeti
+User-agent: HaosouSpider
+User-agent: SeznamBot
+User-agent: Bravebot
+User-agent: PetalBot
+Allow: /$
+Allow: /characters
+Allow: /spark_pool
+Allow: /terms
+Allow: /privacy
+Allow: /responsible-use
+Disallow: /api/
+Disallow: /admin/
+Disallow: /chat/
+Disallow: /media/characters/
+Disallow: /media/gallery/
+Disallow: /dashboard/
+Disallow: /settings/
+Disallow: /profile/
+
+# ──────────────────────────────────────────
+# AI ANSWER/SEARCH ENGINES — allow like Googlebot
+# These fetch pages to answer user queries in real time; they do not
+# train models on the content.
+# ──────────────────────────────────────────
+
+User-agent: PerplexityBot
+User-agent: ChatGPT-User
+User-agent: OAI-SearchBot
+User-agent: MistralAI-User
+User-agent: Grok
+User-agent: GrokBot
+User-agent: xAI-Bot
+Allow: /$
+Allow: /characters
+Allow: /spark_pool
+Allow: /terms
+Allow: /privacy
+Allow: /responsible-use
+Disallow: /api/
+Disallow: /admin/
+Disallow: /chat/
+Disallow: /media/characters/
+Disallow: /media/gallery/
+Disallow: /dashboard/
+Disallow: /settings/
+Disallow: /profile/
+
+# ──────────────────────────────────────────
+# AI TRAINING CRAWLERS — block entirely
+# ──────────────────────────────────────────
+
+User-agent: GPTBot
+User-agent: ClaudeBot
+User-agent: anthropic-ai
+User-agent: Google-Extended
+User-agent: CCBot
+User-agent: cohere-ai
+User-agent: Amazonbot
+User-agent: Applebot-Extended
+User-agent: Meta-ExternalAgent
+User-agent: Meta-ExternalFetcher
+User-agent: Bytespider
+User-agent: DeepSeekBot
+Disallow: /
+
+# ──────────────────────────────────────────
+# DEFAULT — all other bots
+# ──────────────────────────────────────────
+
+User-agent: *
+Allow: /$
+Allow: /characters
+Allow: /spark_pool
+Allow: /terms
+Allow: /privacy
+Allow: /responsible-use
+Disallow: /api/
+Disallow: /admin/
+Disallow: /chat/
+Disallow: /media/characters/
+Disallow: /media/gallery/
+Disallow: /dashboard/
+Disallow: /settings/
+Disallow: /profile/
+
+# ──────────────────────────────────────────
+# SITEMAP & COMPANION FILES
+# ──────────────────────────────────────────
+
+Sitemap: https://uwenzai.com/sitemap.xml

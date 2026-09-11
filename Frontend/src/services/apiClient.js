@@ -6,6 +6,13 @@ let accessToken = null;
 let refreshPromise = null;
 let cachedCsrfToken = null;
 let onSessionExpired = null; // <-- NEW
+let sessionGeneration = 0;
+
+// Explicit login/logout boundaries, not token rotation within a session.
+export function invalidateAuthRequests() {
+  sessionGeneration += 1;
+  refreshPromise = null;
+}
 
 export function setAccessToken(token) {
   accessToken = token || null;
@@ -69,12 +76,17 @@ export function clearCsrfCache() {
   cachedCsrfToken = null;
 }
 
+export function getCachedCsrfToken() {
+  return cachedCsrfToken;
+}
+
 async function performRefresh() {
+  const generation = sessionGeneration;
   const csrfToken = await ensureCsrfCookie();
   if (!csrfToken) {
-    clearAccessToken();
-    return null;
+    throw new Error("Could not initialize session refresh.");
   }
+  if (generation !== sessionGeneration) return null;
 
   const response = await fetch(`${API.BASE_URL}${API.AUTH.REFRESH}`, {
     method: "POST",
@@ -92,9 +104,14 @@ async function performRefresh() {
     data = null;
   }
 
-  if (!response.ok || data?.status !== "success") {
+  if (generation !== sessionGeneration) return null;
+  if ([401, 403].includes(response.status)) {
     clearAccessToken();
     return null;
+  }
+  // Offline/5xx/invalid gateway responses are not proof of expired auth.
+  if (!response.ok || data?.status !== "success") {
+    throw new Error("Session refresh is temporarily unavailable.");
   }
 
   const newAccessToken = data?.data?.access_token || null;
@@ -113,11 +130,16 @@ async function performRefresh() {
 
 export async function refreshAccessToken() {
   if (!refreshPromise) {
-    refreshPromise = performRefresh().finally(() => {
-      refreshPromise = null;
+    const pending = performRefresh().finally(() => {
+      if (refreshPromise === pending) refreshPromise = null;
     });
+    refreshPromise = pending;
   }
   return refreshPromise;
+}
+
+export function getAuthSessionGeneration() {
+  return sessionGeneration;
 }
 
 export async function apiFetch(path, options = {}) {
@@ -125,6 +147,7 @@ export async function apiFetch(path, options = {}) {
     skipAuthRefresh = false,
     skipAuthHeader = false,
     skipCsrf = false,
+    authToken,
     csrfToken: explicitCsrfToken,
     headers = {},
     body,
@@ -132,6 +155,9 @@ export async function apiFetch(path, options = {}) {
     ...fetchOptions
   } = options;
 
+  const generation = sessionGeneration;
+  const tokenBeforeRequest =
+    authToken !== undefined ? authToken : getAccessToken();
   const normalizedMethod = method.toUpperCase();
   const usingFormData = isFormData(body);
 
@@ -139,14 +165,23 @@ export async function apiFetch(path, options = {}) {
   if (isUnsafeMethod(normalizedMethod) && !skipCsrf && !explicitCsrfToken) {
     await ensureCsrfCookie();
   }
+  if (
+    fetchOptions.signal?.aborted ||
+    (authToken === undefined && generation !== sessionGeneration)
+  ) {
+    throw new DOMException(
+      "Request belongs to an expired session.",
+      "AbortError",
+    );
+  }
 
   // Use the cached token or the explicit one
   const finalCsrfToken = explicitCsrfToken || cachedCsrfToken;
 
   const resolvedHeaders = {
     ...headers,
-    ...(!skipAuthHeader && getAccessToken()
-      ? { Authorization: `Bearer ${getAccessToken()}` }
+    ...(!skipAuthHeader && tokenBeforeRequest
+      ? { Authorization: `Bearer ${tokenBeforeRequest}` }
       : {}),
     ...(isUnsafeMethod(normalizedMethod) && !skipCsrf && finalCsrfToken
       ? { "X-CSRFToken": finalCsrfToken }
@@ -178,12 +213,16 @@ export async function apiFetch(path, options = {}) {
       },
     });
 
-  const tokenBeforeRequest = getAccessToken();
   let response = await makeRequest(tokenBeforeRequest);
 
-  if (response.status === 401 && !skipAuthRefresh) {
+  if (
+    response.status === 401 &&
+    !skipAuthRefresh &&
+    generation === sessionGeneration
+  ) {
     const refreshed = await refreshAccessToken();
 
+    if (generation !== sessionGeneration) return response;
     if (refreshed?.accessToken) {
       response = await makeRequest(refreshed.accessToken);
     } else if (tokenBeforeRequest && onSessionExpired) {

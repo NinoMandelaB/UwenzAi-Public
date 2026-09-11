@@ -29,6 +29,7 @@ from django.utils import timezone
 
 from .callbacks import build_callback_url
 from .models import PaystackFulfillment, PaystackTransaction, PaystackWebhookEvent
+from .privacy import payment_audit_payload
 from capp.models import CustomUser
 
 logger = logging.getLogger(__name__)
@@ -139,22 +140,27 @@ class PaystackService:
                 return {"status": "fail", "data": "paystack_error"}
 
             paystack_data = data["data"]
-            paystack_txn.paystack_access_code = paystack_data.get("access_code")
-            paystack_txn.paystack_authorization_url = paystack_data.get("authorization_url")
-            paystack_txn.save(
-                update_fields=[
-                    "paystack_access_code",
-                    "paystack_authorization_url",
-                    "updated_at",
-                ]
+            # A provider response can arrive after erasure. Do not restore
+            # checkout credentials through a stale in-memory model instance.
+            updated = PaystackTransaction.objects.filter(
+                pk=paystack_txn.pk,
+                owner_deleted_at__isnull=True,
+                user_id=getattr(user, "pk", None),
+                guest_session_id=guest_session_id,
+            ).update(
+                paystack_access_code=paystack_data.get("access_code"),
+                paystack_authorization_url=paystack_data.get("authorization_url"),
+                updated_at=timezone.now(),
             )
+            if not updated:
+                return {"status": "fail", "data": "payment_owner_changed"}
 
             return {
                 "status": "success",
                 "data": {
                     "reference": reference,
-                    "authorization_url": paystack_txn.paystack_authorization_url,
-                    "access_code": paystack_txn.paystack_access_code,
+                    "authorization_url": paystack_data.get("authorization_url"),
+                    "access_code": paystack_data.get("access_code"),
                 },
             }
 
@@ -173,9 +179,15 @@ class PaystackService:
     def _mark_failed(paystack_txn: PaystackTransaction, message: str) -> None:
         if not paystack_txn.can_transition_to(PaystackTransaction.StatusChoices.FAILED):
             return
-        paystack_txn.status = PaystackTransaction.StatusChoices.FAILED
-        paystack_txn.paystack_message = message
-        paystack_txn.save(update_fields=["status", "paystack_message", "updated_at"])
+        PaystackTransaction.objects.filter(
+            pk=paystack_txn.pk,
+            status=PaystackTransaction.StatusChoices.PENDING,
+            owner_deleted_at__isnull=True,
+        ).update(
+            status=PaystackTransaction.StatusChoices.FAILED,
+            paystack_message="provider_initialization_failed",
+            updated_at=timezone.now(),
+        )
 
     # ------------------------------------------------------------------
     # Process incoming webhook
@@ -218,7 +230,10 @@ class PaystackService:
                 webhook_log = PaystackWebhookEvent.objects.create(
                     event_type=event,
                     paystack_event_id=paystack_event_id or "",
-                    data=data,
+                    # Keep reconciliation facts, not customer/card/IP details.
+                    # Always minimize new events, including late replays after
+                    # erasure and events racing an account deletion.
+                    data=payment_audit_payload(data),
                     processed=False,
                 )
             except IntegrityError:
@@ -365,11 +380,12 @@ class PaystackService:
                 return {"status": "success", "data": "fulfilled"}
 
         except IntegrityError:
-            # The one-to-one/unique fulfillment row lost a race. That is the
-            # database enforcing single fulfillment, and it is the expected
-            # outcome for a duplicate, not an error.
-            logger.info("Fulfillment already recorded for this reference; treating as duplicate")
-            return {"status": "success", "data": "already_fulfilled"}
+            # An FK/CHECK failure (e.g. concurrent erasure) is not proof that
+            # value was delivered. Only committed fulfillment evidence is.
+            if PaystackFulfillment.objects.filter(reference=reference).exists():
+                return {"status": "success", "data": "already_fulfilled"}
+            logger.exception("Payment fulfillment integrity failure; no committed fulfillment")
+            return {"status": "fail", "data": "fulfillment_integrity_error"}
         except FulfillmentFailed as exc:
             # Rolled back: still PENDING, nothing credited, safe to retry.
             logger.error("Fulfillment rolled back and left retryable: %s", exc)
@@ -499,6 +515,15 @@ class PaystackService:
         """
         from capp.models import SparkPackage, SubscriptionPlan
 
+        if txn.owner_deleted_at:
+            # A late capture must enter compensation review, never fall back
+            # to origin_guest_session_id and resurrect a claimed guest balance.
+            return {"status": "fail", "data": "payment_owner_deleted"}
+        if not txn.user_id and not txn.guest_session_id:
+            # Also covers historical origin-only rows and a claim/deletion
+            # race that detaches ownership without the erasure timestamp.
+            return {"status": "fail", "data": "payment_owner_missing"}
+
         if txn.package_type == PaystackTransaction.PackageType.SPARK:
             pkg = SparkPackage.objects.filter(slug=txn.package_slug, is_active=True).first()
             if pkg is None:
@@ -545,7 +570,7 @@ class PaystackService:
                 paystack_reference=txn.reference,
             )
         else:
-            owner_key = txn.guest_session_id or txn.origin_guest_session_id
+            owner_key = txn.guest_session_id
             if not owner_key:
                 return {"status": "fail", "data": "guest_owner_missing"}
             if txn.package_type != PaystackTransaction.PackageType.SPARK:
@@ -604,8 +629,8 @@ class PaystackService:
         txn.paystack_reference = txn.reference
         provider_txn_id = provider_data.get("id")
         txn.paystack_transaction_id = provider_txn_id if isinstance(provider_txn_id, int) else None
-        txn.paystack_data = provider_data
-        txn.paystack_message = str(provider_data.get("message") or "")[:500]
+        txn.paystack_data = payment_audit_payload(provider_data)
+        txn.paystack_message = ""
 
         if txn.can_transition_to(PaystackTransaction.StatusChoices.SUCCESS):
             txn.status = PaystackTransaction.StatusChoices.SUCCESS

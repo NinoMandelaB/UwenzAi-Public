@@ -141,6 +141,68 @@ class GraphEmbeddingPopulationTests(TestCase):
         rel = MemoryRelation.objects.get(user=self.user)
         self.assertIsNone(rel.embedding)
 
+    def test_resolve_entity_does_not_crash_when_embedding_already_populated(self):
+        """
+        Regression for: ValueError("The truth value of an array with more than
+        one element is ambiguous. Use a.any() or a.all()").
+
+        Once an entity's embedding has been saved, pgvector.django's
+        VectorField returns it as a numpy array on read-back rather than a
+        plain list. ``_resolve_entity`` used to guard the lazy-embedding step
+        with ``if not entity.embedding:`` -- a truthiness check that is fine
+        for ``None`` but raises for any populated (>1 element) numpy array.
+        This intermittently broke every second+ mention of an already-known
+        entity in production.
+        """
+        MemoryEntity.objects.create(
+            user=self.user,
+            name="Zawadi",
+            normalized_name="zawadi",
+            entity_type=MemoryEntity.EntityType.PERSON,
+            embedding=_fake_embedding_1024(0.3),
+            embedding_model="test-embed",
+        )
+
+        with mock.patch.object(MemoryService, "_get_embedding") as mock_get_embedding:
+            entity = MemoryService._resolve_entity(self.user, "Zawadi", "person")
+
+        self.assertIsNotNone(entity)
+        self.assertEqual(entity.normalized_name, "zawadi")
+        # Embedding was already present -> must not be recomputed.
+        mock_get_embedding.assert_not_called()
+
+    def test_save_relations_does_not_crash_when_subject_already_has_embedding(self):
+        """Same regression exercised through the real _save_relations call path."""
+        MemoryEntity.objects.create(
+            user=self.user,
+            name="Zawadi",
+            normalized_name="zawadi",
+            entity_type=MemoryEntity.EntityType.PERSON,
+            embedding=_fake_embedding_1024(0.3),
+            embedding_model="test-embed",
+        )
+        payload = {
+            "facts": [],
+            "relations": [
+                {
+                    "subject": "Zawadi",
+                    "subject_type": "person",
+                    "predicate": "works_as",
+                    "object": "nurse",
+                    "object_type": "other",
+                }
+            ],
+        }
+        with mock.patch.object(
+            MemoryService, "_get_embedding", return_value=(_fake_embedding_1024(0.4), "test-embed")
+        ), mock.patch.object(MemoryService, "_extraction_chat_completion", return_value=_extraction_response(payload)):
+            MemoryService.extract_and_save_facts(
+                conversation=self.conversation,
+                user_message=self.user_message,
+                ai_message=self.ai_message,
+            )
+        self.assertTrue(MemoryRelation.objects.filter(user=self.user, predicate="works_as").exists())
+
 
 # ---------------------------------------------------------------------------
 # Extraction provider router (Cortecs primary, Mistral fallback)

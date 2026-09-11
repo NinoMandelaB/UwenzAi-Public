@@ -32,7 +32,7 @@ export const privacySw = {
             "Maandishi ya ujumbe, muhtasari wa mazungumzo na kumbukumbu husimbwa kwa njia fiche kwenye hifadhidata yetu kwa kutumia vitufe vinavyohifadhiwa na seva zetu. Hii si usimbaji fiche kutoka mwanzo hadi mwisho — mifumo yetu inaweza kufungua maudhui haya, na wafanyakazi wachache waliopewa idhini wanaweza kuyafikia inapohitajika.",
             "Ili kuzalisha majibu na picha, ni lazima tutume vidokezo vyako — na, kwa vipengele vingine vya picha, picha ya rejeleo — kwa watoa huduma wa AI wanaowezesha vipengele hivyo.",
             "Picha huhifadhiwa kwenye ndoo ya faragha yenye udhibiti wa ufikiaji ambayo mtoa huduma wetu wa uwekaji mtandaoni anaisimba kwa njia fiche ilipohifadhiwa. Hatuweki tabaka letu la pekee la usimbaji fiche kwa kila picha.",
-            "Unaweza kupakua data yako na kufuta akaunti yako kutoka ndani ya programu.",
+            "Unaweza kupakua data yako na kufuta akaunti yako kutoka ndani ya programu. Kufuta akaunti kunaondoa wasifu wako, mazungumzo na maudhui ya faragha; wahusika wa umma uliowaunda wanabaki kwenye Huduma bila jina lako.",
             "Hatutumii mazungumzo yako ya faragha kufundisha modeli za AI, na hatuendeshi matangazo wala vifuatiliaji vya uchanganuzi vya watu wa tatu.",
           ],
         },
@@ -321,7 +321,7 @@ export const privacySw = {
         {
           type: "ul",
           items: [
-            "Maudhui ya akaunti yako — mazungumzo, ujumbe, wahusika, kumbukumbu na picha — huhifadhiwa wakati akaunti yako inaendelea kuwepo, ili yawepo utakaporejea. Kwa sasa hatuendeshi kazi ya kiotomatiki inayofuta mazungumzo ya zamani baada ya kipindi maalum.",
+            "Maudhui ya akaunti yako — mazungumzo, ujumbe, wahusika, kumbukumbu na picha — huhifadhiwa wakati akaunti yako inaendelea kuwepo, ili yawepo utakaporejea. Kwa sasa hatuendeshi kazi ya kiotomatiki inayofuta mazungumzo ya zamani baada ya kipindi maalum. Nini kinatokea ukifuta akaunti yako kimeelezwa katika kifungu cha 15.",
             "Data ya mgeni imefungamanishwa na kitambulisho cha mgeni, ambacho kwa sasa hudumu hadi siku 180 na pia kinaisha baada ya muda wa kutokutumika.",
             "Kodi za uthibitishaji na urejeshaji wa nenosiri zinaisha haraka, kwa kawaida ndani ya dakika kadhaa, na hukataliwa baada ya hapo.",
             "Rekodi za manunuzi, bili na ridhaa huhifadhiwa kwa muda wote tunapozihitaji kutimiza wajibu wa uhasibu, kodi na kisheria, na kujilinda dhidi ya mizozo.",
@@ -340,7 +340,15 @@ export const privacySw = {
       blocks: [
         {
           type: "p",
-          text: "Unaweza kufuta akaunti yako kutoka mipangilio yako. Huu ni ufutaji wa kudumu, si kuzima kwa muda. Unaondoa rekodi yako ya mtumiaji na, kwa ufutaji wa mfululizo, wahusika uliowaunda pamoja na mazungumzo yao, ujumbe, muhtasari, kumbukumbu na maingizo ya nyumba ya picha. Hauwezi kurudishwa, na hatuwezi kurejesha maudhui baada ya hapo.",
+          text: "Unaweza kufuta akaunti yako kutoka mipangilio yako. Huu ni ufutaji wa kudumu, si kuzima kwa muda. Hauwezi kurudishwa, na hatuwezi kurejesha maudhui yaliyofutwa.",
+        },
+        {
+          type: "p",
+          text: "Kufuta akaunti yako kunaondoa rekodi yako ya mtumiaji, maelezo ya wasifu wako, mazungumzo yako, ujumbe, muhtasari, kumbukumbu, vikumbusho, wahusika wa faragha ambao hakuna mtu mwingine aliyewatumia, na picha za faragha — ikijumuisha picha za faragha ulizoongeza kwenye mhusika wa umma wa mtu mwingine. Salio lako lililobaki la cheche linaondolewa. Hii si marejesho ya malipo.",
+        },
+        {
+          type: "p",
+          text: "Wahusika wa umma uliowaunda wanabaki kwenye Huduma bila jina lako kama mtengenezaji. Picha za umma kwenye wahusika hao zinabaki nao. Mazungumzo ya watu wengine nao yanabaki kwenye akaunti zao. Ikiwa mtu mwingine tayari alizungumza na mhusika wako wa faragha, tunaondoa mhusika huyo ili asitumike tena na tunafunga mazungumzo hayo, lakini hatufuti historia ya mazungumzo ya mtu huyo.",
         },
         {
           type: "p",
@@ -350,7 +358,7 @@ export const privacySw = {
           type: "ul",
           items: [
             "Rekodi za manunuzi na bili zinabakizwa, kiungo cha akaunti yako kikiondolewa, kwa sababu tunalazimika kuzihifadhi.",
-            "Faili za picha zilizohifadhiwa zinaondolewa pamoja na rekodi zinazozitaja, lakini hatutoi dhamana kwamba kila faili inafutwa kutoka hifadhi ya vitu kwa wakati mmoja.",
+            "Pale picha inafutwa, faili iliyohifadhiwa inaondolewa baada ya rekodi inayoitaja, lakini hatutoi dhamana kwamba kila faili inafutwa kutoka hifadhi ya vitu kwa wakati mmoja. Faili za picha zinazobaki zikitajwa na mhusika wa umma tunayembakiza hazifutwi.",
             "Nakala zinaweza kuendelea kuwepo kwa kipindi kifupi kwenye nakala rudufu za hifadhidata zilizosimbwa kwa njia fiche na kwenye kumbukumbu za utendaji kabla ya kuisha kwa mwendo wa kawaida.",
             "Maudhui yaliyokwisha tumwa kwa mtoa huduma wa AI kuzalisha jibu au picha yanadhibitiwa na muda wa kubakiza wa mtoa huduma huyo. Tunaomba kubakizwa kidogo zaidi pale mtoa huduma anaruhusu, lakini hatuwezi kufuta data kwenye mifumo yao kwa niaba yako.",
             "Tunaweza kubakiza rekodi kidogo pale tunapozihitaji kufuata sheria, kuzuia udanganyifu au matumizi mabaya, au kusuluhisha mzozo.",

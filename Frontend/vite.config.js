@@ -1,26 +1,27 @@
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
+import { seoAssets } from "./config/seoAssets";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { VitePWA } from "vite-plugin-pwa";
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [
     react(),
     tailwindcss(),
+    seoAssets(loadEnv(mode, ".", "").SEO_PROFILE || "staging"),
     VitePWA({
       registerType: "autoUpdate",
       workbox: {
-        // SPA: serve the cached shell for client-side routes on cold starts.
         navigateFallback: "/index.html",
+        navigateFallbackDenylist: [
+          /^\/robots\.txt$/,
+          /^\/sitemap\.xml$/,
+          /^\/llms\.txt$/,
+          /^\/ai\.txt$/,
+          /^\/manifest\.webmanifest$/,
+        ],
         cleanupOutdatedCaches: true,
-        // Push handlers live in public/push-sw.js and are merged into the
-        // generated service worker. Kept as importScripts (not injectManifest)
-        // so the precache setup above stays generated — the push code carries
-        // no build-time dependencies of its own.
         importScripts: ["push-sw.js"],
-        // Precache of build assets only — deliberately no runtimeCaching.
-        // Every API and media response can carry private chat data, and a
-        // service-worker cache on a shared device would outlive logout.
       },
       manifest: {
         name: "UwenzAi — AI Companions Built for East Africa",
@@ -70,4 +71,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));

@@ -2,9 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./apiClient", () => ({
   apiFetch: vi.fn(),
+  getAccessToken: vi.fn(() => "token-A"),
+  getAuthSessionGeneration: vi.fn(() => 0),
 }));
 
-import { apiFetch } from "./apiClient";
+import { apiFetch, getAuthSessionGeneration } from "./apiClient";
 import {
   reconcilePushSubscription,
   subscribeToPush,
@@ -50,6 +52,8 @@ describe("push subscription lifecycle", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    apiFetch.mockReset();
+    getAuthSessionGeneration.mockReturnValue(0);
     subscription = {
       endpoint: "https://fcm.googleapis.com/push/1",
       toJSON: vi.fn(() => ({
@@ -113,7 +117,11 @@ describe("push subscription lifecycle", () => {
   it("still unsubscribes locally when backend cleanup fails", async () => {
     apiFetch.mockRejectedValueOnce(new Error("offline"));
 
-    await expect(unsubscribeFromPush()).rejects.toThrow("offline");
+    await expect(unsubscribeFromPush()).resolves.toMatchObject({
+      localRemoved: true,
+      remoteRemoved: false,
+      remoteError: expect.any(Error),
+    });
     expect(subscription.unsubscribe).toHaveBeenCalledOnce();
   });
 
@@ -125,7 +133,7 @@ describe("push subscription lifecycle", () => {
       expect.any(String),
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify(subscription.toJSON()),
+        body: subscription.toJSON(),
       }),
     );
   });
@@ -146,5 +154,43 @@ describe("push subscription lifecycle", () => {
       "Failed to enable push notifications.",
     );
     expect(subscription.unsubscribe).toHaveBeenCalledOnce();
+  });
+
+  it("does not retire a new session's browser subscription after a delayed old ownership conflict", async () => {
+    let resolve;
+    apiFetch.mockReturnValue(
+      new Promise((r) => {
+        resolve = r;
+      }),
+    );
+    const pending = reconcilePushSubscription();
+    await vi.waitFor(() => expect(apiFetch).toHaveBeenCalled());
+    getAuthSessionGeneration.mockReturnValue(1);
+    resolve({ ok: false, status: 409 });
+    await expect(pending).rejects.toThrow("Failed to enable");
+    expect(subscription.unsubscribe).not.toHaveBeenCalled();
+  });
+
+  it("stops a permission request from registering after the account changes", async () => {
+    let resolve;
+    Notification.requestPermission.mockReturnValue(
+      new Promise((r) => {
+        resolve = r;
+      }),
+    );
+    apiFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: { public_key: "BA" } }),
+    });
+    const pending = subscribeToPush();
+    await vi.waitFor(() =>
+      expect(Notification.requestPermission).toHaveBeenCalled(),
+    );
+    getAuthSessionGeneration.mockReturnValue(1);
+    resolve("granted");
+    await expect(pending).rejects.toThrow("Session changed");
+    expect(registration.pushManager.subscribe).not.toHaveBeenCalled();
+    expect(apiFetch).toHaveBeenCalledOnce();
   });
 });

@@ -8,7 +8,6 @@ import {
 } from "lucide-react";
 import AppHeader from "../components/AppHeader";
 import BottomNav from "../components/BottomNav";
-import FeedbackButton from "../components/FeedbackButton";
 import { useLanguage } from "../context/LanguageContext";
 import { NAV_ITEMS } from "../utils/navItems";
 import NavUnreadBadge from "../components/NavUnreadBadge";
@@ -49,11 +48,6 @@ export default function MainLayout() {
               </NavLink>
             ))}
           </nav>
-
-          {/* Feedback button at bottom */}
-          <div className="mt-auto pt-4 border-t border-[var(--color-border)]">
-            <FeedbackButton />
-          </div>
         </aside>
 
         {/* Main scrollable content */}

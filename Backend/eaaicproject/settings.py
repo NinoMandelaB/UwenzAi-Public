@@ -3,6 +3,8 @@ Django settings for eaaicproject project.
 """
 
 import os
+import ipaddress
+from urllib.parse import urlsplit
 from pathlib import Path
 from datetime import timedelta
 from celery.schedules import crontab
@@ -355,7 +357,12 @@ AUTH_PASSWORD_VALIDATORS = [
 # DRF / JWT
 # ------------------------------------------------------------------------------
 REST_FRAMEWORK = {
-    "DEFAULT_AUTHENTICATION_CLASSES": ("rest_framework_simplejwt.authentication.JWTAuthentication",),
+    "DEFAULT_AUTHENTICATION_CLASSES": ("capp.authentication.AccountJWTAuthentication",),
+    "DEFAULT_PARSER_CLASSES": (
+        "capp.request_limits.BoundedJSONParser",
+        "rest_framework.parsers.FormParser",
+        "rest_framework.parsers.MultiPartParser",
+    ),
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.AllowAny",),
     "DEFAULT_THROTTLE_CLASSES": (
         "rest_framework.throttling.AnonRateThrottle",
@@ -624,14 +631,36 @@ def env_origins(name: str) -> list[str]:
     return [item.strip().rstrip("/") for item in raw.split(",") if item.strip()]
 
 
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:5174",
-    "http://127.0.0.1:5174",
-]
+def browser_origins_for_environment(origins):
+    """Production never trusts development loopback origins, including env entries."""
+    if DEBUG and not IS_PRODUCTION:
+        return origins
+    allowed = []
+    for value in origins:
+        host = (urlsplit(value).hostname or "").lower().rstrip(".")
+        if host == "localhost" or host.endswith(".localhost"):
+            continue
+        try:
+            if ipaddress.ip_address(host).is_loopback:
+                continue
+        except ValueError:
+            pass
+        allowed.append(value)
+    return allowed
+
+
+CORS_ALLOWED_ORIGINS = (
+    [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+    ]
+    if DEBUG and not IS_PRODUCTION
+    else []
+)
 
 # Optional: allow extra origins from env. These must be plain comma-separated
 # origins, not markdown links, for example:
@@ -640,7 +669,7 @@ CORS_ALLOWED_ORIGINS += env_origins("CORS_ALLOWED_ORIGINS")
 
 # Deduplicate while preserving order, so a local default repeated in env does
 # not appear twice.
-CORS_ALLOWED_ORIGINS = list(dict.fromkeys(CORS_ALLOWED_ORIGINS))
+CORS_ALLOWED_ORIGINS = browser_origins_for_environment(list(dict.fromkeys(CORS_ALLOWED_ORIGINS)))
 
 # Every paid endpoint carries ``Idempotency-Key`` (capp.classes.billing.idempotency.HEADER).
 # It is not in django-cors-headers' defaults, so omitting it here makes the browser
@@ -673,7 +702,7 @@ CORS_EXPOSE_HEADERS = ["Idempotency-Key"]
 # which is how this setting behaved before the local defaults were introduced.
 CSRF_TRUSTED_ORIGINS = (
     []
-    if IS_PRODUCTION
+    if IS_PRODUCTION or not DEBUG
     else [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
@@ -691,12 +720,17 @@ CSRF_TRUSTED_ORIGINS = (
 CSRF_TRUSTED_ORIGINS += env_origins("CSRF_TRUSTED_ORIGINS")
 
 # Deduplicate while preserving order.
-CSRF_TRUSTED_ORIGINS = list(dict.fromkeys(CSRF_TRUSTED_ORIGINS))
+CSRF_TRUSTED_ORIGINS = browser_origins_for_environment(list(dict.fromkeys(CSRF_TRUSTED_ORIGINS)))
 
 # Periodic tasks are pinned to the ``general`` queue so scheduled work is never
 # starved behind image jobs. Add "queue": "images" here only for a genuinely
 # image-generating periodic task.
 CELERY_BEAT_SCHEDULE = {
+    "retry-media-deletions": {
+        "task": "capp.tasks.retry_media_deletions",
+        "schedule": crontab(minute=15),
+        "options": {"queue": "general"},
+    },
     "expire-subscriptions-every-hour": {
         "task": "expire_subscriptions",
         "schedule": crontab(minute=0),  # every hour at minute 0
@@ -707,13 +741,29 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": crontab(minute="*/30"),  # every 30 minutes
         # Expire stale runs, but give a busy general worker a chance: 60 s was
         # tight enough to silently drop runs whenever slower tasks (memory
-        # extraction, summaries) occupied the queue. The next tick is 30 min away.
-        "options": {"expires": 300, "queue": "general"},
+        # extraction, summaries) occupied the queue. The next tick is 30 min
+        # away, and the task itself now retries with backoff up to ~5 times
+        # on a cold-starting DB (see capp/tasks.py), so this window needs to
+        # comfortably outlast that retry sequence instead of discarding the
+        # message before the retries even get a chance to run.
+        "options": {"expires": 900, "queue": "general"},
     },
     "reconcile-stale-image-reservations": {
         "task": "capp.tasks.reconcile_stale_image_reservations",
         "schedule": crontab(minute="*"),
         "options": {"expires": 55, "queue": "general"},
+    },
+    "check_due_reminders": {
+        "task": "capp.tasks.check_and_send_due_reminders",
+        # Finer-grained than check_proactive_chat: a reminder is a precise
+        # time commitment ("tomorrow at 9am"), not a loose re-engagement
+        # window, so it should fire close to its due time. A due-but-
+        # undelivered reminder is not lost even if this exact run is
+        # discarded: reminder_service.check_and_send_due() re-queries
+        # everything still PENDING and due, so the next 5-minute tick picks
+        # it back up regardless (bounded by REMINDER_EXPIRY_GRACE_HOURS).
+        "schedule": crontab(minute="*/5"),
+        "options": {"expires": 250, "queue": "general"},
     },
 }
 # ------------------------------------------------------------------------------
@@ -782,6 +832,12 @@ if _STORAGE_WARNING:
 # ------------------------------------------------------------------------------
 DATA_UPLOAD_MAX_MEMORY_SIZE = 104857600
 FILE_UPLOAD_MAX_MEMORY_SIZE = 104857600
+
+# 12,000 astral Unicode characters JSON-escaped take 144,000 bytes. Keep room
+# for metadata while bounding JSON parsing/ASGI buffering independently of files.
+JSON_REQUEST_MAX_BYTES = 196608
+BYOK_PRIVATE_ORIGINS = env_origins("BYOK_PRIVATE_ORIGINS")
+AUTH_CODE_HMAC_KEY = os.getenv("AUTH_CODE_HMAC_KEY") or SECRET_KEY
 
 
 # ------------------------------------------------------------------------------

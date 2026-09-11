@@ -4,6 +4,7 @@ from capp.views.auth_views import (
     api_confirm_password_reset,
     api_csrf,
     api_export_user_data,
+    api_feature_preferences,
     api_request_password_reset,
     api_signup_user,
     api_signin_user,
@@ -37,6 +38,7 @@ urlpatterns = [
     path("change-password/", api_change_password),
     path("delete-account/", api_delete_user_permanently),
     path("profile/", api_update_profile),
+    path("feature-preferences/", api_feature_preferences),
     path("export-data/", api_export_user_data),
     # NEW endpoints
     path("request-email-change/", api_request_email_change),

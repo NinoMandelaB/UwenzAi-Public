@@ -10,6 +10,46 @@
  * count. Never message content.
  */
 
+const RECEIPT_TIMEOUT_MS = 1000;
+
+function sameOriginUrl(value) {
+  try {
+    const url = new URL(
+      typeof value === "string" ? value : "/",
+      self.location.origin,
+    );
+    return url.origin === self.location.origin
+      ? `${url.pathname}${url.search}${url.hash}`
+      : "/";
+  } catch {
+    return "/";
+  }
+}
+
+function foregroundReceipt(client, payload) {
+  return new Promise((resolve) => {
+    const channel = new MessageChannel();
+    let timer;
+    const finish = (handled) => {
+      clearTimeout(timer);
+      channel.port1.close();
+      resolve(handled);
+    };
+    channel.port1.onmessage = (event) => {
+      if (event.data?.type === "UWENZAI_PUSH_HANDLED") finish(true);
+    };
+    timer = setTimeout(() => finish(false), RECEIPT_TIMEOUT_MS);
+    try {
+      client.postMessage({ type: "UWENZAI_PUSH_RECEIPT", payload }, [
+        channel.port2,
+      ]);
+    } catch {
+      channel.port2.close();
+      finish(false);
+    }
+  });
+}
+
 self.addEventListener("push", (event) => {
   if (!event.data) {
     return;
@@ -21,32 +61,32 @@ self.addEventListener("push", (event) => {
   } catch {
     return;
   }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return;
 
-  const title = payload.title || "UwenzAi";
+  const title = typeof payload.title === "string" ? payload.title : "UwenzAi";
+  const url = sameOriginUrl(payload.url);
   // Present on new-message pushes; mirrors the in-app nav badge onto the
   // launcher icon (Badging API, where supported).
   const unreadCount = Number.isInteger(payload.unread_count)
     ? payload.unread_count
     : null;
   const options = {
-    body: payload.body || "",
+    body: typeof payload.body === "string" ? payload.body : "",
     icon: "/pwa-192.png",
     badge: "/pwa-192.png",
     // Same-conversation pushes replace each other instead of stacking one
     // notification per message.
-    tag: payload.url || "uwenzai",
+    tag: url,
     renotify: false,
-    data: { url: payload.url || "/" },
+    data: { url },
   };
 
-  // While an app window is visible, the WebSocket has already updated the
-  // UI — a system notification on top would be noise. Each device decides
-  // for itself, so a closed phone still notifies while the desktop app is
-  // open, and vice versa.
+  // Visibility is not delivery. Suppress only if a foreground client renders
+  // this event's in-app alert and acknowledges via its private receipt port.
   event.waitUntil(
     self.clients
       .matchAll({ type: "window", includeUncontrolled: true })
-      .then((windowClients) => {
+      .then(async (windowClients) => {
         // The badge matters in both branches: with no visible window the icon
         // is the only place the count shows, and with a visible one this just
         // races the foreground's own WebSocket sync to the same value.
@@ -64,24 +104,32 @@ self.addEventListener("push", (event) => {
             })
             .catch(() => {});
         }
-        const appVisible = windowClients.some(
+        const visibleClients = windowClients.filter(
           (client) =>
             new URL(client.url).origin === self.location.origin &&
             client.visibilityState === "visible",
         );
-        if (appVisible) {
-          return badgeUpdate;
-        }
-        return badgeUpdate.then(() =>
-          self.registration.showNotification(title, options),
+        const receipts = await Promise.all(
+          visibleClients.map((client) =>
+            foregroundReceipt(client, {
+              title,
+              body: options.body,
+              url,
+              unread_count: unreadCount,
+            }),
+          ),
         );
+        // A broken badge API must not hold a user-visible alert hostage.
+        if (!receipts.some(Boolean))
+          await self.registration.showNotification(title, options);
+        void badgeUpdate;
       }),
   );
 });
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const targetUrl = event.notification.data?.url || "/";
+  const targetUrl = sameOriginUrl(event.notification.data?.url);
 
   // Prefer focusing an already-open app window over spawning a new one.
   event.waitUntil(

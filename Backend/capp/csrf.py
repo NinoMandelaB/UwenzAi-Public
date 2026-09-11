@@ -28,14 +28,20 @@ def _enforced(view):
 
 def _carries_bearer_credential(request) -> bool:
     """
-    True when the caller supplied a non-ambient credential in a header.
+    True only for an authenticated, eligible account's valid access JWT.
 
-    A cross-site page cannot attach an ``Authorization`` header to a request
-    the browser sends automatically, so header-authenticated calls are not
-    reachable by CSRF and must not be required to carry a CSRF token — those
-    clients (mobile, API) have no CSRF cookie to send.
+    Header presence alone is not authentication: a permitted CORS origin can
+    send arbitrary headers alongside a victim's ambient guest/refresh cookie.
+    Invalid headers must never switch a cookie request out of CSRF enforcement.
     """
-    return bool(request.META.get("HTTP_AUTHORIZATION", "").strip())
+    from rest_framework.exceptions import AuthenticationFailed
+    from capp.authentication import AccountJWTAuthentication
+
+    try:
+        result = AccountJWTAuthentication().authenticate(request)
+    except AuthenticationFailed:
+        return False
+    return result is not None
 
 
 def csrf_protect_api(view):

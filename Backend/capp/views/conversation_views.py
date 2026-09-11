@@ -3,10 +3,11 @@
 import logging
 import time
 import uuid
+from zoneinfo import available_timezones
 
 from django.conf import settings
 from django.core.files.storage import default_storage
-from django.db import IntegrityError, OperationalError
+from django.db import IntegrityError, OperationalError, transaction
 from django.db.models import F, OuterRef, Subquery
 from django.shortcuts import get_object_or_404
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
@@ -24,7 +25,13 @@ from capp.classes.characters.character_service import CharacterService
 from capp.classes.chat import message_history, unread_service
 from capp.classes.moderation.image_prompt_policy import ImagePromptPolicy
 from capp.constants import CHARACTER_PHOTO_OFFER_COST
-from capp.tasks import process_ai_response, generate_chat_image
+from capp.tasks import (
+    ChatWriteUnavailable,
+    chat_write_error,
+    lock_writable_chat,
+    process_ai_response,
+    generate_chat_image,
+)
 from capp.throttles import ChatMessageThrottle
 
 logger = logging.getLogger(__name__)
@@ -36,6 +43,31 @@ def _reserve_chat_image(**kwargs):
         lambda: PaidFeature.reserve(**kwargs),
         deadline,
     )
+
+
+_VALID_IANA_TIMEZONES = available_timezones()
+
+
+def _maybe_refresh_user_timezone(request, user) -> None:
+    """
+    Opportunistically keep CustomUser.timezone current.
+
+    Today it's only ever set once, at registration -- if the user travels or
+    the device clock/locale changes, every downstream feature that reasons
+    about "the user's local time" (reminders, get_time_context, proactive
+    send windows) silently drifts. The client may send its current IANA
+    timezone (e.g. from Intl.DateTimeFormat().resolvedOptions().timeZone) as
+    an ``X-Client-Timezone`` header on any authenticated send; if it's a
+    valid zone and differs from what's stored, update it. Best-effort and
+    silent: never blocks or fails the send if the header is missing or bad.
+    """
+    client_tz = request.META.get("HTTP_X_CLIENT_TIMEZONE", "").strip()
+    if not client_tz or client_tz not in _VALID_IANA_TIMEZONES:
+        return
+    if client_tz != user.timezone:
+        user.timezone = client_tz
+        user.save(update_fields=["timezone", "updated_at"])
+        logger.info("Refreshed timezone for user=%s -> %s", user.user_id, client_tz)
 
 
 def _refund_chat_image(reservation, reason):
@@ -562,7 +594,19 @@ def api_send_message(request, conversation_id):
     Body:
       - content : str
     """
-    content = request.data.get("content", "").strip()
+    # Validate USER input before language detection, ownership/DB work or queueing.
+    from capp.constants import MAX_MESSAGE_CHARACTERS
+
+    if not isinstance(request.data, dict):
+        return Response({"status": "fail", "data": "invalid_message_payload"}, status=400)
+    content = request.data.get("content", "")
+    if not isinstance(content, str):
+        return Response({"status": "fail", "data": "message_content_must_be_string"}, status=400)
+    if len(content) > MAX_MESSAGE_CHARACTERS:
+        return Response(
+            {"status": "fail", "data": "message_too_long", "max_characters": MAX_MESSAGE_CHARACTERS}, status=400
+        )
+    content = content.strip()
     if not content:
         return Response({"status": "fail", "data": "message_content_required"}, status=400)
 
@@ -579,6 +623,7 @@ def api_send_message(request, conversation_id):
         )
         is_guest = False
         guest_session_id = None
+        _maybe_refresh_user_timezone(request, request.user)
     else:
         # Guest flow
         identity = GuestIdentityService.resolve(request)
@@ -627,12 +672,14 @@ def api_send_message(request, conversation_id):
         is_guest = True
         guest_session_id = session_id
 
-    # ---------- Block messages to closed conversations ----------
-    if conversation.status == Conversation.StatusChoices.CLOSED:
+    # User-archived chats remain writable; a closed chat or retired character
+    # does not, even if an older closure only updated ACTIVE conversations.
+    write_error = chat_write_error(conversation)
+    if write_error:
         return Response(
             {
                 "status": "fail",
-                "data": "conversation_closed",
+                "data": write_error,
                 "message": "This conversation is closed because the character is no longer available. "
                 "You can still view and delete your past messages.",
             },
@@ -662,19 +709,42 @@ def api_send_message(request, conversation_id):
     # ---------- Language detection ----------
     lang = LanguageDetector.detect(content)
 
-    # ---------- Create user message ----------
-    user_message = Message.objects.create(
-        conversation=conversation,
-        sender_type=Message.SenderType.USER,
-        content=content,
-        language_code=lang,
-        status=Message.StatusChoices.SENT,
-        client_operation_id=operation_id,
-    )
-
-    # Update conversation timestamp
-    conversation.last_message_at = user_message.created_at
-    conversation.save(update_fields=["last_message_at", "updated_at"])
+    # Language detection and other request work can race erasure. Lock in the
+    # same order as erasure and recheck current ownership/lifecycle at the write.
+    try:
+        with transaction.atomic():
+            conversation = lock_writable_chat(
+                conversation_id=conversation_id,
+                character_id=conversation.character_id,
+                user_id=None if is_guest else request.user.pk,
+                guest_session_id=guest_session_id,
+            )
+            existing = Message.objects.filter(conversation=conversation, client_operation_id=operation_id).first()
+            if existing is not None:
+                return idempotency.echo(
+                    Response(
+                        {
+                            "status": "success",
+                            "data": {"message_id": str(existing.pk), "content": existing.content},
+                        },
+                        status=200,
+                    ),
+                    operation_id,
+                )
+            user_message = Message.objects.create(
+                conversation=conversation,
+                sender_type=Message.SenderType.USER,
+                content=content,
+                language_code=lang,
+                status=Message.StatusChoices.SENT,
+                client_operation_id=operation_id,
+            )
+            conversation.last_message_at = user_message.created_at
+            conversation.save(update_fields=["last_message_at", "updated_at"])
+    except ChatWriteUnavailable as exc:
+        error = str(exc)
+        status = 404 if error == "conversation_not_found" else (403 if error == "permission_denied" else 400)
+        return Response({"status": "fail", "data": error}, status=status)
 
     # ---------- Fire Celery task ----------
     process_ai_response.delay(

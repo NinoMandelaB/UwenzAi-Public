@@ -5,7 +5,7 @@ from django.db.models import Q
 from django.db import transaction
 from PIL import Image, UnidentifiedImageError
 
-from capp.models import Character, CharacterGalleryImage
+from capp.models import Character, CharacterGalleryImage, CustomUser, delete_file_after_commit
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +39,8 @@ class CharacterGalleryService:
         """
         Upload a new gallery image for a character. Admin only.
         """
+        gallery_image = None
+        published = False
         try:
             # Permission check
             if not cls._is_admin_user(actor):
@@ -63,8 +65,23 @@ class CharacterGalleryService:
             source = Character.AvatarSource.UPLOADED
 
             with transaction.atomic():
-                # Inside upload_gallery_image, after creating the gallery_image:
-                gallery_image = CharacterGalleryImage.objects.create(
+                # Recheck after validation, using the same actor -> character
+                # order as erasure and generated-media publication.
+                actor = (
+                    CustomUser.objects.select_for_update(no_key=True)
+                    .filter(pk=getattr(actor, "pk", None), is_active=True, is_deleted=False)
+                    .first()
+                )
+                if not cls._is_admin_user(actor):
+                    return {"status": "fail", "data": "permission_denied"}
+                character = Character.objects.select_for_update().filter(pk=character_id).first()
+                if character is None:
+                    return {"status": "fail", "data": "character_not_found"}
+                if character.status == Character.StatusChoices.ARCHIVED:
+                    return {"status": "fail", "data": "character_unavailable"}
+                # Keep the instance if FileField uploads before the SQL insert
+                # fails, so compensation can use storage's actual returned key.
+                gallery_image = CharacterGalleryImage(
                     character=character,
                     image=image_file,
                     caption=caption,
@@ -73,6 +90,8 @@ class CharacterGalleryService:
                     created_by=actor,
                     visibility=CharacterGalleryImage.VisibilityChoices.PUBLIC,
                 )
+                gallery_image.save(force_insert=True)
+            published = True
 
             logger.info(
                 "Gallery image uploaded successfully image_id=%s character_id=%s uploaded_by=%s",
@@ -90,8 +109,14 @@ class CharacterGalleryService:
             }
 
         except Exception:
-            logger.exception("Unexpected error uploading gallery image")
+            logger.error("Unexpected error uploading gallery image")
             return {"status": "fail", "data": "server_error"}
+        finally:
+            if not published and gallery_image is not None and gallery_image.image and gallery_image.image._committed:
+                try:
+                    delete_file_after_commit(gallery_image.image)
+                except Exception:
+                    logger.error("Could not enqueue failed gallery upload cleanup")
 
     @classmethod
     def list_gallery_images(

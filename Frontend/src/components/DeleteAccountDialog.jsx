@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Loader2, TriangleAlert, X } from "lucide-react";
+import { useLanguage } from "../context/LanguageContext";
 
 const CONFIRMATION_WORDS = [
   "DELETE",
@@ -24,6 +25,18 @@ const CONFIRMATION_WORDS = [
   "FINISH",
 ];
 
+function ConfirmPrompt({ template, word }) {
+  const parts = String(template).split("{word}");
+
+  return (
+    <p className="text-sm theme-text-muted">
+      {parts[0]}
+      <span className="font-semibold text-rose-400">{word}</span>
+      {parts.slice(1).join("{word}")}
+    </p>
+  );
+}
+
 export default function DeleteAccountDialog({
   isOpen,
   isDeleting,
@@ -31,6 +44,7 @@ export default function DeleteAccountDialog({
   onClose,
   onConfirm,
 }) {
+  const { t } = useLanguage();
   const [requiredText, setRequiredText] = useState("");
   const [confirmationText, setConfirmationText] = useState("");
 
@@ -70,7 +84,7 @@ export default function DeleteAccountDialog({
       onClick={isDeleting ? undefined : handleClose}
     >
       <div
-        className="w-full max-w-md rounded-[1.75rem] border shadow-2xl"
+        className="flex max-h-[min(90vh,40rem)] w-full max-w-md flex-col overflow-hidden rounded-[1.75rem] border shadow-2xl"
         style={{
           borderColor: "var(--color-border)",
           backgroundColor: "var(--color-card)",
@@ -79,10 +93,11 @@ export default function DeleteAccountDialog({
       >
         <div className="flex items-start justify-between gap-4 p-5">
           <div>
-            <h3 className="text-lg font-semibold theme-text">Delete account</h3>
+            <h3 className="text-lg font-semibold theme-text">
+              {t("settings.permanentlyDeleteAccount")}
+            </h3>
             <p className="mt-1 text-sm theme-text-muted">
-              This action permanently deletes your account and all associated
-              data.
+              {t("settings.deleteAccountDialogLead")}
             </p>
           </div>
 
@@ -92,13 +107,13 @@ export default function DeleteAccountDialog({
             disabled={isDeleting}
             className="inline-flex h-10 w-10 items-center justify-center rounded-full border transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
             style={{ borderColor: "var(--color-border)" }}
-            aria-label="Close delete account dialog"
+            aria-label={t("settings.deleteAccountCloseLabel")}
           >
             <X size={18} />
           </button>
         </div>
 
-        <div className="px-5 pb-2">
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-2">
           <div
             className="rounded-2xl border p-4"
             style={{
@@ -119,12 +134,16 @@ export default function DeleteAccountDialog({
 
               <div className="min-w-0">
                 <p className="text-sm font-medium theme-text">
-                  This cannot be undone.
+                  {t("settings.deleteAccountCannotBeUndone")}
                 </p>
                 <p className="mt-1 text-sm leading-6 theme-text-muted">
-                  Your profile, characters, conversations, messages, spark_pool
-                  data, and other related records may also be permanently
-                  removed.
+                  {t("settings.deleteAccountDialogBody1")}
+                </p>
+                <p className="mt-2 text-sm leading-6 theme-text-muted">
+                  {t("settings.deleteAccountDialogBody2")}
+                </p>
+                <p className="mt-2 text-sm leading-6 theme-text-muted">
+                  {t("settings.deleteAccountDialogBody3")}
                 </p>
               </div>
             </div>
@@ -133,19 +152,24 @@ export default function DeleteAccountDialog({
 
         <div className="px-5 pt-3">
           <div className="space-y-2">
-            <p className="text-sm theme-text-muted">
-              To confirm, type{" "}
-              <span className="font-semibold text-rose-400">
-                {requiredText}
-              </span>{" "}
-              below.
-            </p>
+            <ConfirmPrompt
+              template={t("settings.deleteAccountConfirmPrompt")}
+              word={requiredText}
+            />
 
             <input
               type="text"
               value={confirmationText}
               onChange={(event) => setConfirmationText(event.target.value)}
-              placeholder={requiredText ? `Type ${requiredText}` : "Type word"}
+              placeholder={
+                requiredText
+                  ? t("settings.deleteAccountConfirmPlaceholder", {
+                      word: requiredText,
+                    })
+                  : t("settings.deleteAccountConfirmPlaceholder", {
+                      word: "DELETE",
+                    })
+              }
               disabled={isDeleting}
               autoComplete="off"
               spellCheck={false}
@@ -181,7 +205,7 @@ export default function DeleteAccountDialog({
               border: "1px solid var(--color-border)",
             }}
           >
-            Cancel
+            {t("settings.deleteAccountCancel")}
           </button>
 
           <button
@@ -195,7 +219,9 @@ export default function DeleteAccountDialog({
             }}
           >
             {isDeleting && <Loader2 size={16} className="animate-spin" />}
-            {isDeleting ? "Deleting account..." : "Delete account permanently"}
+            {isDeleting
+              ? t("settings.deleteAccountDeleting")
+              : t("settings.deleteAccountPermanently")}
           </button>
         </div>
       </div>

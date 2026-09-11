@@ -617,7 +617,10 @@ class PreExistingAccountTests(TransferFlowMixin, TestCase):
         ``google_signup_not_allowed`` — so every success on that path is a login
         to a pre-existing account and must transfer nothing.
         """
-        _make_user(username="veteran", email="veteran@example.com", verified=True)
+        user = _make_user(username="veteran", email="veteran@example.com", verified=True)
+        # Existing Google binding: silent email-match linking is now forbidden.
+        user.google_sub = "google-sub-1"
+        user.save(update_fields=["google_sub"])
         self.ensure_session()
         identity = GuestIdentity.objects.get()
         conversation, charge, purchase = self.seed_guest_state(identity)

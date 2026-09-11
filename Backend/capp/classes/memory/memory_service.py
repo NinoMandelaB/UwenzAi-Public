@@ -4,6 +4,7 @@ import logging
 import json
 import re
 import time as time_module
+import unicodedata
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
@@ -11,6 +12,7 @@ import requests
 from django.conf import settings
 from django.db import models, transaction
 from django.utils import timezone
+from django.utils.crypto import salted_hmac
 from pgvector.django import CosineDistance
 
 from capp.models import (
@@ -23,6 +25,12 @@ from capp.models import (
     Message,
 )
 from capp.classes.ai.mistral_client import MistralClient
+from capp.classes.memory.mutation_guard import (
+    memory_write_lock,
+    generation,
+    advance_memory,
+    advance_summary,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +62,9 @@ class MemoryService:
         """
         from capp.models import ConversationSummary, RelationshipState
 
-        with transaction.atomic():
+        with memory_write_lock(user):
+            advance_memory(user)
+            advance_summary(user, character)
             # 1. Facts for this (user, character).
             facts_deleted, _ = MemoryFact.objects.filter(user=user, character=character).delete()
 
@@ -81,15 +91,7 @@ class MemoryService:
             # Only sweep entities belonging to *this* user, and only those
             # whose remaining reference count from any surviving MemoryRelation
             # (any character, any scope) is zero.
-            orphan_qs = (
-                MemoryEntity.objects.filter(user=user)
-                .annotate(
-                    remaining_refs=models.Count("out_relations", distinct=True)
-                    + models.Count("in_relations", distinct=True)
-                )
-                .filter(remaining_refs=0)
-            )
-            entities_deleted, _ = orphan_qs.delete()
+            entities_deleted = cls.collect_orphan_entities(user)
 
         logger.info(
             "Cleared memory for user %s, character %s: "
@@ -131,7 +133,7 @@ class MemoryService:
         from capp.classes.ai.token_utils import TokenUtils
 
         queryset = cls._current_facts_queryset(user, character)
-        queryset = queryset.order_by("-importance_score", "last_used_at")
+        queryset = queryset.defer("embedding").order_by("-importance_score", "last_used_at")[: max(0, limit)]
 
         selected_facts = []
         total_tokens = 0
@@ -380,6 +382,11 @@ class MemoryService:
             # (guest history is migrated on signup and extracted then).
             if user is None:
                 return
+            # Capture before reading any extraction context. Every manual
+            # memory edit/reset invalidates this snapshot, including deletions.
+            expected_generation = generation(conversation)
+            if expected_generation is None:
+                return
 
             # Gather recent messages
             recent_messages = Message.objects.filter(conversation=conversation).order_by("-created_at")[
@@ -527,48 +534,53 @@ class MemoryService:
                 if not isinstance(item, dict):
                     continue
 
-                fact_text = item.get("fact_text", "").strip()
+                if not isinstance(item.get("fact_text"), str):
+                    continue
+                fact_text = item["fact_text"].strip()
                 if not fact_text:
                     continue
 
                 # Generate embedding (background – retry on overload)
-                embed_result = cls._get_embedding(fact_text, retry_on_overload=True)
-                if embed_result is None:
-                    continue
-                embedding, used_model = embed_result
-
-                # Duplicate check (semantic + prefix)
-                if cls._is_duplicate(user, fact_text, embedding):
-                    continue
+                embed_result = cls._safe_embedding(fact_text, retry_on_overload=True)
+                embedding, used_model = embed_result if embed_result is not None else (None, "")
 
                 fact_type = item.get("fact_type", "other")
-                confidence = float(item.get("confidence", 0.7))
-                importance = int(item.get("importance_score", 5))
+                if not isinstance(fact_type, str) or fact_type not in dict(MemoryFact.FactType.choices):
+                    fact_type = "other"
+                try:
+                    confidence = float(item.get("confidence", 0.7))
+                    importance = int(item.get("importance_score", 5))
+                    if not 0 <= confidence <= 1:
+                        confidence = 0.7
+                except (TypeError, ValueError, OverflowError):
+                    continue
 
                 now = timezone.now()
-                new_fact = MemoryFact.objects.create(
-                    user=user,
-                    character=character,
-                    conversation=conversation,
-                    source_message=user_message,
-                    fact_text=fact_text,
-                    fact_type=fact_type,
-                    confidence_score=min(max(confidence, 0), 1),
-                    importance_score=min(max(importance, 1), 10),
-                    embedding=embedding,
-                    embedding_model=used_model,  # now stores actual model used
-                    extracted_at=now,
-                    valid_from=cls._parse_valid_from(item.get("valid_from"), now_local),
-                    is_active=True,
-                )
-                saved += 1
-
-                # Temporal supersession: if the extractor flagged this fact as a
-                # correction of an existing one, close the old fact's validity
-                # window and link the history chain.
-                supersedes_id = item.get("supersedes")
-                if supersedes_id:
-                    cls._supersede_fact(supersedes_id, new_fact, now)
+                with memory_write_lock(user):
+                    if generation(conversation) != expected_generation:
+                        return
+                    if cls._is_duplicate(user, fact_text, embedding):
+                        continue
+                    new_fact = MemoryFact.objects.create(
+                        user=user,
+                        character=character,
+                        conversation=conversation,
+                        source_message=user_message,
+                        fact_text=fact_text,
+                        content_key=cls.fact_content_key(fact_text),
+                        fact_type=fact_type,
+                        confidence_score=min(max(confidence, 0), 1),
+                        importance_score=min(max(importance, 1), 10),
+                        embedding=embedding,
+                        embedding_model=used_model,
+                        extracted_at=now,
+                        valid_from=cls._parse_valid_from(item.get("valid_from"), now_local),
+                        is_active=True,
+                    )
+                    saved += 1
+                    supersedes_id = item.get("supersedes")
+                    if isinstance(supersedes_id, str) and supersedes_id:
+                        cls._supersede_fact(supersedes_id, new_fact, now)
 
             relations_saved = cls._save_relations(
                 extracted_relations,
@@ -576,6 +588,7 @@ class MemoryService:
                 character=character,
                 conversation=conversation,
                 reference=now_local,
+                expected_generation=expected_generation,
             )
 
             logger.info(
@@ -623,7 +636,7 @@ class MemoryService:
             try:
                 from openai import OpenAI
 
-                client = OpenAI(api_key=cortecs_api_key, base_url=cortecs_base_url)
+                client = OpenAI(api_key=cortecs_api_key, base_url=cortecs_base_url, timeout=15, max_retries=0)
                 response = client.chat.completions.create(
                     model=cortecs_mem_model,
                     messages=messages,
@@ -741,17 +754,46 @@ class MemoryService:
         1) Prefix match (exact first 60 chars)
         2) Semantic cosine similarity > 0.92 via pgvector
         """
-        prefix = text[:60]
-        if MemoryFact.objects.filter(user=user, fact_text__startswith=prefix, is_active=True).exists():
-            return True
-
-        similar = (
-            MemoryFact.objects.filter(user=user, is_active=True)
-            .annotate(similarity=1 - CosineDistance("embedding", embedding))
-            .filter(similarity__gt=0.92)
-            .first()
+        current = MemoryFact.objects.filter(user=user, is_active=True, valid_to__isnull=True).filter(
+            models.Q(expires_at__isnull=True) | models.Q(expires_at__gt=timezone.now())
         )
-        return similar is not None
+        # EncryptedTextField cannot support SQL prefix/exact lookups.
+        if current.filter(content_key=cls.fact_content_key(text)).exists():
+            return True
+        if embedding is None:
+            return False
+        try:
+            # Savepoint prevents a missing vector operator from poisoning the
+            # enclosing mutation transaction; lexical fallback still works.
+            with transaction.atomic():
+                return (
+                    current.filter(embedding__isnull=False)
+                    .annotate(similarity=1 - CosineDistance("embedding", embedding))
+                    .filter(similarity__gt=0.92)
+                    .exists()
+                )
+        except Exception:
+            logger.warning("Memory vector dedup unavailable; using exact matching")
+            return False
+
+    @staticmethod
+    def fact_content_key(text):
+        normalized = " ".join(unicodedata.normalize("NFC", text).split())
+        return salted_hmac("memory-fact-content", normalized, algorithm="sha256").hexdigest()
+
+    @classmethod
+    def find_exact_fact(cls, user, character, text):
+        key = cls.fact_content_key(text)
+        qs = cls._current_facts_queryset(user, character).filter(character=character).defer("embedding")
+        match = qs.filter(content_key=key).first()
+        if match:
+            return match
+        # Legacy ciphertext has no searchable key. Stream rather than loading
+        # unbounded vectors/rows; existing automatic memory remains intact.
+        for fact in qs.filter(content_key="").iterator(chunk_size=100):
+            if cls.fact_content_key(fact.fact_text) == key:
+                return fact
+        return None
 
     # ------------------------------------------------------------------
     # Temporal helpers (Phase 1)
@@ -828,6 +870,11 @@ class MemoryService:
 
     @classmethod
     def _supersede_fact(cls, old_fact_id: str, new_fact: MemoryFact, now) -> bool:
+        with memory_write_lock(new_fact.user):
+            return cls._supersede_fact_locked(old_fact_id, new_fact, now)
+
+    @classmethod
+    def _supersede_fact_locked(cls, old_fact_id: str, new_fact: MemoryFact, now) -> bool:
         """
         Close ``old_fact``'s validity window and point its history chain at
         ``new_fact``. Ownership and scope are verified so one user's extraction
@@ -903,11 +950,45 @@ class MemoryService:
 
     @classmethod
     def _build_entity_snapshot(cls, user: CustomUser, limit: Optional[int] = None) -> List[str]:
-        """Return the user's most-referenced canonical entity names."""
+        """Account-wide names, but only those with surviving live references.
+
+        Historical-only nodes are retained in storage when referenced, never
+        re-sent as current extraction context. Cross-character sharing stays.
+        """
         limit = limit or cls.ENTITY_SNAPSHOT_LIMIT
-        return list(
-            MemoryEntity.objects.filter(user=user).order_by("-updated_at").values_list("name", flat=True)[:limit]
+        live = MemoryRelation.objects.filter(user=user, invalidated_at__isnull=True).filter(
+            models.Q(valid_to__isnull=True) | models.Q(valid_to__gt=timezone.now())
         )
+        return list(
+            MemoryEntity.objects.filter(user=user)
+            .filter(models.Q(pk__in=live.values("subject_id")) | models.Q(pk__in=live.values("object_entity_id")))
+            .order_by("-updated_at")
+            .values_list("name", flat=True)[:limit]
+        )
+
+    @classmethod
+    def collect_orphan_entities(cls, user, candidate_ids=None):
+        """Delete only truly unreferenced nodes under the account write lock.
+
+        Check ALL reverse ORM references, including closed/historical edges
+        and edges belonging to other characters. Never rely on CASCADE.
+        """
+        deleted = 0
+        with memory_write_lock(user):
+            qs = MemoryEntity.objects.filter(user=user)
+            if candidate_ids is not None:
+                qs = qs.filter(pk__in=[pk for pk in candidate_ids if pk is not None])
+            else:
+                qs = qs.filter(out_relations__isnull=True, in_relations__isnull=True)
+            for entity in qs.select_for_update(of=("self",)).order_by("pk").iterator(chunk_size=100):
+                referenced = any(
+                    relation.related_model._base_manager.filter(**{relation.field.name: entity}).exists()
+                    for relation in MemoryEntity._meta.related_objects
+                )
+                if not referenced:
+                    entity.delete()
+                    deleted += 1
+        return deleted
 
     @classmethod
     def _build_relation_snapshot(
@@ -927,6 +1008,7 @@ class MemoryService:
         user: CustomUser,
         name: str,
         entity_type: str,
+        prepared_embedding=...,
     ) -> Optional[MemoryEntity]:
         """
         Get or create a canonical entity for ``user``. Semantic matching is
@@ -935,13 +1017,17 @@ class MemoryService:
         ("my sister Amina" and "Amina from work"). The prompt-side entity
         snapshot handles alias reuse.
         """
-        if not name:
+        if not isinstance(name, str) or not name:
             return None
         normalized = MemoryEntity.normalize_name(name)
-        if not normalized:
+        if not normalized or len(normalized) > 120 or len(name.strip()) > 120:
             return None
 
-        entity_type = entity_type if entity_type in dict(MemoryEntity.EntityType.choices) else "other"
+        entity_type = (
+            entity_type
+            if isinstance(entity_type, str) and entity_type in dict(MemoryEntity.EntityType.choices)
+            else "other"
+        )
         entity, created = MemoryEntity.objects.get_or_create(
             user=user,
             normalized_name=normalized,
@@ -951,12 +1037,75 @@ class MemoryService:
         # ever find these rows. Only compute when the field is empty so we
         # don't pay the embedding cost on every extraction round. Fail-silent:
         # if embedding is unavailable the entity is still saved.
-        if not entity.embedding:
-            emb = cls._get_embedding(entity.name or normalized)
+        #
+        # NOTE: once a value has been saved, pgvector.django's VectorField
+        # returns it as a numpy array on read-back, not a plain list. `bool()`
+        # (and therefore `not entity.embedding`) is ambiguous for a numpy
+        # array with more than one element and raises ValueError, so this
+        # must be an explicit `is None` check rather than a truthiness check.
+        if entity.embedding is None:
+            emb = cls._get_embedding(entity.name or normalized) if prepared_embedding is ... else prepared_embedding
             if emb is not None:
                 entity.embedding, entity.embedding_model = emb
                 entity.save(update_fields=["embedding", "embedding_model", "updated_at"])
         return entity
+
+    @classmethod
+    def find_exact_relation(cls, user, character, subject, predicate, object_text, *, include_shared=False):
+        qs = cls._current_relations_queryset(user, character).filter(
+            subject__normalized_name=MemoryEntity.normalize_name(subject), predicate=predicate
+        )
+        if not include_shared:
+            qs = qs.filter(character=character)
+        if object_text:
+            qs = qs.filter(object_entity__normalized_name=MemoryEntity.normalize_name(object_text))
+        else:
+            qs = qs.filter(object_entity__isnull=True, object_text__isnull=True)
+        return qs.select_related("subject", "object_entity").first()
+
+    @classmethod
+    def prepare_relation(cls, user, subject, predicate, object_text, subject_type="other", object_type="other"):
+        """Provider work only: no entities are persisted until commit."""
+
+        def prepare(name, kind):
+            if not name:
+                return None
+            entity = MemoryEntity.objects.filter(user=user, normalized_name=MemoryEntity.normalize_name(name)).first()
+            canonical = entity.name if entity else name
+            if entity is not None and entity.embedding is not None:
+                emb = (entity.embedding, entity.embedding_model)
+            else:
+                emb = cls._safe_embedding(canonical)
+            return canonical, kind, emb
+
+        subj = prepare(subject, subject_type)
+        obj = prepare(object_text, object_type)
+        triple = f"{subj[0]} {predicate.replace('_', ' ')} {obj[0] if obj else object_text}".strip()
+        return subj, predicate, obj, object_text, cls._safe_embedding(triple)
+
+    @classmethod
+    def _safe_embedding(cls, text, retry_on_overload=False):
+        try:
+            return cls._get_embedding(text, retry_on_overload=retry_on_overload)
+        except Exception:
+            logger.warning("Memory embedding unavailable; saving without vector")
+            return None
+
+    @classmethod
+    def relation_values(cls, user, prepared):
+        """Database work only. Caller holds memory_write_lock."""
+        subj, predicate, obj, object_text, embedding = prepared
+        subject_entity = cls._resolve_entity(user, subj[0], subj[1], prepared_embedding=subj[2])
+        object_entity = cls._resolve_entity(user, obj[0], obj[1], prepared_embedding=obj[2]) if obj else None
+        vector, model = embedding if embedding is not None else (None, "")
+        return {
+            "subject": subject_entity,
+            "predicate": predicate,
+            "object_entity": object_entity,
+            "object_text": None if object_entity else (object_text or None),
+            "embedding": vector,
+            "embedding_model": model,
+        }
 
     @staticmethod
     def _relation_triple_text(
@@ -980,9 +1129,10 @@ class MemoryService:
         character: Optional[Character],
         conversation: Optional[Conversation],
         reference,
+        expected_generation=None,
     ) -> int:
         """Persist newly-extracted relations, closing superseded edges and dedup'ing."""
-        if not raw_relations:
+        if not isinstance(raw_relations, list) or not raw_relations:
             return 0
 
         saved = 0
@@ -990,61 +1140,54 @@ class MemoryService:
         for item in raw_relations:
             if not isinstance(item, dict):
                 continue
-            subject_name = (item.get("subject") or "").strip()
-            predicate = (item.get("predicate") or "").strip().lower().replace(" ", "_")
-            object_name = (item.get("object") or "").strip()
+            if any(not isinstance(item.get(key, ""), str) for key in ("subject", "predicate", "object")):
+                continue
+            subject_name = item.get("subject", "").strip()
+            predicate = item.get("predicate", "").strip().lower().replace(" ", "_")
+            object_name = item.get("object", "").strip()
             if not subject_name or not predicate:
                 continue
 
             # Reserve length so a runaway model can't blow past the column limit.
             predicate = predicate[:60]
-
-            subject_entity = cls._resolve_entity(user, subject_name, item.get("subject_type") or "other")
-            if subject_entity is None:
+            if any(
+                max(len(name), len(MemoryEntity.normalize_name(name))) > 120 for name in (subject_name, object_name)
+            ):
                 continue
-            object_entity = (
-                cls._resolve_entity(user, object_name, item.get("object_type") or "other") if object_name else None
+            prepared = cls.prepare_relation(
+                user,
+                subject_name,
+                predicate,
+                object_name,
+                item.get("subject_type", "other"),
+                item.get("object_type", "other"),
             )
-
-            # Exact duplicate of a currently-valid edge → skip silently.
-            current = cls._current_relations_queryset(user, character)
-            duplicate_qs = current.filter(subject=subject_entity, predicate=predicate)
-            if object_entity is not None:
-                duplicate_qs = duplicate_qs.filter(object_entity=object_entity)
-            else:
-                duplicate_qs = duplicate_qs.filter(object_text=object_name or None)
-            if duplicate_qs.exists():
-                continue
-
-            # Embed the triple text so Phase 3 vector search can retrieve
-            # this edge ("Zawadi lives in Nairobi"). Fail-silent: relation is
-            # persisted without an embedding rather than blocking extraction.
-            triple_text = cls._relation_triple_text(subject_entity, predicate, object_entity, object_name)
-            emb = cls._get_embedding(triple_text)
-            embedding_vec, embedding_model = emb if emb is not None else (None, "")
-
-            new_relation = MemoryRelation.objects.create(
-                user=user,
-                character=character,
-                conversation=conversation,
-                subject=subject_entity,
-                predicate=predicate,
-                object_entity=object_entity,
-                object_text=None if object_entity is not None else (object_name or None),
-                valid_from=cls._parse_valid_from(item.get("valid_from"), reference),
-                embedding=embedding_vec,
-                embedding_model=embedding_model,
-            )
-
-            updates_id = item.get("updates")
-            if updates_id:
-                cls._supersede_relation(updates_id, new_relation, now)
-            saved += 1
+            with memory_write_lock(user):
+                if expected_generation is not None and generation(conversation) != expected_generation:
+                    return saved
+                if cls.find_exact_relation(user, character, subject_name, predicate, object_name, include_shared=True):
+                    continue
+                new_relation = MemoryRelation.objects.create(
+                    user=user,
+                    character=character,
+                    conversation=conversation,
+                    valid_from=cls._parse_valid_from(item.get("valid_from"), reference),
+                    **cls.relation_values(user, prepared),
+                )
+                updates_id = item.get("updates")
+                if isinstance(updates_id, str) and updates_id:
+                    cls._supersede_relation(updates_id, new_relation, now)
+                saved += 1
 
         return saved
 
     @classmethod
     def _supersede_relation(cls, old_relation_id: str, new_relation: MemoryRelation, now) -> bool:
+        with memory_write_lock(new_relation.user):
+            return cls._supersede_relation_locked(old_relation_id, new_relation, now)
+
+    @classmethod
+    def _supersede_relation_locked(cls, old_relation_id: str, new_relation: MemoryRelation, now) -> bool:
         """Close ``old_relation``'s system-time validity; ownership-checked."""
         candidates = MemoryRelation.objects.filter(
             user=new_relation.user,

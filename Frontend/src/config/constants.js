@@ -38,6 +38,7 @@ export const API = {
     DELETE_ACCOUNT: "/api/v1/auth/delete-account/",
 
     REQUEST_EMAIL_CHANGE: "/api/v1/auth/request-email-change/",
+    FEATURE_PREFERENCES: "/api/v1/auth/feature-preferences/",
     CONFIRM_EMAIL_CHANGE: "/api/v1/auth/confirm-email-change/",
   },
 
@@ -200,6 +201,23 @@ export const API = {
 
   MEMORY: {
     CLEAR: (characterId) => `/api/v1/memory/clear/${characterId}/`,
+    // Memory editor (brain icon popup, logged-in users only)
+    EDITOR: (characterId) => `/api/v1/memory/editor/${characterId}/`,
+    EDITOR_FACTS: (characterId) =>
+      `/api/v1/memory/editor/${characterId}/facts/`,
+    EDITOR_FACT: (factId) => `/api/v1/memory/editor/facts/${factId}/`,
+    EDITOR_FACT_DELETE: (factId) =>
+      `/api/v1/memory/editor/facts/${factId}/delete/`,
+    EDITOR_RELATIONS: (characterId) =>
+      `/api/v1/memory/editor/${characterId}/relations/`,
+    EDITOR_RELATION: (relationId) =>
+      `/api/v1/memory/editor/relations/${relationId}/`,
+    EDITOR_RELATION_DELETE: (relationId) =>
+      `/api/v1/memory/editor/relations/${relationId}/delete/`,
+    EDITOR_SUMMARY: (characterId) =>
+      `/api/v1/memory/editor/summary/${characterId}/`,
+    EDITOR_SUMMARY_DELETE: (characterId) =>
+      `/api/v1/memory/editor/summary/${characterId}/delete/`,
   },
 
   // ─────────────────────────────────────────────────────────────
@@ -210,6 +228,16 @@ export const API = {
       `/api/v1/proactive-chat/preference/${characterId}/`,
     UPDATE: (characterId) =>
       `/api/v1/proactive-chat/preference/${characterId}/update/`,
+  },
+
+  // ─────────────────────────────────────────────────────────────
+  // Reminders (calendar/task icon in chat)
+  // ─────────────────────────────────────────────────────────────
+  REMINDERS: {
+    LIST: "/api/v1/reminders/",
+    CREATE: "/api/v1/reminders/create/",
+    UPDATE: (reminderId) => `/api/v1/reminders/${reminderId}/update/`,
+    DELETE: (reminderId) => `/api/v1/reminders/${reminderId}/delete/`,
   },
 
   // ─────────────────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 // src/pages/Login.jsx
 
-import { Link, useNavigate } from "react-router-dom";
-import { useRef, useState } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
 import ReCAPTCHA from "react-google-recaptcha";
 import { Lock, ShieldCheck, User, Eye, EyeOff } from "lucide-react";
 import PrimaryButton from "../components/PrimaryButton";
@@ -9,6 +9,7 @@ import GoogleSignInButton from "../components/GoogleSignInButton";
 import MessagePopup from "../components/MessagePopup";
 import { useLanguage } from "../context/LanguageContext";
 import { signinUser } from "../services/authService";
+import { getAuthSessionGeneration } from "../services/apiClient";
 import { useAuth } from "../context/AuthContext";
 import { useTheme } from "../context/ThemeContext";
 import { getAuthMessage, getAuthTitle } from "../utils/authMessageMapper";
@@ -83,6 +84,7 @@ function Input({
         )}
 
         <input
+          aria-label={label}
           name={name}
           type={inputType}
           value={value}
@@ -125,12 +127,18 @@ function safeT(t, key, fallback) {
 }
 
 export default function Login() {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const navigate = useNavigate();
+  const location = useLocation();
   const { login } = useAuth();
   const { isDark } = useTheme(); // only need isDark for reCAPTCHA theme
 
   const recaptchaRef = useRef(null);
+  const requestController = useRef(null);
+  useEffect(() => {
+    requestController.current = new AbortController();
+    return () => requestController.current.abort();
+  }, []);
   const recaptchaSiteKey = import.meta.env.VITE_RECAPTCHA_SITE_KEY || "";
 
   const [formData, setFormData] = useState({
@@ -142,6 +150,11 @@ export default function Login() {
   const [errors, setErrors] = useState({});
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
+  // Navigation intent only. Google credentials are never carried across login.
+  const connectGoogleAfterLogin = location.state?.connectGoogle === true;
+  const setConnectGoogleAfterLogin = (enabled) => {
+    navigate("/login", { replace: true, state: { connectGoogle: enabled } });
+  };
 
   const [popup, setPopup] = useState({
     open: false,
@@ -256,6 +269,7 @@ export default function Login() {
 
   const handleSubmit = async (event) => {
     event.preventDefault();
+    if (loading || googleLoading) return;
 
     const nextErrors = validate();
     setErrors(nextErrors);
@@ -266,21 +280,32 @@ export default function Login() {
     }
 
     setLoading(true);
+    const controller = requestController.current;
+    const generation = getAuthSessionGeneration();
+    const current = () =>
+      !controller.signal.aborted && generation === getAuthSessionGeneration();
 
     try {
-      const result = await signinUser({
-        username: formData.username.trim().toLowerCase(),
-        password: formData.password,
-        recaptcha_token: captchaToken,
-      });
+      const result = await signinUser(
+        {
+          username: formData.username.trim().toLowerCase(),
+          password: formData.password,
+          recaptcha_token: captchaToken,
+        },
+        { signal: controller.signal },
+      );
+      if (!current()) return;
 
       login({
         user: result?.data?.user || null,
         accessToken: result?.data?.access_token || null,
       });
 
-      navigate("/characters");
+      navigate(
+        connectGoogleAfterLogin ? "/settings#google-connection" : "/characters",
+      );
     } catch (err) {
+      if (!current() || err.name === "AbortError") return;
       resetRecaptcha();
 
       const verificationPayload = err?.payload?.data;
@@ -304,7 +329,7 @@ export default function Login() {
         ),
       });
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) setLoading(false);
     }
   };
 
@@ -327,6 +352,11 @@ export default function Login() {
 
   const handleGoogleError = (message) => {
     setGoogleLoading(false);
+    if (message?.code === "google_link_confirmation_required") {
+      setConnectGoogleAfterLogin(true);
+      closePopup();
+      return;
+    }
 
     showPopup({
       type: "error",
@@ -334,6 +364,7 @@ export default function Login() {
       message: getAuthMessage(
         message,
         "Unable to continue with Google right now.",
+        language,
       ),
     });
   };
@@ -356,6 +387,21 @@ export default function Login() {
           {welcomeBackSubtitle}
         </p>
       </div>
+
+      {connectGoogleAfterLogin && (
+        <div role="status" className="mb-5 rounded-2xl border p-4 theme-card">
+          <p className="text-sm leading-6 theme-text-muted">
+            {getAuthMessage("google_link_confirmation_required", "", language)}
+          </p>
+          <button
+            type="button"
+            onClick={() => setConnectGoogleAfterLogin(false)}
+            className="mt-2 text-sm underline theme-text"
+          >
+            {t("common.cancel")}
+          </button>
+        </div>
+      )}
 
       <form className="space-y-5" onSubmit={handleSubmit}>
         <Input

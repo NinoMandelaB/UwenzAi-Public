@@ -10,7 +10,16 @@
 //   localStorage: the browser is the source of truth and re-syncs itself.
 
 import { API } from "../config/constants";
-import { apiFetch } from "./apiClient";
+import {
+  apiFetch,
+  getAccessToken,
+  getAuthSessionGeneration,
+} from "./apiClient";
+import { boundedTask } from "../utils/boundedTask";
+
+export const PUSH_STATE_CHANGED = "uwenzai:push-state-changed";
+const notifyPushState = () =>
+  window.dispatchEvent(new Event(PUSH_STATE_CHANGED));
 
 /**
  * Whether this browser can receive Web Push at all
@@ -81,7 +90,7 @@ async function registerPushSubscription(subscription) {
   const { endpoint, keys } = subscription.toJSON();
   const response = await apiFetch(API.PUSH.SUBSCRIBE, {
     method: "POST",
-    body: JSON.stringify({ endpoint, keys }),
+    body: { endpoint, keys },
   });
   if (!response.ok) {
     const error = new Error("Failed to enable push notifications.");
@@ -97,17 +106,22 @@ async function registerPushSubscription(subscription) {
  * Throws when permission is denied or the backend rejects the subscription.
  */
 export async function subscribeToPush() {
+  const generation = getAuthSessionGeneration();
   const publicKey = await getVapidPublicKey();
   if (!publicKey) {
     throw new Error("Push notifications are not available right now.");
   }
 
   const registration = await getReadyPushRegistration();
+  if (getAuthSessionGeneration() !== generation)
+    throw new Error("Session changed.");
   if (!registration) {
     throw new Error("Push notifications require the installed app.");
   }
 
   const permission = await Notification.requestPermission();
+  if (getAuthSessionGeneration() !== generation)
+    throw new Error("Session changed.");
   if (permission !== "granted") {
     throw new Error("Notification permission was not granted.");
   }
@@ -118,23 +132,43 @@ export async function subscribeToPush() {
   });
 
   try {
-    return await registerPushSubscription(subscription);
+    if (getAuthSessionGeneration() !== generation)
+      throw new Error("Session changed.");
+    const registered = await registerPushSubscription(subscription);
+    if (getAuthSessionGeneration() !== generation)
+      throw new Error("Session changed.");
+    notifyPushState();
+    return registered;
   } catch (error) {
     // Backend refused — don't leave a half-registered browser subscription
     // that would keep receiving pushes the user can't manage from Settings.
-    await subscription.unsubscribe().catch(() => {});
+    // A delayed refusal from A must not retire a subscription B now owns.
+    if (getAuthSessionGeneration() === generation || !getAccessToken()) {
+      await boundedTask(() => subscription.unsubscribe()).catch(() => {});
+      notifyPushState();
+    }
     throw error;
   }
 }
 
 export async function unsubscribePushLocally() {
-  const subscription = await getPushSubscription();
-  if (!subscription) return;
-  await subscription.unsubscribe();
+  const token = getAccessToken();
+  try {
+    return await boundedTask(async () => {
+      const subscription = await getPushSubscription();
+      if (getAccessToken() && getAccessToken() !== token) return false;
+      if (!subscription) return true;
+      return subscription.unsubscribe();
+    });
+  } finally {
+    notifyPushState();
+  }
 }
 
 export async function reconcilePushSubscription() {
+  const generation = getAuthSessionGeneration();
   const subscription = await getPushSubscription();
+  if (getAuthSessionGeneration() !== generation) return null;
   if (!subscription) return null;
   try {
     return await registerPushSubscription(subscription);
@@ -142,40 +176,61 @@ export async function reconcilePushSubscription() {
     // Preserve the user's browser-level preference across temporary outages.
     // Only terminal client/conflict responses prove this subscription cannot
     // safely remain associated with the authenticated account.
-    if ([400, 409, 410, 422].includes(error?.status)) {
-      await subscription.unsubscribe().catch(() => {});
+    if (
+      getAuthSessionGeneration() === generation &&
+      [400, 409, 410, 422].includes(error?.status)
+    ) {
+      await boundedTask(() => subscription.unsubscribe()).catch(() => {});
+      notifyPushState();
     }
     throw error;
   }
 }
 
 /**
- * Remove the subscription backend-side first, then in the browser. Ordering
- * matters on flaky connections: if the browser half fails, the backend row
- * is already gone and the backend prunes dead endpoints on send anyway.
+ * Retire local and server state independently. Neither side may hold the
+ * other hostage. Explicit outcomes let Settings report partial success.
  */
-export async function unsubscribeFromPush() {
-  const subscription = await getPushSubscription();
-  if (!subscription) return;
-
-  let backendError = null;
-  let localError = null;
+export async function unsubscribeFromPush({
+  authToken = getAccessToken(),
+} = {}) {
+  let subscription;
   try {
-    const response = await apiFetch(API.PUSH.UNSUBSCRIBE, {
-      method: "DELETE",
-      body: JSON.stringify({ endpoint: subscription.endpoint }),
-    });
-    if (!response.ok) {
-      backendError = new Error("Failed to disable push notifications.");
+    subscription = await boundedTask(() => getPushSubscription());
+    if (getAccessToken() && getAccessToken() !== authToken) {
+      return {
+        localRemoved: false,
+        remoteRemoved: false,
+        localError: new Error("Session changed."),
+      };
     }
-  } catch (error) {
-    backendError = error;
+  } catch (localError) {
+    return { localRemoved: false, remoteRemoved: false, localError };
   }
-  try {
-    await subscription.unsubscribe();
-  } catch (error) {
-    localError = error;
-  }
-  if (backendError) throw backendError;
-  if (localError) throw localError;
+  if (!subscription) return { localRemoved: true, remoteRemoved: true };
+  const [local, remote] = await Promise.allSettled([
+    boundedTask(async () => {
+      const removed = await subscription.unsubscribe();
+      if (!removed && (await getPushSubscription()))
+        throw new Error("Browser subscription remains enabled.");
+      return true;
+    }).finally(notifyPushState),
+    boundedTask(async (signal) => {
+      const response = await apiFetch(API.PUSH.UNSUBSCRIBE, {
+        method: "DELETE",
+        body: { endpoint: subscription.endpoint },
+        authToken,
+        skipAuthRefresh: true,
+        signal,
+      });
+      if (!response.ok) throw new Error("Server push cleanup failed.");
+      return true;
+    }),
+  ]);
+  return {
+    localRemoved: local.status === "fulfilled",
+    remoteRemoved: remote.status === "fulfilled",
+    localError: local.reason || null,
+    remoteError: remote.reason || null,
+  };
 }

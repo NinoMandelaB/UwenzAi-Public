@@ -8,7 +8,7 @@ from datetime import timedelta
 
 from celery import shared_task
 from celery.exceptions import MaxRetriesExceededError, Retry, SoftTimeLimitExceeded
-from django.db import OperationalError, connection, transaction
+from django.db import OperationalError, close_old_connections, connection, transaction
 from django.utils import timezone
 from django.conf import settings
 from asgiref.sync import async_to_sync
@@ -19,7 +19,9 @@ from capp.classes.push.push_service import PushService
 
 from capp.models import (
     BillingReservation,
+    Character,
     Conversation,
+    CustomUser,
     GuestIdentity,
     Message,
     TokenUsageLog,
@@ -32,6 +34,7 @@ from capp.models import (
 )
 from capp.classes.ai.cortecs_client import CortecsClient
 from capp.classes.ai.prompt_builder import PromptBuilder
+from capp.classes.ai.token_utils import PromptBudgetExceeded
 from capp.classes.byok.byok_service import BYOKService
 from capp.constants import BYOK_MESSAGE_PAIR_COST, CHARACTER_PHOTO_OFFER_COST
 from capp.classes.search.base import get_search_provider
@@ -40,9 +43,28 @@ from capp.classes.search.tool_loop import (
     run_open_url_tool_calls,
     SEARCH_TOOL_SPEC,
     OPEN_URL_TOOL_SPEC,
+    SEARCH_GROUNDING_NOTICE,
+    TOOL_COMPLETION_NOTICE,
+    SEARCH_INCOMPLETE_REPLY,
+    is_lookup_handoff,
+)
+from capp.classes.reminders.tool_loop import (
+    run_reminder_tool_calls,
+    build_reminder_tool_specs,
+    REMINDER_TOOL_NAMES,
+    CREATE_REMINDER_TOOL_NAME,
+    CANCEL_REMINDER_TOOL_NAME,
+    _get_function,
+    _get_function_name,
+)
+from capp.classes.profile.tool_loop import (
+    run_profile_tool_calls,
+    build_profile_tool_specs,
+    PROFILE_TOOL_NAMES,
 )
 
 from capp.classes.memory.memory_service import MemoryService
+from capp.classes.auth.feature_preferences import FeaturePreferences
 from capp.classes.relationship.relationship_service import RelationshipService
 from capp.classes.summary.summary_service import ConversationSummaryService
 from capp.classes.billing.balances import debit_locked
@@ -55,31 +77,166 @@ from capp.classes.moderation.image_prompt_policy import ImagePromptPolicy
 logger = logging.getLogger(__name__)
 
 
-def _run_offered_tool_calls(tool_calls, conversation_id):
+def _completed_reply_content(response):
+    """Return (content, failure_reason) for a final, non-tool response.
+
+    Apply this to every candidate accepted for persistence, including a
+    reminder-repair response. Tools-disabled providers are not trusted to
+    return a completed answer merely because a previous round was valid.
     """
-    Execute whichever of the offered tools (web_search, open_url) the model
-    actually called, each independently capped at its own
-    settings.SEARCH_MAX_CALLS_PER_MESSAGE / OPEN_URL_MAX_CALLS_PER_MESSAGE.
+    choices = response.get("choices") if isinstance(response, dict) else None
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        return "", "provider_returned_no_choices"
+    choice = choices[0]
+    message = choice.get("message") or {}
+    if not isinstance(message, dict):
+        return "", "provider_returned_empty"
+    if (
+        message.get("tool_calls")
+        or message.get("function_call")
+        or choice.get("finish_reason")
+        in (
+            "tool_calls",
+            "function_call",
+        )
+    ):
+        return "", "provider_returned_unfinished_tool_response"
+    content = message.get("content")
+    if not isinstance(content, str) or not content.strip():
+        return "", "provider_returned_empty"
+    return content.strip(), None
+
+
+def _run_offered_tool_calls(
+    tool_calls,
+    conversation_id,
+    *,
+    offered_tool_names,
+    conversation=None,
+    user=None,
+    character=None,
+    source_message=None,
+    mutation_receipts=None,
+):
+    """
+    Execute whichever of the offered tools (web_search, open_url,
+    create_reminder, update_timezone) the model actually called, each
+    independently capped at its own limit (settings.SEARCH_MAX_CALLS_PER_MESSAGE /
+    OPEN_URL_MAX_CALLS_PER_MESSAGE / one reminder-tool and one profile-tool
+    call per message).
 
     Used by both the Cortecs and BYOK branches of process_ai_response so the
     two paths behave identically once a tool-calling model is involved --
     search execution (and open_url fetching) is provider-independent.
 
-    Returns (condensed_block, search_calls_used, open_url_calls_used).
+    ``offered_tool_names`` is the exact immutable per-request allowlist,
+    not the account's broader capabilities. All tools require an owned,
+    authenticated conversation; reminder/profile mutations also receive
+    the source message for durable per-turn deduplication. Reminder creation
+    is opt-in, while existing-schedule management remains available off-state.
+
+    Returns (condensed_block, search_calls_used, open_url_calls_used,
+    reminder_calls_used). The last value tells the caller whether a
+    create/update/cancel reminder tool was actually invoked this turn at
+    all -- independent of whether that call then succeeded or failed --
+    which is what the post-generation reminder-hallucination guard in
+    process_ai_response needs: a model that never calls the tool but still
+    writes "I've updated your reminder" is not caught by anything that only
+    inspects the (nonexistent) tool result.
+
+    When supplied, ``mutation_receipts`` collects escaped reminder/profile
+    outcomes separately from optional web data. The four-value return shape
+    and legacy combined-block behavior remain unchanged when it is None.
     """
-    search_condensed, search_calls_used = run_search_tool_calls(tool_calls)
-    open_url_condensed, open_url_calls_used = run_open_url_tool_calls(tool_calls)
+    from capp.classes.search.sanitize import escape_untrusted
 
-    if search_calls_used or open_url_calls_used:
-        logger.info(
-            "Tool calls used for conv=%s: web_search=%d open_url=%d; continuing generation",
-            conversation_id,
-            search_calls_used,
-            open_url_calls_used,
-        )
+    # Provider output is untrusted. Exact per-turn permission is necessary,
+    # even if another tool was offered. An allowlist may never be reconstructed
+    # from the response or from broader account capabilities.
+    allowed = frozenset(offered_tool_names)
+    counts = {"web_search": 0, "open_url": 0, "reminder": 0, "profile": 0}
+    caps = {
+        "web_search": getattr(settings, "SEARCH_MAX_CALLS_PER_MESSAGE", 2),
+        "open_url": getattr(settings, "OPEN_URL_MAX_CALLS_PER_MESSAGE", 1),
+        "reminder": 1,
+        "profile": 1,
+    }
+    blocks = []
+    mutation_names = REMINDER_TOOL_NAMES | PROFILE_TOOL_NAMES
 
-    blocks = [b for b in (search_condensed, open_url_condensed) if b]
-    return ("\n\n".join(blocks), search_calls_used, open_url_calls_used)
+    def record_outcome(name, block):
+        if mutation_receipts is not None and name in mutation_names:
+            # These strings contain quoted user-controlled values. Preserve
+            # the complete factual outcome, but never promote it to policy.
+            receipt = escape_untrusted(block)
+            if receipt not in mutation_receipts:
+                mutation_receipts.append(receipt)
+        else:
+            blocks.append(block)
+
+    timezone_failed = False
+    for call in tool_calls or []:
+        name = _get_function_name(_get_function(call))
+        if not isinstance(name, str) or name not in allowed:
+            record_outcome(
+                name if isinstance(name, str) else None,
+                "[Tool request rejected: this tool was not offered; no action taken]",
+            )
+            continue
+        if user is None or conversation is None or conversation.user_id != user.pk:
+            if mutation_receipts is not None and name in mutation_names:
+                record_outcome(name, f"[{name} denied: no owned account conversation; no action taken]")
+            continue  # Guests have no offered tools; do not change that boundary.
+        # Re-read after model latency, and between dependent tools.
+        current_user = CustomUser.objects.filter(pk=user.pk, is_active=True, is_deleted=False).first()
+        if current_user is None:
+            if mutation_receipts is not None and name in mutation_names:
+                record_outcome(name, f"[{name} denied: account unavailable; no action taken]")
+            continue
+        if name in ("web_search", "open_url"):
+            family = name
+            permitted = (
+                FeaturePreferences.is_enabled(current_user, "websearch")
+                and Conversation.objects.filter(pk=conversation.pk, user=user, web_search_enabled=True).exists()
+                and get_search_provider() is not None
+            )
+        elif name in REMINDER_TOOL_NAMES:
+            family = "reminder"
+            permitted = name != CREATE_REMINDER_TOOL_NAME or FeaturePreferences.is_enabled(current_user, "reminders")
+        elif name in PROFILE_TOOL_NAMES:
+            family, permitted = "profile", True
+        else:
+            continue
+        if not permitted:
+            record_outcome(name, f"[{name} failed: permission is currently disabled; no action taken]")
+            continue
+        if counts[family] >= caps[family]:
+            if mutation_receipts is not None and name in mutation_names:
+                record_outcome(name, f"[{name} skipped: per-turn mutation limit reached; no additional action taken]")
+            continue
+        if family == "reminder":
+            if timezone_failed and name != CANCEL_REMINDER_TOOL_NAME:
+                record_outcome(name, f"[{name} failed: preceding timezone update failed; no scheduling change made]")
+                counts[family] += 1
+                continue
+            block, used = run_reminder_tool_calls(
+                [call],
+                conversation=conversation,
+                user=current_user,
+                character=character,
+                source_message=source_message,
+            )
+        elif family == "profile":
+            block, used = run_profile_tool_calls([call], user=current_user, source_message=source_message)
+            timezone_failed = "update_timezone failed:" in block
+        elif family == "web_search":
+            block, used = run_search_tool_calls([call], max_calls=1, user=current_user)
+        else:
+            block, used = run_open_url_tool_calls([call], max_calls=1)
+        counts[family] += used
+        if block:
+            record_outcome(name, block)
+    return ("\n\n".join(blocks), counts["web_search"], counts["open_url"], counts["reminder"])
 
 
 # The character may offer to send a photo of itself by ending its reply with a
@@ -91,6 +248,138 @@ def _run_offered_tool_calls(tool_calls, conversation_id):
 # discounted CHARACTER_PHOTO_OFFER_COST). Willingness — and the trust threshold
 # for intimate photos — is the model's call, driven by the system prompt.
 PHOTO_OFFER_MARKER_RE = re.compile(r"\[PHOTO_OFFER:(.*?)\]", re.IGNORECASE | re.DOTALL)
+
+
+# ---------------------------------------------------------------------------
+# Reminder-hallucination guard
+# ---------------------------------------------------------------------------
+# PR #184's first commit strengthened the update_reminder tool description,
+# success/no-op wording, and the pending-reminders prompt block so a model
+# that DOES call the tool is much less likely to misreport a no-op as a real
+# change. That is not enough on its own: a production transcript (see
+# capp/tests_reminders.py::ReminderHallucinationGuardTests for the exact
+# reproduction) showed a fast/small model simply never calling
+# update_reminder across several turns of the same conversation, while still
+# confidently writing "I've updated the reminder to 4pm / 5pm / 7:30pm" --
+# almost certainly pattern-matching its own earlier (also false) "updated!"
+# claims already baked into the conversation history rather than reasoning
+# about whether it actually invoked anything this turn. No amount of prompt
+# wording can force a model to call a tool, so this is a post-generation
+# safety net: detect the claim-without-a-call pattern and force an honest
+# rewrite if the shared continuation remains, otherwise use a local fallback.
+#
+# Match assertions, not merely a mutation verb near "reminder". Existing
+# schedule descriptions, instructions and negated attempts are not mutations.
+# This remains a bounded English heuristic, not verification of tool outcomes.
+_REMINDER_CHANGE_VERBS = (
+    r"(?:updat(?:e|ed|ing)|mov(?:e|ed|ing)|reschedul(?:e|ed|ing)|"
+    r"chang(?:e|ed|ing)|adjust(?:ed|ing)?|cancell?(?:ed|ing)?|"
+    r"delet(?:e|ed|ing)|remov(?:e|ed|ing)|creat(?:e|ed|ing)|"
+    r"push(?:ed|ing)?(?:\s+back)?|bump(?:ed|ing)?)"
+)
+_REMINDER_ACTION_VERBS = rf"(?:{_REMINDER_CHANGE_VERBS}|set(?:ting)?|schedul(?:e|ed|ing))"
+_REMINDER_DONE_VERBS = (
+    r"(?:updated|moved|rescheduled|changed|adjusted|cancell?ed|deleted|removed|created|pushed|bumped|scheduled)"
+)
+_REMINDER_CLAIM_SUBJECT = r"\breminders?(?:\s+for(?:\s+[\w'-]+){1,3})?\s+"
+_REMINDER_CLAIM_OBJECT = (
+    r"(?:(?:(?:a|an|the|your|that|this|one|another|new)\s+(?:[\w'-]+\s+)?)?reminders?\b"
+    # Keep the existing clock-time boundary for ambiguous pronoun objects.
+    r"|(?:it|that|this)\b(?=[^.!?;\n]{0,30}\b\d{1,2}(?::\d{2})?\s?(?:am|pm)\b))"
+)
+_REMINDER_CLAIM_RE = re.compile(
+    # Positive first-person actions/promises, not "I could not", "I can"
+    # offers, or "you can update". Negation inside the verb phrase cannot match.
+    r"\b(?P<actor>i(?:'ve|'ll|'m| have| will| am)?|we(?:'ve|'ll|'re| have| will| are)?)\s+"
+    r"(?:(?:just|now|already|successfully|also|gone ahead and)\s+)*"
+    rf"{_REMINDER_ACTION_VERBS}\s+(?:up\s+)?{_REMINDER_CLAIM_OBJECT}"
+    # Passive changes. "Is set/scheduled" describes status; "has been set"
+    # or "is now set" asserts a transition and still needs tool backing.
+    rf"|{_REMINDER_CLAIM_SUBJECT}(?:"
+    r"(?:(?:has|have|had)\s+(?:(?:just|already|now)\s+)?been|(?:is|are|was|were)\s+now)\s+"
+    rf"{_REMINDER_ACTION_VERBS}\b"
+    rf"|(?:is|are|was|were)\s+(?:(?:just|already|now)\s+)*{_REMINDER_CHANGE_VERBS}\b"
+    r"|(?:is|are)\s+(?:set|scheduled)\b(?=[^,]{0,60}\bnow\s*$))"
+    # A terse success confirmation can omit both the actor and auxiliary.
+    rf"|\b(?:done|all set)[,:]?\s+{_REMINDER_CLAIM_OBJECT}\s+{_REMINDER_ACTION_VERBS}\b"
+    rf"|^\s*{_REMINDER_DONE_VERBS}\s+{_REMINDER_CLAIM_OBJECT}"
+    rf"|^\s*(?:(?:the|your|that|this)\s+)?{_REMINDER_CLAIM_SUBJECT}{_REMINDER_DONE_VERBS}\b",
+    re.IGNORECASE,
+)
+_REMINDER_NONASSERTION_RE = re.compile(
+    r"\b(?:not|never|cannot|can't|couldn't|haven't|hasn't|didn't|don't|unable|unsure|uncertain|if|unless|whether)\b"
+    r"|\b(?:can|could|should|would|may|might|did|have|will)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _has_reminder_mutation_claim(ai_content):
+    """Detect affirmative action clauses, not reminder-status mentions.
+
+    Keep qualifications local: a failure/question about A must not hide a
+    successful-action claim about B, nor should "No problem" negate a claim.
+    Used for both the initial draft and the final repair candidate.
+    """
+    text = (ai_content or "").replace("’", "'")
+    clauses = re.split(
+        r"[.!?;\n—–]+|:\s+|\s+-\s+|,\s*then\b|\b(?:but|however|yet)\b"
+        r"|\band(?=\s+(?:i|we|your|the|that|this|reminders?)\b)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    for clause in clauses:
+        if re.match(r"\s*(?:if|unless)\b", clause, re.IGNORECASE):
+            continue  # Conditional offers, including "If you'd like, I'll ...".
+        for claim in _REMINDER_CLAIM_RE.finditer(clause):
+            prefix = clause[: claim.start()].rsplit(",", 1)[-1]  # noqa: E203
+            actor = (claim.group("actor") or "").lower()
+            if ("'ll" in actor or "will" in actor) and re.search(
+                r"\b(?:if|unless)\b", clause[claim.end() :], re.IGNORECASE  # noqa: E203
+            ):
+                continue  # A conditional offer, not an unconditional promise.
+            if not _REMINDER_NONASSERTION_RE.search(prefix):
+                return True
+    return False
+
+
+def _reminder_hallucination_notice(ai_content, *, user, reminder_schedule_calls_used):
+    """Return a PromptBuilder.inject_correction_notice instruction string if
+    `ai_content` looks like it is claiming a reminder was created, changed, or
+    cancelled even though NO create_reminder/update_reminder/cancel_reminder
+    tool call actually happened this turn -- else return None.
+
+    Gated tightly to keep false positives rare in ordinary conversation:
+    fires only when (a) no reminder tool was actually called this turn, (b)
+    the reply text matches the claim pattern above, and (c) the user has at
+    least one PENDING reminder row at all -- so an unrelated line like "I'll
+    set a reminder to text you later" from a user with zero reminders in the
+    system can never trip it.
+    """
+    if reminder_schedule_calls_used or user is None:
+        return None
+    if not _has_reminder_mutation_claim(ai_content):
+        return None
+
+    from capp.models import Reminder  # local import: avoid app-loading cycles
+
+    if not Reminder.objects.filter(user=user, status=Reminder.StatusChoices.PENDING).exists():
+        return None
+
+    return (
+        "Your previous draft reply (never shown to the user) claimed a reminder was created, "
+        "updated, or cancelled, but you did NOT call create_reminder, update_reminder, or "
+        "cancel_reminder this turn -- so you have no tool confirmation of a mutation. Do not "
+        "repeat that claim. Existing reminders and read-only status descriptions are not "
+        "mutations. Answer the user's actual question, in your own voice and personality, "
+        "using the provided reminder context. For a status question, describe existing "
+        "reminders without suggesting a change was attempted. For a requested change, "
+        "honestly say you did not perform it. Do not invent an attempted operation, database "
+        "failure, unknown error, or rejection reason when no tool was called. If the user "
+        "wants to change a reminder, they can update or cancel it manually using the calendar "
+        "icon (if visible), or Settings > Advanced > Manage reminders. "
+        "Never claim a reminder was created, changed, or cancelled unless you actually call the "
+        "matching tool in this same turn."
+    )
 
 
 def _extract_photo_offer(text: str):
@@ -204,6 +493,92 @@ AI_TASK_SOFT_TIME_LIMIT = int(getattr(settings, "AI_TASK_SOFT_TIME_LIMIT", 180))
 AI_TASK_TIME_LIMIT = int(getattr(settings, "AI_TASK_TIME_LIMIT", AI_TASK_SOFT_TIME_LIMIT + 20))
 
 
+class ChatWriteUnavailable(Exception):
+    """The account, character or conversation stopped accepting this write."""
+
+
+def chat_write_error(conversation):
+    """Archiving one's chat is not closure; retiring its character is."""
+    if conversation.status == Conversation.StatusChoices.CLOSED:
+        return "conversation_closed"
+    character = conversation.character
+    if not character.is_active or character.status == Character.StatusChoices.ARCHIVED:
+        return "character_unavailable"
+    return None
+
+
+def lock_writable_chat(*, conversation_id, character_id, user_id=None, guest_session_id=None):
+    """Recheck a send under locks held by the caller's atomic transaction.
+
+    User -> character -> conversation matches account erasure. PostgreSQL
+    NO KEY UPDATE still excludes erasure, while allowing FK key-share locks
+    taken by an independent refund's financial rows.
+    """
+    user = None
+    if user_id is not None:
+        user = CustomUser.objects.select_for_update(no_key=True).filter(pk=user_id).first()
+        if user is None:
+            raise ChatWriteUnavailable("conversation_not_found")
+        if not user.is_active or user.is_deleted:
+            raise ChatWriteUnavailable("account_unavailable")
+    character = Character.objects.select_for_update(no_key=True).filter(pk=character_id).first()
+    if character is None:
+        raise ChatWriteUnavailable("conversation_not_found")
+    conversation = (
+        Conversation.objects.select_for_update(no_key=True)
+        .filter(pk=conversation_id, character_id=character_id)
+        .first()
+    )
+    if conversation is None:
+        raise ChatWriteUnavailable("conversation_not_found")
+    if user_id is not None:
+        if conversation.user_id != user.pk:
+            raise ChatWriteUnavailable("permission_denied")
+    elif not guest_session_id or conversation.user_id is not None or conversation.guest_session_id != guest_session_id:
+        raise ChatWriteUnavailable("permission_denied")
+    conversation.character = character
+    conversation.user = user
+    error = chat_write_error(conversation)
+    if error:
+        raise ChatWriteUnavailable(error)
+    return conversation
+
+
+def _refund_unwritable_reply(*, reservation, conversation, operation_id, is_guest, guest_session_id):
+    """Cancel an existing hold, including a retry archived before this run.
+
+    Never reserve/recreate anything to cancel it. Erasure may already have
+    removed an account's operational reservation; then there is no beneficiary.
+    Called after the chat-lock transaction has exited.
+    """
+    holds = BillingReservation.objects.filter(status=BillingReservation.Status.RESERVED)
+    if reservation is not None:
+        held = holds.filter(pk=reservation.pk).first()
+    else:
+        holds = holds.filter(
+            idempotency_key=operation_id,
+            feature=BillingReservation.Feature.MESSAGE_PAIR,
+        )
+        if is_guest and guest_session_id:
+            held = holds.filter(guest_identity_id=guest_session_id).first()
+        elif conversation.user_id is not None:
+            held = holds.filter(user_id=conversation.user_id).first()
+        else:
+            held = None
+    if held is not None:
+        try:
+            BillingReservationService.refund(held, reason="chat_no_longer_writable")
+        except ReservationError as exc:
+            # A claimed guest's beneficiary may have been erased. Keep that
+            # hold for operator review, never recreate or recredit a guest,
+            # and finish the terminal cancellation rather than retrying it.
+            logger.warning(
+                "Chat cancellation left reservation=%s held for review reason=%s",
+                held.pk,
+                exc.code,
+            )
+
+
 @shared_task(
     bind=True,
     max_retries=2,
@@ -224,7 +599,9 @@ def process_ai_response(self, conversation_id, user_message_id, is_guest=False, 
     reply_committed = False
     try:
         conversation = Conversation.objects.select_related("user", "character").get(conversation_id=conversation_id)
-        user_message = Message.objects.select_related("conversation").get(message_id=user_message_id)
+        user_message = Message.objects.select_related("conversation").get(
+            message_id=user_message_id, conversation=conversation
+        )
         user = conversation.user
         character = conversation.character
 
@@ -241,6 +618,10 @@ def process_ai_response(self, conversation_id, user_message_id, is_guest=False, 
         # stable across retries of this same task.
         operation_id = user_message.client_operation_id or str(user_message.message_id)
         reply_key = result_key(operation_id)
+
+        error = chat_write_error(conversation)
+        if error:
+            raise ChatWriteUnavailable(error)
 
         existing_reply = Message.objects.filter(conversation=conversation, client_operation_id=reply_key).first()
         if existing_reply is not None:
@@ -420,12 +801,29 @@ def process_ai_response(self, conversation_id, user_message_id, is_guest=False, 
         search_tools = None
         search_calls_used = 0
         open_url_calls_used = 0
+        # Set from _run_offered_tool_calls whenever the model actually invokes
+        # create_reminder/update_reminder/cancel_reminder this turn (whether
+        # or not that call then succeeds). Consumed after the AI call below
+        # by the reminder-hallucination guard, which needs to tell "the tool
+        # ran and failed" (already handled by the tool's own relayed failure
+        # text) apart from "the model never called anything and just claimed
+        # success in plain text" (not caught by anything else).
+        reminder_schedule_calls_used = 0
         # The queued task receives the authoritative guest marker from the
         # send endpoint.  A user-less conversation is also necessarily a guest
         # conversation, which keeps this fail-closed if a malformed task were
         # ever enqueued without that marker.
         is_guest_conversation = is_guest or conversation.user_id is None
-        if not is_guest_conversation and conversation.web_search_enabled and get_search_provider() is not None:
+        # Per-account feature toggles (Settings → Advanced). Optional chat
+        # features start disabled; each must be enabled by the user first.
+        feature_prefs = FeaturePreferences.get(conversation.user) if not is_guest_conversation else None
+        if (
+            not is_guest_conversation
+            and feature_prefs
+            and feature_prefs.get("websearch")
+            and conversation.web_search_enabled
+            and get_search_provider() is not None
+        ):
             search_tools = [SEARCH_TOOL_SPEC, OPEN_URL_TOOL_SPEC]
             logger.info(
                 "Web search + open_url tools offered for conv=%s (byok=%s)",
@@ -433,11 +831,41 @@ def process_ai_response(self, conversation_id, user_message_id, is_guest=False, 
                 bool(byok),
             )
 
+        # -- create_reminder tool ----------------------------------------------------
+        # Offered independently of the web_search toggle above and gated on
+        # having a durable account AND the user having enabled the reminders
+        # feature in Settings → Advanced (a guest session has no reliable way
+        # to be reachable "tomorrow", so it is never offered to guests, same
+        # gating style as search_tools).
+        reminder_tools = None
+        if not is_guest_conversation:
+            # Opt-out blocks new schedules, not management of existing ones.
+            reminder_tools = build_reminder_tool_specs(
+                allow_create=bool(feature_prefs and feature_prefs.get("reminders"))
+            )
+
+        # -- update_timezone tool -----------------------------------------------------
+        # Same gating as reminder_tools: a guest has no durable CustomUser row
+        # for a timezone update to persist against, so this is never offered
+        # to guests either.
+        profile_tools = None
+        if not is_guest_conversation:
+            profile_tools = build_profile_tool_specs()
+
+        offered_tools = (search_tools or []) + (reminder_tools or []) + (profile_tools or [])
+        offered_tools = offered_tools or None
+        offered_tool_names = frozenset(spec["function"]["name"] for spec in offered_tools or [])
+        if search_tools:
+            messages = PromptBuilder.inject_correction_notice(messages, SEARCH_GROUNDING_NOTICE)
+
         # Guests always use the default fast behavior even if a stale or
-        # manually altered conversation row says otherwise.
+        # manually altered conversation row says otherwise. Accounts that have
+        # not enabled the deepthink feature are pinned to fast as well — a
+        # previously saved "deep" conversation setting must not keep burning
+        # tokens after the user turned the feature off.
         reasoning_effort = (
             Conversation.ReasoningEffort.FAST
-            if is_guest_conversation
+            if is_guest_conversation or not (feature_prefs and feature_prefs.get("deepthink"))
             else conversation.reasoning_effort or Conversation.ReasoningEffort.FAST
         )
 
@@ -450,7 +878,16 @@ def process_ai_response(self, conversation_id, user_message_id, is_guest=False, 
             reasoning_effort,
             bool(search_tools),
         )
+        continuation_used = False
         try:
+            # The complete request differs from build_messages: BYOK may have
+            # replaced the system prompt and schemas also consume context.
+            messages = PromptBuilder.enforce_budget(
+                messages,
+                max_context_tokens=effective_max,
+                model=byok.model_name if byok else model,
+                tools=offered_tools,
+            )
             if byok:
                 # BYOK: reasoning_effort is a BEST-EFFORT OpenAI-compatible
                 # mapping (see capp/classes/ai/reasoning.py) -- the endpoint
@@ -462,8 +899,8 @@ def process_ai_response(self, conversation_id, user_message_id, is_guest=False, 
                 # the same way as the Cortecs path since search execution is
                 # provider-independent.
                 byok_call_kwargs = {}
-                if search_tools:
-                    byok_call_kwargs["tools"] = search_tools
+                if offered_tools:
+                    byok_call_kwargs["tools"] = offered_tools
                 response = BYOKService.chat_completion(
                     byok_config=byok,
                     messages=messages,
@@ -473,24 +910,10 @@ def process_ai_response(self, conversation_id, user_message_id, is_guest=False, 
                     **byok_call_kwargs,
                 )
 
-                tool_calls = response.get("choices", [{}])[0].get("message", {}).get("tool_calls")
-                if tool_calls and search_tools:
-                    condensed, search_calls_used, open_url_calls_used = _run_offered_tool_calls(
-                        tool_calls, conversation_id
-                    )
-                    if condensed:
-                        follow_up_messages = PromptBuilder.inject_untrusted_web_results(messages, condensed)
-                        response = BYOKService.chat_completion(
-                            byok_config=byok,
-                            messages=follow_up_messages,
-                            max_tokens=api_max_tokens,
-                            temperature=0.7,
-                            reasoning_effort=reasoning_effort,
-                        )
             else:
                 call_kwargs = {}
-                if search_tools:
-                    call_kwargs["tools"] = search_tools
+                if offered_tools:
+                    call_kwargs["tools"] = offered_tools
                 response = CortecsClient.chat_completion(
                     messages=messages,
                     model=model,
@@ -500,31 +923,67 @@ def process_ai_response(self, conversation_id, user_message_id, is_guest=False, 
                     **call_kwargs,
                 )
 
-                # Tool-calling loop: if the model asked to search and/or
-                # open a URL, execute server-side (capped at
-                # settings.SEARCH_MAX_CALLS_PER_MESSAGE /
-                # settings.OPEN_URL_MAX_CALLS_PER_MESSAGE respectively),
-                # inject the explicitly untrusted results immediately before the
-                # safety sandwich (never after the safety/photo tail), and
-                # continue generation once. We do not loop
-                # further even if the model asks again, to keep worst-case
-                # latency bounded to a single extra round trip.
-                tool_calls = response.get("choices", [{}])[0].get("message", {}).get("tool_calls")
-                if tool_calls and search_tools:
-                    condensed, search_calls_used, open_url_calls_used = _run_offered_tool_calls(
-                        tool_calls, conversation_id
+            # One bounded finalization round, shared by both providers. The
+            # presence of tool requests -- NOT successful execution/nonempty
+            # results -- decides whether the first response is an interim
+            # draft. Even denied/refused/malformed calls need a final answer.
+            # Dispatch still enforces the exact original allowlist and live
+            # permissions; no additional tools or network fallback are offered.
+            initial_choices = response.get("choices") or []
+            tool_calls = (initial_choices[0].get("message") or {}).get("tool_calls") if initial_choices else None
+            if tool_calls:
+                mutation_receipts = []
+                (
+                    condensed,
+                    search_calls_used,
+                    open_url_calls_used,
+                    reminder_schedule_calls_used,
+                ) = _run_offered_tool_calls(
+                    tool_calls,
+                    conversation_id,
+                    offered_tool_names=offered_tool_names,
+                    conversation=conversation,
+                    user=user,
+                    character=character,
+                    source_message=user_message,
+                    mutation_receipts=mutation_receipts,
+                )
+                if not condensed and not mutation_receipts:
+                    condensed = "[Tool requests produced no usable outcome; no successful action is confirmed]"
+                follow_up_messages = PromptBuilder.inject_untrusted_web_results(messages, condensed)
+                follow_up_messages = PromptBuilder.inject_mutation_results(follow_up_messages, mutation_receipts)
+                follow_up_messages = PromptBuilder.inject_correction_notice(follow_up_messages, TOOL_COMPLETION_NOTICE)
+                follow_up_messages = PromptBuilder.enforce_budget(
+                    follow_up_messages,
+                    max_context_tokens=effective_max,
+                    model=byok.model_name if byok else model,
+                    tools=None,
+                )
+                messages = follow_up_messages
+                continuation_used = True
+                if byok:
+                    response = BYOKService.chat_completion(
+                        byok_config=byok,
+                        messages=follow_up_messages,
+                        max_tokens=api_max_tokens,
+                        temperature=0.7,
+                        reasoning_effort=reasoning_effort,
                     )
-                    if condensed:
-                        follow_up_messages = PromptBuilder.inject_untrusted_web_results(messages, condensed)
-                        response = CortecsClient.chat_completion(
-                            messages=follow_up_messages,
-                            model=model,
-                            max_tokens=api_max_tokens,
-                            temperature=0.7,
-                            reasoning_effort=reasoning_effort,
-                        )
+                else:
+                    response = CortecsClient.chat_completion(
+                        messages=follow_up_messages,
+                        model=model,
+                        max_tokens=api_max_tokens,
+                        temperature=0.7,
+                        reasoning_effort=reasoning_effort,
+                    )
 
             logger.info("AI response received: id=%s", response.get("id"))
+        except PromptBudgetExceeded as exc:
+            logger.warning("Final prompt rejected for conv=%s: %s", conversation_id, exc)
+            PaidFeature.refund(reservation, reason="prompt_budget_exceeded")
+            _mark_message_failed(user_message, f"Prompt error: {exc}")
+            return
         except Exception as e:
             if byok:
                 logger.warning("BYOK AI call failed for user=%s: %s", user.user_id, e)
@@ -555,21 +1014,107 @@ def process_ai_response(self, conversation_id, user_message_id, is_guest=False, 
         # nothing. A response with no choices, or with empty content, produced
         # no durable answer and is therefore a terminal failure, not a partial
         # success the user should pay for.
-        choices = response.get("choices", [])
-        if not choices:
-            logger.error("AI response contained no choices")
-            PaidFeature.refund(reservation, reason="provider_returned_no_choices")
-            _mark_message_failed(user_message, "AI returned no choices.")
-            return
-
-        ai_content = choices[0].get("message", {}).get("content", "").strip()
-        if not ai_content:
-            logger.error("AI returned empty content")
-            PaidFeature.refund(reservation, reason="provider_returned_empty")
-            _mark_message_failed(user_message, "AI generated empty response.")
+        ai_content, response_problem = _completed_reply_content(response)
+        if response_problem:
+            logger.warning("AI response was not complete: %s", response_problem)
+            PaidFeature.refund(reservation, reason=response_problem)
+            _mark_message_failed(user_message, "AI did not return a completed answer.")
             return
 
         logger.info("AI response length: %d chars", len(ai_content))
+
+        # ── Reminder-hallucination guard ──────────────────────────────────
+        # See the _reminder_hallucination_notice / _has_reminder_mutation_claim block
+        # near the top of this module for why this exists: a model can claim
+        # a reminder was created/updated/cancelled in plain text without ever
+        # calling the tool, and no amount of prompt wording reliably prevents
+        # that on its own. It shares the single continuation with tool
+        # finalization; a search follow-up can never trigger a third round.
+        notice_text = _reminder_hallucination_notice(
+            ai_content,
+            user=user,
+            reminder_schedule_calls_used=reminder_schedule_calls_used,
+        )
+        if notice_text:
+            corrected_response = None
+            if not continuation_used:
+                logger.warning(
+                    "Reminder-hallucination guard triggered for conv=%s; using the remaining continuation",
+                    conversation_id,
+                )
+                # Use the latest assembled context, never rebuild from an
+                # earlier prompt that could drop evidence or completion rules.
+                corrected_messages = PromptBuilder.inject_correction_notice(
+                    messages, notice_text + "\n" + TOOL_COMPLETION_NOTICE
+                )
+                try:
+                    corrected_messages = PromptBuilder.enforce_budget(
+                        corrected_messages,
+                        max_context_tokens=effective_max,
+                        model=byok.model_name if byok else model,
+                        tools=None,
+                    )
+                    continuation_used = True
+                    if byok:
+                        corrected_response = BYOKService.chat_completion(
+                            byok_config=byok,
+                            messages=corrected_messages,
+                            max_tokens=api_max_tokens,
+                            temperature=0.7,
+                            reasoning_effort=reasoning_effort,
+                        )
+                    else:
+                        corrected_response = CortecsClient.chat_completion(
+                            messages=corrected_messages,
+                            model=model,
+                            max_tokens=api_max_tokens,
+                            temperature=0.7,
+                            reasoning_effort=reasoning_effort,
+                        )
+                except PromptBudgetExceeded as exc:
+                    logger.warning("Correction prompt rejected for conv=%s: %s", conversation_id, exc)
+                    PaidFeature.refund(reservation, reason="prompt_budget_exceeded")
+                    _mark_message_failed(user_message, f"Prompt error: {exc}")
+                    return
+                except Exception:
+                    logger.exception(
+                        "Reminder-hallucination correction failed for conv=%s; using a fixed honest message",
+                        conversation_id,
+                    )
+
+            if corrected_response is not None:
+                # Validate the actual last generation too. A repair response
+                # containing another tool call or null content is not a paid
+                # final answer, even if its prose no longer claims success.
+                response = corrected_response
+                ai_content, response_problem = _completed_reply_content(response)
+                if response_problem:
+                    logger.warning("AI correction was not complete: %s", response_problem)
+                    PaidFeature.refund(reservation, reason=response_problem)
+                    _mark_message_failed(user_message, "AI did not return a completed answer.")
+                    return
+
+            if corrected_response is None or _has_reminder_mutation_claim(ai_content):
+                logger.warning(
+                    "Reminder repair for conv=%s unavailable, budget exhausted, or repeated the claim; "
+                    "using fixed fallback text",
+                    conversation_id,
+                )
+                ai_content = (
+                    "Sorry, I can't confirm that reminder change actually went through. Please use "
+                    "the calendar icon (if visible), or Settings > Advanced > Manage reminders "
+                    "to update or cancel it manually."
+                )
+
+        if (
+            search_tools
+            or any(_get_function_name(_get_function(call)) in ("web_search", "open_url") for call in tool_calls or [])
+        ) and is_lookup_handoff(ai_content):
+            # Run after ALL generation paths, including reminder repair. A
+            # prose promise is not a background job; replace only this narrow
+            # handoff without another provider call or another message.
+            logger.warning("Replacing lookup-only handoff with an unverified-details notice")
+            ai_content = SEARCH_INCOMPLETE_REPLY
 
         # ── Character-initiated photo offer ──────────────────────────────
         # The reply may end with [PHOTO_OFFER:description] when the character,
@@ -615,6 +1160,17 @@ def process_ai_response(self, conversation_id, user_message_id, is_guest=False, 
         )
 
         with transaction.atomic():
+            conversation = lock_writable_chat(
+                conversation_id=conversation_id,
+                character_id=character.pk,
+                user_id=user.pk if user is not None and not is_guest else None,
+                guest_session_id=guest_session_id if is_guest else None,
+            )
+            if not Message.objects.filter(pk=user_message_id, conversation=conversation).exists():
+                raise ChatWriteUnavailable("message_not_found")
+            # The pre-provider objects are stale after a long network call.
+            user = conversation.user
+            character = conversation.character
             ai_message = Message.objects.create(
                 conversation=conversation,
                 sender_type=Message.SenderType.AI,
@@ -677,23 +1233,33 @@ def process_ai_response(self, conversation_id, user_message_id, is_guest=False, 
         # and the image task links the delivered picture back to this offer.
         if offer_prompt is not None:
             try:
-                offer_operation_id = f"offer:{uuid.uuid4()}"
-                offer_message = Message.objects.create(
-                    conversation=conversation,
-                    sender_type=Message.SenderType.AI,
-                    content="",
-                    status=Message.StatusChoices.SENT,
-                    metadata={
-                        "type": "photo_offer",
-                        "prompt": offer_prompt,
-                        "offer_cost": CHARACTER_PHOTO_OFFER_COST,
-                        "offer_status": "pending",
-                        "offer_operation_id": offer_operation_id,
-                    },
-                )
-                conversation.last_message_at = offer_message.created_at
-                conversation.save(update_fields=["last_message_at", "updated_at"])
+                with transaction.atomic():
+                    conversation = lock_writable_chat(
+                        conversation_id=conversation_id,
+                        character_id=character.pk,
+                        user_id=user.pk if user is not None else None,
+                    )
+                    offer_operation_id = f"offer:{uuid.uuid4()}"
+                    offer_message = Message.objects.create(
+                        conversation=conversation,
+                        sender_type=Message.SenderType.AI,
+                        content="",
+                        status=Message.StatusChoices.SENT,
+                        metadata={
+                            "type": "photo_offer",
+                            "prompt": offer_prompt,
+                            "offer_cost": CHARACTER_PHOTO_OFFER_COST,
+                            "offer_status": "pending",
+                            "offer_operation_id": offer_operation_id,
+                        },
+                    )
+                    conversation.last_message_at = offer_message.created_at
+                    conversation.save(update_fields=["last_message_at", "updated_at"])
                 _send_photo_offer_message(conversation.conversation_id, offer_message)
+            except ChatWriteUnavailable:
+                # The answer committed first, so keep its settled charge; no
+                # new optional message/notification may revive the closed chat.
+                return
             except Exception:
                 # The reply itself is delivered; a lost offer costs nothing and
                 # the user can always ask for a picture again.
@@ -727,6 +1293,22 @@ def process_ai_response(self, conversation_id, user_message_id, is_guest=False, 
             is_guest,
         )
 
+    except ChatWriteUnavailable as exc:
+        _refund_unwritable_reply(
+            reservation=reservation,
+            conversation=conversation,
+            operation_id=operation_id,
+            is_guest=is_guest,
+            guest_session_id=guest_session_id,
+        )
+        # Do not downgrade a completed turn on a late redelivery after closure.
+        # A conditional UPDATE cannot recreate a message deleted by erasure.
+        if not Message.objects.filter(conversation_id=conversation_id, client_operation_id=reply_key).exists():
+            Message.objects.filter(pk=user_message_id, conversation_id=conversation_id).update(
+                status=Message.StatusChoices.FAILED,
+                error_message=str(exc),
+                updated_at=timezone.now(),
+            )
     except Retry:
         # Celery's own control flow. Re-raising keeps the hold in place for the
         # next attempt, which presents the same operation ID.
@@ -1103,6 +1685,12 @@ def generate_chat_image(self, conversation_id, user_message_id, prompt, operatio
             operation_id=operation_id,
             defer_settlement=True,
             deadline=deadline,
+            # The view already placed the hold for this operation ID — possibly
+            # at the discounted photo-offer price, which differs from the
+            # standard image price. Re-reserving at the standard price would
+            # be rejected as an idempotency-key conflict, so the task must
+            # present the exact terms of the hold it is resuming.
+            cost_override=(int(reservation.amount_sparks) if reservation is not None else None),
         )
     except Retry:
         raise
@@ -1251,20 +1839,92 @@ def generate_chat_image(self, conversation_id, user_message_id, prompt, operatio
 # -------------------------------------------------------------
 
 
-@shared_task
-def check_and_send_proactive_messages():
+# A managed Postgres instance may suspend itself while idle to save costs
+# (see capp/classes/reminders/reminder_service.py docstring for the same
+# note on the reminder task below). Celery workers never fire Django's
+# request_started/request_finished signals -- those are what normally close
+# stale connections between HTTP requests -- so a connection object that
+# survived from a previous Beat tick can be a dead handle to a socket the DB
+# already dropped. close_old_connections() clears that out before the first
+# real query runs. If the DB is still waking up when that query executes, it
+# raises OperationalError, which is retried below with backoff instead of
+# permanently abandoning the run (the previous behaviour: a single failed
+# tick meant proactive messages/reminders for that cycle were simply lost).
+DB_RECONNECT_MAX_RETRIES = 5
+DB_RECONNECT_BASE_DELAY_SECONDS = 10
+
+
+@shared_task(bind=True, max_retries=DB_RECONNECT_MAX_RETRIES, default_retry_delay=DB_RECONNECT_BASE_DELAY_SECONDS)
+def check_and_send_proactive_messages(self):
     """
     Celery task that checks all enabled proactive chat preferences
     and sends proactive messages where conditions are met.
     Runs every 30 minutes via Celery Beat.
     """
+    if not connection.in_atomic_block:
+        # Guarded: closing a connection while inside an atomic block (e.g. a
+        # test wrapped in TestCase's transaction, or any future caller that
+        # invokes this task from within its own transaction) would tear down
+        # the connection out from under that transaction instead of just
+        # clearing a genuinely stale one. A real Celery worker invocation
+        # never has an outer atomic block at task entry, so this guard is a
+        # no-op there and only protects the in-transaction call path.
+        close_old_connections()
     logger.info("Starting proactive chat check...")
     try:
         sent_count = ProactiveChatService.check_and_send_proactive_messages()
         logger.info("Proactive chat check completed. Sent %d messages.", sent_count)
         return {"sent_count": sent_count}
+    except OperationalError as exc:
+        logger.warning(
+            "DB unavailable during proactive chat check (retry %d/%d): %s",
+            self.request.retries,
+            self.max_retries,
+            exc,
+        )
+        raise self.retry(exc=exc, countdown=DB_RECONNECT_BASE_DELAY_SECONDS * (2**self.request.retries))
     except Exception as e:
         logger.exception("Error in proactive chat task: %s", e)
+        raise
+
+
+# -------------------------------------------------------------
+# Reminder Delivery Task
+# -------------------------------------------------------------
+# Deliberately its own Celery Beat entry, independent of
+# check_and_send_proactive_messages above: a reminder is an explicit,
+# per-instance user request ("remind me to call Paul tomorrow"), not a
+# general opt-in re-engagement nudge, so it must never be throttled by
+# ProactiveChatPreference.enabled or MAX_PROACTIVE_WITHOUT_REPLY. See
+# capp/classes/reminders/reminder_service.py for the delivery logic.
+
+
+@shared_task(bind=True, max_retries=DB_RECONNECT_MAX_RETRIES, default_retry_delay=DB_RECONNECT_BASE_DELAY_SECONDS)
+def check_and_send_due_reminders(self):
+    """
+    Celery task that finds every due Reminder and delivers it.
+    Runs every 5 minutes via Celery Beat (finer-grained than the 30-minute
+    proactive check, since a reminder is a precise time commitment).
+    """
+    from capp.classes.reminders.reminder_service import ReminderService
+
+    if not connection.in_atomic_block:
+        close_old_connections()
+    logger.info("Starting due-reminders check...")
+    try:
+        sent_count = ReminderService.check_and_send_due()
+        logger.info("Due-reminders check completed. Sent %d reminders.", sent_count)
+        return {"sent_count": sent_count}
+    except OperationalError as exc:
+        logger.warning(
+            "DB unavailable during due-reminders check (retry %d/%d): %s",
+            self.request.retries,
+            self.max_retries,
+            exc,
+        )
+        raise self.retry(exc=exc, countdown=DB_RECONNECT_BASE_DELAY_SECONDS * (2**self.request.retries))
+    except Exception as e:
+        logger.exception("Error in reminder delivery task: %s", e)
         raise
 
 
@@ -1424,3 +2084,19 @@ def _mark_message_failed_by_id(message_id: str, reason: str):
         _mark_message_failed(msg, reason)
     except Message.DoesNotExist:
         pass
+
+
+@shared_task(name="capp.tasks.retry_media_deletions")
+def retry_media_deletions():
+    """Finish committed erasures interrupted by storage downtime/process death."""
+    from capp.models import MediaDeletionJob
+
+    completed = 0
+    # Failed objects rotate behind untouched jobs; a single bad object must not
+    # permanently starve newer erasures.
+    for job in MediaDeletionJob.objects.order_by("updated_at", "pk")[:200]:
+        if job.perform():
+            completed += 1
+        else:
+            MediaDeletionJob.objects.filter(pk=job.pk).update(updated_at=timezone.now())
+    return completed

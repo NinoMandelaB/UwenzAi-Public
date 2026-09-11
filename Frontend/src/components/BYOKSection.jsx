@@ -104,6 +104,11 @@ export default function BYOKSection() {
       api_url_api_key_and_model_name_required: t("byok.errorAllFieldsRequired"),
       system_prompt_requires_api_key: t("byok.errorSystemPromptRequiresKey"),
       validation_failed: t("byok.errorValidationFailed"),
+      provider_url_not_allowed: t("byok.errorUrlNotAllowed"),
+      api_key_required_for_origin_change: t(
+        "byok.errorKeyRequiredForOriginChange",
+      ),
+      invalid_byok_payload: t("byok.errorInvalidPayload"),
     };
     return map[code] || t("byok.errorGeneric");
   };

@@ -4,7 +4,14 @@ import { useEffect, useRef, useState } from "react";
 import { X, Plus, Trash2 } from "lucide-react";
 import { useChat } from "../hooks/useChat";
 import { useAuth } from "../context/AuthContext";
+import MessageLimitStatus from "../components/MessageLimitStatus";
+import {
+  characterCount,
+  USER_MESSAGE_LIMIT,
+  validUserMessage,
+} from "../utils/textLimits";
 import { useChatModal } from "../context/ChatModalContext";
+import { ChatReminderButton } from "../components/ReminderPanel";
 import {
   resetConversation,
   deleteMessage as deleteMessageApi,
@@ -209,6 +216,7 @@ export default function ChatModal() {
 
   // Send message handler
   const handleSend = async (textToSend = input) => {
+    if (!validUserMessage(textToSend)) return;
     const trimmed = textToSend.trim();
     if (!trimmed || isSending || !isCharacterActive) return;
     setInput("");
@@ -363,6 +371,10 @@ export default function ChatModal() {
 
             {/* Action buttons */}
             <div className="flex items-center gap-1 ml-2">
+              <ChatReminderButton
+                activeConvId={activeConvId}
+                charName={charName}
+              />
               <button
                 onClick={handleResetChat}
                 className="rounded-full p-2 hover:bg-gray-200 dark:hover:bg-gray-800 text-[var(--color-text-muted)]"
@@ -476,6 +488,8 @@ export default function ChatModal() {
                 ref={textareaRef}
                 rows={1}
                 value={input}
+                aria-describedby="routed-chat-message-count"
+                aria-invalid={characterCount(input) > USER_MESSAGE_LIMIT}
                 onChange={(e) => {
                   setInput(e.target.value);
                   autoResizeTextarea();
@@ -491,12 +505,16 @@ export default function ChatModal() {
                 className="min-h-[24px] w-full resize-none bg-transparent text-sm leading-6 theme-text outline-none"
                 style={{ maxHeight: "112px" }}
               />
+              <MessageLimitStatus
+                id="routed-chat-message-count"
+                value={input}
+              />
             </div>
 
             <button
               type="submit"
               disabled={
-                !input.trim() ||
+                !validUserMessage(input) ||
                 isSending ||
                 isWaitingForAI ||
                 !isCharacterActive ||

@@ -4,6 +4,8 @@ Global pricing constants as defined in the Pricing & Usage Model.
 All values are in virtual sparks (1 spark = KES 0.1) unless otherwise noted.
 """
 
+import os
+
 # ----------------------------------------------------------------------
 # Single‑use costs (sparks)
 # ----------------------------------------------------------------------
@@ -11,7 +13,7 @@ MESSAGE_PAIR_COST = 85  # 1 user message + 1 AI reply
 CHARACTER_GENERATION_COST = 500  # includes 1 image
 CHARACTER_EDIT_COST = 50
 IMAGE_GENERATION_COST = 450
-CHARACTER_PHOTO_OFFER_COST = 400  # discounted: character-initiated photo the user accepts
+CHARACTER_PHOTO_OFFER_COST = 395  # discounted: character-initiated photo the user accepts
 BYOK_MESSAGE_PAIR_COST = 5
 
 # Open product decision (see PR description): a search-assisted message pair
@@ -43,11 +45,24 @@ SPARK_BASE_VALUE_KES = 0.1  # 1 spark = KES 0.1
 # ----------------------------------------------------------------------
 # Limits
 # ----------------------------------------------------------------------
-MAX_MESSAGE_CHARACTERS = 600  # per user message
+MAX_MESSAGE_CHARACTERS = 800  # USER messages only; never truncate AI replies
 MAX_TOKENS_PER_MESSAGE_PAIR = 20_000  # system prompt + character card + memory
 
 GUEST_INITIAL_SPARKS = 510  # e.g. 6 message pairs
 SIGNUP_SPARKS = 2000
+
+# How long a due-but-undeliverable reminder (insufficient Sparks, transient
+# provider/billing error) keeps retrying on the 5-minute Beat tick before we
+# give up for good, send one final apology, and delete it. Env-overridable so
+# ops can tune it in Railway without a redeploy.
+REMINDER_EXPIRY_GRACE_HOURS = int(os.getenv("REMINDER_EXPIRY_GRACE_HOURS", "12"))
+
+# Caps how many PENDING reminders a single user can stack up for a single
+# character. Prevents unbounded growth from a chatty or adversarial user
+# repeatedly asking for reminders, while still leaving plenty of headroom
+# for legitimate everyday use (multiple reminders across a day/week).
+# Env-overridable so ops can tune it in Railway without a redeploy.
+MAX_PENDING_REMINDERS_PER_USER_CHARACTER = int(os.getenv("MAX_PENDING_REMINDERS_PER_USER_CHARACTER", "15"))
 
 # Mapping of country names (as stored in Character.country) to IANA timezone.
 # For multi‑timezone countries, the capital or most populous region is chosen.

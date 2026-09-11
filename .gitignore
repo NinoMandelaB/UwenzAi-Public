@@ -13,6 +13,7 @@
 .env.*
 *.env
 !.env.example
+Backend/.ci_env.sh
 secrets/
 secrets.*
 credentials.*

@@ -2,7 +2,11 @@
 import uuid
 from django.db import models
 from django.db.models import Q
+from django.db.models.signals import pre_delete
+from django.dispatch import receiver
+from django.utils import timezone
 from capp.models import TimeStampedModel, CustomUser
+from .privacy import payment_audit_payload
 
 
 class PaystackTransaction(TimeStampedModel):
@@ -66,6 +70,9 @@ class PaystackTransaction(TimeStampedModel):
     # a claimed purchase stays visible in account history as guest-originated.
     origin_guest_session_id = models.CharField(max_length=64, blank=True, null=True, db_index=True)
     claimed_from_guest_at = models.DateTimeField(blank=True, null=True)
+    # Explicit erasure provenance, not a new owner or a transferable guest ID.
+    # The financial record and fulfillment proof outlive the account.
+    owner_deleted_at = models.DateTimeField(blank=True, null=True, editable=False)
 
     reference = models.CharField(max_length=100, unique=True, db_index=True)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
@@ -113,16 +120,21 @@ class PaystackTransaction(TimeStampedModel):
                 condition=Q(user__isnull=True) | Q(guest_session_id__isnull=True),
                 name="paystack_txn_single_owner",
             ),
-            # Rows written by the current code path must have an owner. Legacy
-            # rows are exempt because we cannot invent one for them.
+            # New intents need an owner. Retained records may instead carry an
+            # explicit erasure marker; legacy rows remain exempt.
             models.CheckConstraint(
                 condition=(
                     Q(package_slug__isnull=True)
                     | Q(user__isnull=False)
                     | Q(guest_session_id__isnull=False)
                     | Q(origin_guest_session_id__isnull=False)
+                    | Q(owner_deleted_at__isnull=False)
                 ),
                 name="paystack_txn_intent_has_owner",
+            ),
+            models.CheckConstraint(
+                condition=Q(owner_deleted_at__isnull=True) | (Q(user__isnull=True) & Q(guest_session_id__isnull=True)),
+                name="paystack_txn_erased_has_no_owner",
             ),
             models.CheckConstraint(
                 condition=Q(amount__gt=0),
@@ -145,6 +157,8 @@ class PaystackTransaction(TimeStampedModel):
         ]
 
     def __str__(self):
+        if self.owner_deleted_at:
+            return f"Deleted account – {self.amount} {self.currency} ({self.status})"
         if self.user:
             return f"{self.user.get_display_name()} – {self.amount} {self.currency} ({self.status})"
         guest_hint = self.guest_session_id[:8] if self.guest_session_id else "?"
@@ -156,6 +170,8 @@ class PaystackTransaction(TimeStampedModel):
     @property
     def owner_description(self) -> str:
         """A log-safe identifier for the owner. Never a credential."""
+        if self.owner_deleted_at:
+            return "owner:deleted"
         if self.user_id:
             return f"user:{self.user_id}"
         if self.guest_session_id:
@@ -163,6 +179,35 @@ class PaystackTransaction(TimeStampedModel):
         if self.origin_guest_session_id:
             return f"claimed-guest:{self.origin_guest_session_id}"
         return "owner:unknown"
+
+
+@receiver(pre_delete, sender=CustomUser)
+def retain_payments_on_account_deletion(sender, instance, using, **kwargs):
+    """Detach retained payments inside the deletion collector's transaction.
+
+    Stamp and detach in the same UPDATE so neither ownership constraint is
+    temporarily violated. This covers instance, queryset and admin deletion,
+    not just the HTTP endpoint. Financial facts and guest provenance survive;
+    unnecessary customer details and checkout credentials do not. Row locks
+    serialize this scrub with capture (not the entire guest-claim protocol).
+    """
+    rows = PaystackTransaction.objects.using(using).select_for_update().filter(user_id=instance.pk)
+    for payment in rows:
+        event_match = Q(data__reference=payment.reference)
+        if payment.paystack_transaction_id is not None:
+            event_match |= Q(paystack_event_id=str(payment.paystack_transaction_id))
+        events = PaystackWebhookEvent.objects.using(using).filter(event_match)
+        for event in events:
+            events.filter(pk=event.pk).update(data=payment_audit_payload(event.data), error_message=None)
+        rows.filter(pk=payment.pk).update(
+            user=None,
+            guest_session_id=None,
+            owner_deleted_at=timezone.now(),
+            paystack_data=payment_audit_payload(payment.paystack_data),
+            paystack_message=None,
+            paystack_access_code=None,
+            paystack_authorization_url=None,
+        )
 
 
 class PaystackFulfillment(TimeStampedModel):

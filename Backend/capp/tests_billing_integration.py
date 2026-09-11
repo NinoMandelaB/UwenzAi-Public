@@ -638,7 +638,11 @@ class ChatMessagePairBillingTests(BillingFeatureTestCase):
         with mock.patch.object(
             PromptBuilder,
             "build_messages",
-            return_value=[{"role": "system", "content": "sys"}, {"role": "user", "content": message.content}],
+            return_value=[
+                {"role": "system", "content": "sys"},
+                {"role": "system", "content": "=== SAFETY CHECK (System) ===\nSafety tail."},
+                {"role": "user", "content": message.content},
+            ],
         ), mock.patch.object(
             CortecsClient,
             "chat_completion",

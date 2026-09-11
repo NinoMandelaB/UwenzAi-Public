@@ -5,12 +5,12 @@ import { useRef, useState } from "react";
 import ReCAPTCHA from "react-google-recaptcha";
 import { Lock, User, Mail, Eye, EyeOff, Mars, Venus } from "lucide-react";
 import PrimaryButton from "../components/PrimaryButton";
-import GoogleSignInButton from "../components/GoogleSignInButton";
 import MessagePopup from "../components/MessagePopup";
 import { useLanguage } from "../context/LanguageContext";
 import { signupUser } from "../services/authService";
 import { useTheme } from "../context/ThemeContext";
 import { getAuthMessage, getAuthTitle } from "../utils/authMessageMapper";
+import { characterCount } from "../utils/textLimits";
 import { LEGAL_POLICY_VERSION } from "../i18n/legal";
 
 function Input({
@@ -174,7 +174,7 @@ function safeT(t, key, fallback) {
 }
 
 export default function Register() {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const navigate = useNavigate();
   const { isDark } = useTheme();
 
@@ -194,7 +194,6 @@ export default function Register() {
   const [captchaToken, setCaptchaToken] = useState("");
   const [errors, setErrors] = useState({});
   const [loading, setLoading] = useState(false);
-  const [googleLoading, setGoogleLoading] = useState(false);
 
   const [popup, setPopup] = useState({
     open: false,
@@ -223,7 +222,6 @@ export default function Register() {
     "auth.createAccountSubtitle",
     "Set up your profile to save chats, sync progress, and unlock more features.",
   );
-  const continueWithLabel = safeT(t, "common.continueWith", "Continue with");
   const alreadyHaveAccountLabel = safeT(
     t,
     "auth.alreadyHaveAccount",
@@ -260,11 +258,13 @@ export default function Register() {
       nextErrors.email = t("auth.emailRequired", "Email is required.");
     if (!password)
       nextErrors.password = t("auth.passwordRequired", "Password is required.");
-    if (password.length < 6)
+    if (characterCount(password) < 8)
       nextErrors.password = t(
         "auth.passwordMinLength",
-        "Password must be at least 6 characters.",
+        "Password must be at least 8 characters.",
       );
+    if (characterCount(password) > 128)
+      nextErrors.password = t("auth.passwordMaxLength");
     if (password !== confirmPassword)
       nextErrors.confirmPassword = t(
         "auth.passwordMismatch",
@@ -387,6 +387,7 @@ export default function Register() {
       let errorMessage = getAuthMessage(
         err,
         "Unable to create account right now. Please try again.",
+        language,
       );
 
       if (err.status === 429 || err.code === "rate_limited") {
@@ -400,29 +401,6 @@ export default function Register() {
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleGoogleSuccess = (result) => {
-    setGoogleLoading(false);
-    closePopup();
-    navigate("/characters");
-  };
-
-  const handleGoogleStart = () => {
-    closePopup();
-    setGoogleLoading(true);
-  };
-
-  const handleGoogleError = (message) => {
-    setGoogleLoading(false);
-    showPopup({
-      type: "error",
-      title: "Google sign-in failed",
-      message: getAuthMessage(
-        message,
-        "Unable to continue with Google right now.",
-      ),
-    });
   };
 
   return (
@@ -628,43 +606,13 @@ export default function Register() {
         </div>
 
         <div className="pt-2">
-          <PrimaryButton fullWidth disabled={loading || googleLoading}>
+          <PrimaryButton fullWidth disabled={loading}>
             {loading ? "Creating account..." : signupLabel}
           </PrimaryButton>
         </div>
 
-        <div className="relative py-2">
-          <div className="absolute inset-0 flex items-center">
-            <div
-              className="w-full border-t"
-              style={{ borderColor: "var(--color-border)" }}
-            />
-          </div>
-          <div className="relative flex justify-center">
-            <span
-              className="px-3 text-xs font-bold uppercase tracking-widest theme-text-muted"
-              style={{ backgroundColor: "var(--color-shell)" }}
-            >
-              {continueWithLabel}
-            </span>
-          </div>
-        </div>
-
-        <div className="flex justify-center">
-          <GoogleSignInButton
-            onStart={handleGoogleStart}
-            onSuccess={handleGoogleSuccess}
-            onError={handleGoogleError}
-            disabled={loading || googleLoading}
-          />
-        </div>
-
         <Link to="/" className="block">
-          <PrimaryButton
-            variant="secondary"
-            fullWidth
-            disabled={loading || googleLoading}
-          >
+          <PrimaryButton variant="secondary" fullWidth disabled={loading}>
             {guestLabel}
           </PrimaryButton>
         </Link>

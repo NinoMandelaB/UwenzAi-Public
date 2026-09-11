@@ -251,7 +251,10 @@ class MigrationUpgradeTests(TransactionTestCase):
         return executor
 
     def tearDown(self):
-        self._migrate(AFTER)
+        # Restore current leaves, not the historical migration under test.
+        # Later test classes may use fields introduced after that migration.
+        executor = MigrationExecutor(connection)
+        executor.migrate(executor.loader.graph.leaf_nodes())
         super().tearDown()
 
     def _legacy_model(self):

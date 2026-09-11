@@ -32,7 +32,7 @@ export const privacyEn = {
             "Message text, conversation summaries and memory notes are encrypted in our database using keys held by our servers. This is not end-to-end encryption — our systems can decrypt this content, and a small number of authorised personnel can access it where necessary.",
             "To generate replies and images, we must send your prompts — and, for some image features, a reference image — to the AI providers that power those features.",
             "Images are stored in a private, access-controlled bucket that our hosting provider encrypts at rest. We do not apply a separate per-image encryption layer of our own.",
-            "You can export your data and delete your account from inside the app.",
+            "You can export your data and delete your account from inside the app. Account deletion removes your profile, chats and private content; public characters you created stay on the Service without your name.",
             "We do not use your private conversations to train AI models, and we do not run advertising or third-party analytics trackers.",
           ],
         },
@@ -321,7 +321,7 @@ export const privacyEn = {
         {
           type: "ul",
           items: [
-            "Your account content — conversations, messages, characters, memory notes and images — is kept while your account exists, so that it is there when you return. We do not currently run an automatic job that deletes old conversations after a fixed period.",
+            "Your account content — conversations, messages, characters, memory notes and images — is kept while your account exists, so that it is there when you return. We do not currently run an automatic job that deletes old conversations after a fixed period. What happens if you delete your account is described in section 15.",
             "Guest data is tied to the guest credential, which currently lasts up to 180 days and also expires after a period of inactivity.",
             "Verification and password-recovery codes expire quickly, typically within minutes, and are refused after that.",
             "Purchase, billing and consent records are kept for as long as we need them to meet accounting, tax and legal obligations, and to defend against disputes.",
@@ -340,7 +340,15 @@ export const privacyEn = {
       blocks: [
         {
           type: "p",
-          text: "You can delete your account from your settings. This is a permanent deletion, not a deactivation. It removes your user record and, through cascading deletion, the characters you created together with their conversations, messages, summaries, memory notes and gallery entries. It cannot be undone, and we cannot restore the content afterwards.",
+          text: "You can delete your account from your settings. This is a permanent deletion, not a deactivation. It cannot be undone, and we cannot restore content once it has been deleted.",
+        },
+        {
+          type: "p",
+          text: "Deleting your account removes your user record, your profile details, your conversations, messages, summaries, memory notes, reminders, unused private characters, and private images — including private images you added to someone else’s public character. Your remaining spark balance is removed. This is not a refund of purchases.",
+        },
+        {
+          type: "p",
+          text: "Public characters you created remain on the Service without your name attached as the creator. Public images on those characters stay with them. Other people’s conversations with those characters remain in their accounts. If someone else has already chatted with a private character of yours, we take that character down so it cannot be used again and we close those chats, but we do not delete the other person’s chat history.",
         },
         {
           type: "p",
@@ -350,7 +358,7 @@ export const privacyEn = {
           type: "ul",
           items: [
             "Purchase and billing records are retained, with your account link removed, because we are required to keep them.",
-            "Stored image files are removed together with the records that reference them, but we do not guarantee that every file is erased from object storage at the same instant.",
+            "Where an image is deleted, the stored file is removed after the record that referenced it, but we do not guarantee that every file is erased from object storage at the same instant. Image files that remain referenced by a public character we keep are not deleted.",
             "Copies may persist for a limited period in encrypted database backups and in operational logs before they age out in the ordinary course.",
             "Content already sent to an AI provider to generate a reply or an image is subject to that provider’s own retention. We request minimal retention where a provider supports it, but we cannot delete data from their systems on your behalf.",
             "We may retain limited records where we need them to comply with the law, prevent fraud or abuse, or resolve a dispute.",

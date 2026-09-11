@@ -1070,10 +1070,14 @@ def _serialize_audit_log_entry(entry):
         "log_id": str(entry.log_id),
         "source": "admin_action",
         "type": entry.action_type,
-        "admin_user": {
-            "user_id": str(entry.admin_user.user_id),
-            "username": entry.admin_user.username,
-        },
+        "admin_user": (
+            {
+                "user_id": str(entry.admin_user.user_id),
+                "username": entry.admin_user.username,
+            }
+            if entry.admin_user_id
+            else None
+        ),
         "target_user": (
             {
                 "user_id": str(entry.target_user.user_id),

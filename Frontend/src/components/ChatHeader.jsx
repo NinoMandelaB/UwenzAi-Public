@@ -3,10 +3,12 @@
 import { useState, useRef, useEffect } from "react";
 import { ArrowLeft, ChevronDown, MoreVertical, Trash2 } from "lucide-react";
 import StatusBadge from "./StatusBadge";
+import { ChatReminderButton } from "./ReminderPanel";
 import africanWomanAvatar from "../assets/images/avatars/african-woman.png";
 
 export default function ChatHeader({
   character,
+  activeConvId,
   onBack,
   onMore,
   onReset, // NEW – called when user taps "Reset Chat"
@@ -66,15 +68,16 @@ export default function ChatHeader({
         />
 
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <h1 className="truncate text-sm font-semibold theme-text">
-              {name}
-            </h1>
+          <h1 className="truncate text-sm font-semibold theme-text">{name}</h1>
+          <div className="mt-0.5 flex flex-wrap items-center gap-1">
             <StatusBadge status="online" />
+            <p className="hidden truncate text-xs theme-text-muted sm:block">
+              {role}
+            </p>
           </div>
-          <p className="truncate text-xs theme-text-muted">{role}</p>
         </div>
 
+        <ChatReminderButton activeConvId={activeConvId} charName={name} />
         <button
           type="button"
           onClick={onToggleQuickReplies}

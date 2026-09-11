@@ -15,6 +15,7 @@ import { useChat } from "../hooks/useChat";
 import { useConversation } from "../hooks/useConversation";
 import { useChatScroll } from "../hooks/useChatScroll";
 import { useAuth } from "../context/AuthContext";
+import MessageLimitStatus from "./MessageLimitStatus";
 import { useLanguage } from "../context/LanguageContext";
 import { useSparkPoolBalance } from "../hooks/useSparkPoolBalance";
 import { usePricing } from "../hooks/usePricing";
@@ -36,6 +37,15 @@ import {
 import ConfirmDialog from "./ConfirmDialog";
 import CharacterInactiveBanner from "./CharacterInactiveBanner";
 import LoadOlderMessages from "./LoadOlderMessages";
+import { ChatReminderButton } from "./ReminderPanel";
+import { resolveFeaturePreferences } from "../utils/featurePreferences";
+import MemoryButton from "./MemoryPanel";
+import ForegroundPushNotice from "./ForegroundPushNotice";
+import {
+  characterCount,
+  USER_MESSAGE_LIMIT,
+  validUserMessage,
+} from "../utils/textLimits";
 
 function resolveMediaUrl(url) {
   if (!url) return url;
@@ -539,58 +549,68 @@ export function ChatEnhancementControls({
   reasoningEffort,
   onToggleWebSearch,
   onToggleReasoningEffort,
+  showWebSearch = true,
+  showDeepThink = true,
 }) {
   const controlsDisabled =
     !canUseConversationEnhancements || !activeConvId || isTogglingSettings;
   const guestTitle =
     "Web search and deep thinking are available to logged-in users.";
 
+  if (!showWebSearch && !showDeepThink) {
+    return null;
+  }
+
   return (
     <>
-      <button
-        type="button"
-        onClick={onToggleWebSearch}
-        disabled={controlsDisabled}
-        aria-disabled={controlsDisabled}
-        data-testid="web-search-toggle"
-        className={`rounded-full p-2 hover:bg-gray-200 dark:hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-40 ${
-          webSearchEnabled
-            ? "text-emerald-500"
-            : "text-[var(--color-text-muted)]"
-        }`}
-        title={
-          !canUseConversationEnhancements
-            ? guestTitle
-            : webSearchEnabled
-              ? "Web search on for this chat (click to turn off)"
-              : "Web search off for this chat (click to turn on)"
-        }
-        aria-pressed={webSearchEnabled}
-      >
-        <Globe size={16} />
-      </button>
-      <button
-        type="button"
-        onClick={onToggleReasoningEffort}
-        disabled={controlsDisabled}
-        aria-disabled={controlsDisabled}
-        data-testid="reasoning-effort-toggle"
-        className={`rounded-full p-2 hover:bg-gray-200 dark:hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-40 ${
-          reasoningEffort === "deep"
-            ? "text-indigo-500"
-            : "text-[var(--color-text-muted)]"
-        }`}
-        title={
-          !canUseConversationEnhancements
-            ? guestTitle
-            : reasoningEffort === "deep"
-              ? "Deep thinking mode on for this chat (click for Fast)"
-              : "Fast mode for this chat (click for Deep thinking)"
-        }
-        aria-pressed={reasoningEffort === "deep"}
-      >
-        <BrainCircuit size={16} />
-      </button>
+      {showWebSearch && (
+        <button
+          type="button"
+          onClick={onToggleWebSearch}
+          disabled={controlsDisabled}
+          aria-disabled={controlsDisabled}
+          data-testid="web-search-toggle"
+          className={`rounded-full p-2 hover:bg-gray-200 dark:hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-40 ${
+            webSearchEnabled
+              ? "text-emerald-500"
+              : "text-[var(--color-text-muted)]"
+          }`}
+          title={
+            !canUseConversationEnhancements
+              ? guestTitle
+              : webSearchEnabled
+                ? "Web search on for this chat (click to turn off)"
+                : "Web search off for this chat (click to turn on)"
+          }
+          aria-pressed={webSearchEnabled}
+        >
+          <Globe size={16} />
+        </button>
+      )}
+      {showDeepThink && (
+        <button
+          type="button"
+          onClick={onToggleReasoningEffort}
+          disabled={controlsDisabled}
+          aria-disabled={controlsDisabled}
+          data-testid="reasoning-effort-toggle"
+          className={`rounded-full p-2 hover:bg-gray-200 dark:hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-40 ${
+            reasoningEffort === "deep"
+              ? "text-indigo-500"
+              : "text-[var(--color-text-muted)]"
+          }`}
+          title={
+            !canUseConversationEnhancements
+              ? guestTitle
+              : reasoningEffort === "deep"
+                ? "Deep thinking mode on for this chat (click for Fast)"
+                : "Fast mode for this chat (click for Deep thinking)"
+          }
+          aria-pressed={reasoningEffort === "deep"}
+        >
+          <BrainCircuit size={16} />
+        </button>
+      )}
     </>
   );
 }
@@ -601,6 +621,11 @@ export default function ChatModal() {
   const { isOpen, character, conversationId, closeChat, navigate } =
     useChatModal();
   const { user, isAuthenticated, isLoading: isAuthLoading } = useAuth();
+
+  // Availability only; conversation search/reasoning retain their own state.
+  const featurePreferences = resolveFeaturePreferences(
+    isAuthenticated && !isAuthLoading ? user : null,
+  );
   const { balance: sparkBalance } = useSparkPoolBalance();
 
   // ── Resolve conversation ID ──
@@ -930,6 +955,7 @@ export default function ChatModal() {
 
   const handleSend = useCallback(
     async (textToSend = input) => {
+      if (!validUserMessage(textToSend)) return;
       const trimmed = textToSend.trim();
       if (!trimmed || isSending || !isCharacterActive) return;
       setInput("");
@@ -940,15 +966,10 @@ export default function ChatModal() {
     [input, isSending, isCharacterActive, sendToAI],
   );
 
-  const handleKeyDown = useCallback(
-    (e) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        handleSend();
-      }
-    },
-    [handleSend],
-  );
+  // Enter no longer sends the message: on desktop it now inserts a newline so
+  // users can write multi-line messages, and messages are only sent with the
+  // Send button (mobile keyboards already insert newlines). No key handling
+  // is needed for that — the textarea's default behavior is exactly right.
 
   // Ensure the image prompt modal can never linger open after logout or a
   // session expiry: close it as soon as image generation is no longer allowed.
@@ -1121,7 +1142,28 @@ export default function ChatModal() {
                 reasoningEffort={reasoningEffort}
                 onToggleWebSearch={handleToggleWebSearch}
                 onToggleReasoningEffort={handleToggleReasoningEffort}
+                showWebSearch={Boolean(featurePreferences.websearch)}
+                showDeepThink={Boolean(featurePreferences.deepthink)}
               />
+              <ChatReminderButton
+                activeConvId={activeConvId}
+                charName={charName}
+              />
+              {/* Memory editor (brain) — logged-in users who enabled the
+                  feature in Settings → Advanced; guests have no persisted
+                  memory, so the icon stays hidden for them. */}
+              {isAuthenticated &&
+                !isAuthLoading &&
+                featurePreferences.memory_editor && (
+                  <MemoryButton
+                    characterId={
+                      character?.id ||
+                      displayCharacter?.id ||
+                      displayCharacter?.character_id
+                    }
+                    charName={charName}
+                  />
+                )}
               <button
                 onClick={handleResetChat}
                 className="rounded-full p-2 hover:bg-gray-200 dark:hover:bg-gray-800 text-[var(--color-text-muted)]"
@@ -1267,11 +1309,12 @@ export default function ChatModal() {
                 ref={textareaRef}
                 rows={1}
                 value={input}
+                aria-describedby="user-message-count"
+                aria-invalid={characterCount(input) > USER_MESSAGE_LIMIT}
                 onChange={(e) => {
                   setInput(e.target.value);
                   autoResizeTextarea();
                 }}
-                onKeyDown={handleKeyDown}
                 placeholder={`Message ${charName}...`}
                 disabled={
                   isSending ||
@@ -1283,11 +1326,12 @@ export default function ChatModal() {
                 className="min-h-[24px] w-full resize-none bg-transparent text-sm leading-6 theme-text outline-none"
                 style={{ maxHeight: "112px" }}
               />
+              <MessageLimitStatus id="user-message-count" value={input} />
             </div>
             <button
               type="submit"
               disabled={
-                !input.trim() ||
+                !validUserMessage(input) ||
                 isSending ||
                 isWaitingForAI ||
                 !isCharacterActive ||
@@ -1306,6 +1350,7 @@ export default function ChatModal() {
           </form>
         </div>
 
+        <ForegroundPushNotice conversationId={activeConvId} />
         {/* Confirm Dialog */}
         <ConfirmDialog
           isOpen={confirmOpen}

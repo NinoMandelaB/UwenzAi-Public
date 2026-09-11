@@ -1,5 +1,6 @@
 import json
 import logging
+import asyncio
 from urllib.parse import parse_qs
 
 from channels.db import database_sync_to_async
@@ -12,6 +13,7 @@ from capp.models import GuestWebSocketTicket
 from rest_framework_simplejwt.tokens import AccessToken
 from rest_framework_simplejwt.exceptions import TokenError, InvalidToken
 from django.contrib.auth import get_user_model
+from capp.authentication import account_can_authenticate
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -53,7 +55,57 @@ def _user_sparks(user):
     return read_user_sparks(user)
 
 
-class SparkPoolConsumer(AsyncWebsocketConsumer):
+class LiveAccountSocket:
+    """Keep query-JWT wire compatibility, but bound admission and delivery.
+
+    Every outbound payload rechecks the live account (deactivated, banned or
+    deleted accounts). Idle connections close within 30 seconds of revocation;
+    no post-revocation payload may pass an eligibility check. JWT expiry is
+    enforced only at admission: the current clients never reconnect on close,
+    so closing an admitted socket when the 15-minute access token lapses would
+    silently stop chat replies. Ticket-based admission needs client work.
+    """
+
+    async def _account_current(self):
+        if getattr(self, "is_guest", True):
+            return True
+        try:
+            live = await User.objects.aget(pk=self.user.pk)
+            return account_can_authenticate(live)
+        except User.DoesNotExist:
+            return False
+        except Exception:
+            logger.error("WebSocket account eligibility check unavailable.")
+            return False
+
+    async def send(self, *args, **kwargs):
+        if not await self._account_current():
+            await self.close(code=4003)
+            return
+        await super().send(*args, **kwargs)
+
+    async def _watch_account(self):
+        while True:
+            await asyncio.sleep(30)
+            if not await self._account_current():
+                await self.close(code=4003)
+                return
+
+    def _start_auth_watch(self):
+        if not self.is_guest:
+            self._auth_watch = asyncio.create_task(self._watch_account())
+
+    async def _stop_auth_watch(self):
+        task = getattr(self, "_auth_watch", None)
+        if task:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+
+class SparkPoolConsumer(LiveAccountSocket, AsyncWebsocketConsumer):
     """
     WebSocket consumer that pushes spark_pool balance updates to authenticated
     users (via a short-lived JWT) and guests (via a single-use ticket).
@@ -69,6 +121,10 @@ class SparkPoolConsumer(AsyncWebsocketConsumer):
                 access_token = AccessToken(token)
                 user_id = access_token.get("user_id")
                 self.user = await User.objects.aget(pk=user_id)
+                if not account_can_authenticate(self.user):
+                    await self.close(code=4003)
+                    return
+                self.token_exp = access_token["exp"]
                 self.is_guest = False
                 self.room_group_name = f"spark_pool_{self.user.user_id}"
                 logger.info(
@@ -101,6 +157,7 @@ class SparkPoolConsumer(AsyncWebsocketConsumer):
         # Join the group and accept
         await self.channel_layer.group_add(self.room_group_name, self.channel_name)
         await self.accept()
+        self._start_auth_watch()
 
         # Send initial balance immediately after connection. Both branches read
         # through the same helpers as the HTTP balance endpoint: a guest whose
@@ -185,6 +242,7 @@ class SparkPoolConsumer(AsyncWebsocketConsumer):
         Called when the WebSocket is closed.
         """
         logger.info("SparkPoolConsumer disconnect: code=%s", close_code)
+        await self._stop_auth_watch()
 
         # Only attempt to leave the group if we successfully joined
         if hasattr(self, "room_group_name") and hasattr(self, "channel_layer"):
@@ -199,7 +257,7 @@ class SparkPoolConsumer(AsyncWebsocketConsumer):
             logger.info("SparkPoolConsumer disconnected without proper state.")
 
 
-class ChatConsumer(AsyncWebsocketConsumer):
+class ChatConsumer(LiveAccountSocket, AsyncWebsocketConsumer):
     async def connect(self):
         self.conversation_id = self.scope["url_route"]["kwargs"]["conversation_id"]
         self.room_group_name = f"conversation_{self.conversation_id}"
@@ -213,6 +271,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 access_token = AccessToken(token)
                 user_id = access_token.get("user_id")
                 self.user = await User.objects.aget(pk=user_id)
+                if not account_can_authenticate(self.user):
+                    await self.close(code=4003)
+                    return
+                self.token_exp = access_token["exp"]
                 self.is_guest = False  # ← explicit set
             except (TokenError, InvalidToken, User.DoesNotExist):
                 await self.close(code=4003)
@@ -233,6 +295,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
         await self.channel_layer.group_add(self.room_group_name, self.channel_name)
         await self.accept()
+        self._start_auth_watch()
 
     async def _resolve_guest(self, params):
         ticket = params.get("ticket")
@@ -257,6 +320,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         return None
 
     async def disconnect(self, close_code):
+        await self._stop_auth_watch()
         await self.channel_layer.group_discard(self.room_group_name, self.channel_name)
         # A rejected connection never reached the auth branches, so the identity
         # attributes may be absent here.

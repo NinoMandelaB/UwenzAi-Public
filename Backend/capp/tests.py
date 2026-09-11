@@ -68,6 +68,16 @@ def _make_user(username="alice", email="alice@example.com", verified=True, is_st
         is_verified=verified,
         is_staff=is_staff,
         account_status=(CustomUser.AccountStatus.ACTIVE if verified else CustomUser.AccountStatus.PENDING),
+        # Test users get every optional feature enabled by default so existing
+        # suites keep exercising the pre-feature-flag behaviour. Tests that
+        # care about the disabled state override this explicitly
+        # (see tests_feature_preferences.py).
+        feature_preferences={
+            "reminders": True,
+            "deepthink": True,
+            "websearch": True,
+            "memory_editor": True,
+        },
     )
 
 
@@ -978,6 +988,91 @@ class ChatImageGenerationTests(TestCase):
         self.assertEqual(ai_msg.metadata.get("image_name"), durable_name)
         self.assertNotIn("image_url", ai_msg.metadata)
         self.assertEqual(ai_msg.metadata.get("gallery_image_id"), str(gallery_image.id))
+
+    def test_photo_offer_hold_settles_at_the_discounted_price(self):
+        """Regression: accepting a character photo offer always failed.
+
+        The accept view places the discounted CHARACTER_PHOTO_OFFER_COST hold;
+        the task then re-reserved through generate_gallery_image at the
+        standard IMAGE_GENERATION_COST. The same idempotency key presented
+        with different terms is rejected as IdempotencyKeyConflict, so every
+        accepted offer failed and was refunded after the offer card had
+        already flipped to accepted. The task must resume the hold at the
+        price it was actually placed at.
+        """
+        from capp.classes.billing.paid_features import PaidFeature
+        from capp.constants import CHARACTER_PHOTO_OFFER_COST
+
+        offer_message = Message.objects.create(
+            conversation=self.conversation,
+            sender_type=Message.SenderType.AI,
+            content="",
+            status=Message.StatusChoices.SENT,
+            metadata={
+                "type": "photo_offer",
+                "prompt": "a photo at the beach",
+                "offer_operation_id": "offer-op-1",
+                "offer_cost": CHARACTER_PHOTO_OFFER_COST,
+                "offer_status": "pending",
+            },
+        )
+        user_message = Message.objects.create(
+            conversation=self.conversation,
+            sender_type=Message.SenderType.USER,
+            content="a photo at the beach",
+            status=Message.StatusChoices.SENT,
+            metadata={"type": "image_request"},
+        )
+
+        # Exactly what api_accept_photo_offer does before queueing the task:
+        # reserve the discounted price against the offer's own operation key.
+        reservation = PaidFeature.reserve(
+            feature=BillingReservation.Feature.IMAGE_GENERATION,
+            operation_id="offer-op-1",
+            user=self.owner,
+            operation_reference=f"chat_photo_offer:{self.conversation.conversation_id}:offer-op-1",
+            cost_override=CHARACTER_PHOTO_OFFER_COST,
+        )
+        self.assertEqual(reservation.status, BillingReservation.Status.RESERVED)
+
+        # fal/Seedream is the production provider; pin the test to that
+        # branch (the test env leaves FAL_API_KEY unset, which would take the
+        # Stability fallback instead).
+        with override_settings(FAL_API_KEY="dummy-key-for-branch-selection"):
+            with mock.patch.object(
+                CharacterService, "_generate_fal_seedream_image", return_value=b"offer-image-bytes"
+            ) as seedream, mock.patch.object(CharacterService, "_generate_ai_image") as stability:
+                generate_chat_image(
+                    str(self.conversation.conversation_id),
+                    str(user_message.message_id),
+                    "a photo at the beach",
+                    operation_id="offer-op-1",
+                    offer_message_id=str(offer_message.message_id),
+                )
+
+        seedream.assert_called_once()
+        stability.assert_not_called()
+        # The hold the view placed is the one that settled, at the discounted
+        # price — one charge, no conflict, no refund.
+        reservation.refresh_from_db()
+        self.assertEqual(reservation.status, BillingReservation.Status.SETTLED)
+        self.assertEqual(reservation.settlement_reason, "chat_image_delivered")
+        self.assertEqual(int(reservation.amount_sparks), CHARACTER_PHOTO_OFFER_COST)
+        self.assertEqual(
+            int(SparkPool.objects.get(user=self.owner).sparks),
+            5000 - CHARACTER_PHOTO_OFFER_COST,
+        )
+
+        # The offer card is fulfilled and the picture is linked into the chat.
+        offer_message.refresh_from_db()
+        self.assertEqual(offer_message.metadata.get("offer_status"), "accepted")
+        self.assertTrue(
+            Message.objects.filter(
+                conversation=self.conversation,
+                sender_type=Message.SenderType.AI,
+                metadata__type="generated_image",
+            ).exists()
+        )
 
     def test_task_failure_posts_system_message_and_no_ai_image(self):
         request_msg = Message.objects.create(
@@ -2919,6 +3014,13 @@ class ProactiveChatServiceTests(TestCase):
 
     def setUp(self):
         cache.clear()
+        # Background sends now load the same operator prompts as the chat path.
+        env = mock.patch.dict(
+            "os.environ",
+            {"GENERAL_SYSTEM_PROMPT": "You are a companion.", "SAFETY_SANDWICH": "Stay safe."},
+        )
+        env.start()
+        self.addCleanup(env.stop)
         self.user = _make_user(username="proactive", email="proactive@example.com", verified=True)
         self.character = _make_character(name="Zuri", slug="zuri")
         self.conversation = Conversation.objects.create(user=self.user, character=self.character)
@@ -2996,6 +3098,14 @@ class ProactiveChatServiceTests(TestCase):
         ai_msg = Message.objects.get(conversation=self.conversation, sender_type=Message.SenderType.AI)
         self.assertTrue(ai_msg.metadata["proactive"])
         self.assertEqual(ai_msg.client_operation_id, self._operation_id(self.pref, last))
+
+        # The trusted envelope wraps the task prompt: platform rules first,
+        # safety sandwich as the last system turn, task prompt as the final user turn.
+        sent = mock_llm.call_args.kwargs["messages"]
+        self.assertEqual([m["role"] for m in sent], ["system", "system", "user"])
+        self.assertIn("=== PLATFORM RULES (System) ===\nYou are a companion.", sent[0]["content"])
+        self.assertIn("NSFW content is DISABLED", sent[0]["content"])
+        self.assertEqual(sent[1]["content"], "=== SAFETY CHECK (System) ===\nStay safe.")
 
         reservation = BillingReservation.objects.get(user=self.user)
         self.assertEqual(reservation.status, BillingReservation.Status.SETTLED)

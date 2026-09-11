@@ -388,7 +388,11 @@ class AuthenticatedSendTests(ChatSendPathTestCase):
         with mock.patch.object(
             PromptBuilder,
             "build_messages",
-            return_value=[{"role": "user", "content": message.content}],
+            return_value=[
+                {"role": "system", "content": "sys"},
+                {"role": "system", "content": "=== SAFETY CHECK (System) ===\nSafety tail."},
+                {"role": "user", "content": message.content},
+            ],
         ), mock.patch.object(CortecsClient, "chat_completion", return_value=completion):
             process_ai_response(
                 str(message.conversation.conversation_id),

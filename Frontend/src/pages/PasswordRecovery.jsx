@@ -5,6 +5,7 @@ import PrimaryButton from "../components/PrimaryButton";
 import MessagePopup from "../components/MessagePopup";
 import { useLanguage } from "../context/LanguageContext";
 import { getAuthMessage, getAuthTitle } from "../utils/authMessageMapper";
+import { characterCount } from "../utils/textLimits";
 import {
   requestPasswordReset,
   confirmPasswordReset,
@@ -115,7 +116,7 @@ function maskEmail(email) {
 }
 
 export default function PasswordRecovery() {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -211,10 +212,10 @@ export default function PasswordRecovery() {
 
     if (!formData.password) {
       nextErrors.password = "Please enter your new password.";
-    } else if (formData.password.length < 6) {
-      nextErrors.password = "Your password must be at least 6 characters long.";
-    } else if (formData.password.length > 20) {
-      nextErrors.password = "Your password must not exceed 20 characters.";
+    } else if (characterCount(formData.password) < 8) {
+      nextErrors.password = t("auth.passwordMinLength");
+    } else if (characterCount(formData.password) > 128) {
+      nextErrors.password = t("auth.passwordMaxLength");
     }
 
     if (!formData.confirm_password) {
@@ -328,6 +329,7 @@ export default function PasswordRecovery() {
         message: getAuthMessage(
           err,
           "We could not reset your password right now. Please try again.",
+          language,
         ),
       });
     } finally {
@@ -450,7 +452,7 @@ export default function PasswordRecovery() {
             autoComplete="new-password"
             icon={KeyRound}
             error={errors.password}
-            hint="Use 6 to 20 characters."
+            hint={t("auth.passwordLengthHint")}
           />
 
           <Input

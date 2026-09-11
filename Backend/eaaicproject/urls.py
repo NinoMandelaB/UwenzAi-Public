@@ -24,6 +24,7 @@ urlpatterns = [
     path("api/v1/proactive-chat/", include("capp.urls.proactive_chat_urls")),
     path("api/v1/push/", include("capp.urls.push_urls")),
     path("api/v1/memory/", include("capp.urls.memory_urls")),
+    path("api/v1/reminders/", include("capp.urls.reminder_urls")),
 ]
 
 # Django must never serve MEDIA_ROOT itself outside local development: it is an

@@ -32,6 +32,7 @@ from capp.classes.billing.reservation_service import (
     InsufficientBalance,
     InvalidTransition,
     ReservationError,
+    RefundOwnerDeleted,
 )
 from capp.classes.guest.guest_claim_service import GuestClaimService
 from capp.classes.guest.guest_identity_service import GuestIdentityService
@@ -42,6 +43,7 @@ from capp.models import (
     GuestIdentity,
     GuestTokenQuota,
     GuestTransferGrant,
+    ReminderDeliveryAttempt,
     SparkPool,
     SparkTransaction,
     UsageCharge,
@@ -465,6 +467,46 @@ class ClaimerErasureTests(TestCase):
         reservation.refresh_from_db()
         return reservation, identity
 
+    def test_deleting_a_user_with_reminder_delivery_attempts_succeeds(self):
+        """Reminder attempts PROTECT their reservation; deletion clears them.
+
+        The reminder feature made ``ReminderDeliveryAttempt.reservation`` a
+        PROTECT OneToOne, so a user with reminder history could not be deleted
+        at all: Django refused to cascade the user's own billing reservations
+        while a delivery attempt still referenced one (ProtectedError on every
+        /auth/delete-account/ call). Attempts are per-user lease records, not
+        billing records, so hard deletion removes them first.
+        """
+        _fund_user(self.user, 1000)
+        # A reservation the user is the principal of, plus a delivery attempt
+        # holding a PROTECT reference to it — the exact shape that raised
+        # ProtectedError in production.
+        own = BillingReservationService.reserve(
+            idempotency_key="own-1", feature=FEATURE, amount_sparks=100, user=self.user
+        )
+        ReminderDeliveryAttempt.objects.create(
+            reminder_key=uuid.uuid4(),
+            user=self.user,
+            revision=1,
+            lease_until=timezone.now() + timedelta(minutes=5),
+            status=ReminderDeliveryAttempt.Status.ACTIVE,
+            reservation=own,
+        )
+        claimed, identity = self._guest_reservation_claimed_by(self.user, key="g-2")
+
+        result = Auth.hard_delete_user(self.user)
+
+        self.assertEqual(result["status"], "success")
+        self.assertFalse(CustomUser.objects.filter(pk=self.user.pk).exists())
+        self.assertFalse(ReminderDeliveryAttempt.objects.exists())
+        # The user's own reservations cascade with the account (pinned by the
+        # tests below); the guest provenance the deleted account claimed
+        # survives untouched.
+        self.assertFalse(BillingReservation.objects.filter(pk=own.pk).exists())
+        claimed.refresh_from_db()
+        self.assertIsNone(claimed.claimed_by_id)
+        self.assertEqual(claimed.guest_identity_id, identity.pk)
+
     def test_deleting_the_claimer_keeps_the_reservation_and_its_provenance(self):
         reservation, identity = self._guest_reservation_claimed_by(self.user)
         claimed_at = reservation.claimed_from_guest_at
@@ -550,6 +592,19 @@ class ClaimerErasureTests(TestCase):
         self.assertIsNone(reservation.claimed_by_id)
         self.assertIsNotNone(reservation.claimed_from_guest_at)
         self.assertEqual(reservation.guest_identity_id, identity.pk)
+
+        # No live beneficiary remains. In particular the old claimed guest
+        # must never receive a refund or a recreated initial free balance.
+        with self.assertRaises(RefundOwnerDeleted):
+            BillingReservationService.refund(reservation, reason="late_provider_failure")
+        reservation.refresh_from_db()
+        self.assertEqual(reservation.status, BillingReservation.Status.RESERVED)
+        self.assertIsNone(reservation.refund_spark_transaction_id)
+        self.assertEqual(GuestTokenQuota.objects.get(session_id=identity.owner_key).sparks, 0)
+        GuestTokenQuota.objects.filter(session_id=identity.owner_key).delete()
+        with self.assertRaises(RefundOwnerDeleted):
+            BillingReservationService.refund(reservation, reason="retry")
+        self.assertFalse(GuestTokenQuota.objects.filter(session_id=identity.owner_key).exists())
 
     @mock.patch("capp.classes.auth.recaptcha.RecaptchaService.verify_token", return_value=RECAPTCHA_OK)
     def test_delete_account_endpoint_succeeds_for_a_converted_account(self, _recaptcha):

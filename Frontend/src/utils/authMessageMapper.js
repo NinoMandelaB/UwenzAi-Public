@@ -5,8 +5,8 @@ const AUTH_MESSAGE_MAP = {
   password_required: "Please enter your password.",
   confirm_password_required: "Please confirm your password.",
   password_mismatch: "Your passwords do not match.",
-  password_too_short: "Your password must be at least 6 characters long.",
-  password_too_long: "Your password must not exceed 20 characters.",
+  password_too_short: "Your password must be at least 8 characters long.",
+  password_too_long: "Your password must not exceed 128 characters.",
   age_confirmation_required:
     "You must confirm that you meet the age requirement.",
   terms_acceptance_required:
@@ -14,6 +14,8 @@ const AUTH_MESSAGE_MAP = {
   privacy_acceptance_required:
     "You must accept the privacy policy to continue.",
   invalid_password: "Your password does not meet the required rules.",
+  password_validation_failed:
+    "Choose a stronger password that is not common, entirely numeric, or similar to your personal information.",
   invalid_email: "Please enter a valid email address.",
   email_already_exists: "An account with that email already exists.",
   username_already_exists: "That username is already taken.",
@@ -39,6 +41,10 @@ const AUTH_MESSAGE_MAP = {
   invalid_google_email: "The email returned by Google is invalid.",
   google_account_not_linked:
     "This account is not linked to Google. Please sign in using your password.",
+  google_account_already_linked:
+    "This account is already connected to a different Google account.",
+  google_link_confirmation_required:
+    "Sign in with your password first. Then go to Settings → Account → Connect Google, choose the Google account with the same email, and confirm the connection. Nothing is linked automatically.",
   google_signup_not_allowed:
     "You cannot create an account using Google. Please sign up manually first.",
   google_email_mismatch:
@@ -102,16 +108,30 @@ const AUTH_MESSAGE_MAP = {
 export function getAuthMessage(
   errorOrCode,
   fallback = "Something went wrong.",
+  language = "en",
 ) {
   if (!errorOrCode) return fallback;
+  const messages =
+    language === "sw"
+      ? {
+          ...AUTH_MESSAGE_MAP,
+          password_too_short: "Nenosiri lazima liwe na angalau herufi 8.",
+          password_too_long: "Nenosiri halipaswi kuzidi herufi 128.",
+          password_validation_failed:
+            "Chagua nenosiri imara lisilo la kawaida, lisilo nambari pekee, wala kufanana na taarifa zako binafsi.",
+          google_link_confirmation_required:
+            "Ingia kwa nenosiri lako kwanza. Kisha nenda Mipangilio → Akaunti → Unganisha Google, chagua akaunti ya Google yenye barua pepe ileile, na uthibitishe muunganisho. Hakuna kinachounganishwa kiotomatiki.",
+          google_account_already_linked:
+            "Akaunti hii tayari imeunganishwa na akaunti nyingine ya Google.",
+        }
+      : AUTH_MESSAGE_MAP;
 
   if (typeof errorOrCode === "string") {
-    return (
-      AUTH_MESSAGE_MAP[errorOrCode] || prettifyCode(errorOrCode) || fallback
-    );
+    return messages[errorOrCode] || prettifyCode(errorOrCode) || fallback;
   }
 
   const directPayload =
+    errorOrCode?.payload?.data ??
     errorOrCode?.response?.data?.data ??
     errorOrCode?.response?.data?.message ??
     errorOrCode?.data?.data ??
@@ -119,9 +139,7 @@ export function getAuthMessage(
     errorOrCode?.message;
 
   if (typeof directPayload === "string") {
-    return (
-      AUTH_MESSAGE_MAP[directPayload] || prettifyCode(directPayload) || fallback
-    );
+    return messages[directPayload] || prettifyCode(directPayload) || fallback;
   }
 
   if (typeof directPayload === "object" && directPayload) {
@@ -142,7 +160,7 @@ export function getAuthMessage(
 
     if (typeof directPayload.code === "string") {
       return (
-        AUTH_MESSAGE_MAP[directPayload.code] ||
+        messages[directPayload.code] ||
         prettifyCode(directPayload.code) ||
         fallback
       );

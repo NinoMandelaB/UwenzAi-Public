@@ -26,6 +26,7 @@ import SectionTitle from "../components/SectionTitle";
 import MessagePopup from "../components/MessagePopup";
 import DeleteAccountDialog from "../components/DeleteAccountDialog";
 import SupportSection from "../components/SupportSection";
+import CreditsModal from "../components/CreditsModal";
 
 import { useTheme } from "../context/ThemeContext";
 import { useLanguage } from "../context/LanguageContext";
@@ -38,6 +39,9 @@ import { getAuthMessage } from "../utils/authMessageMapper";
 import { STORAGE_KEYS } from "../config/constants";
 import { getPricing, getSparkPoolBalance } from "../services/billingService";
 import BYOKSection from "../components/BYOKSection";
+import FeatureTogglesSection from "../components/FeatureTogglesSection";
+import GoogleConnectionSection from "../components/GoogleConnectionSection";
+import ReminderButton from "../components/ReminderPanel";
 
 function ToggleItem({ title, subtitle, checked, onChange, icon: Icon, t }) {
   return (
@@ -282,7 +286,8 @@ export default function Settings() {
 
   const { isDark, toggleTheme } = useTheme();
   const { t, language } = useLanguage();
-  const { user, isAuthenticated, isAdmin, clearAuthState } = useAuth();
+  const { user, isAuthenticated, isAdmin, clearAuthState, sessionGeneration } =
+    useAuth();
   const { canInstall, promptInstall } = usePWAInstall();
   const push = usePushNotifications();
 
@@ -298,6 +303,9 @@ export default function Settings() {
   );
 
   const [showPolicies, setShowPolicies] = useState(false);
+
+  // Contributors & Roadmap modal (small link at the very bottom of the page)
+  const [showCredits, setShowCredits] = useState(false);
 
   // Cost confirmation dialog state
   const [showCostDialog, setShowCostDialog] = useState(false);
@@ -371,16 +379,12 @@ export default function Settings() {
       navigate("/login", {
         replace: true,
         state: {
-          successMessage:
-            "Your account has been permanently deleted. This action cannot be undone.",
+          successMessage: t("settings.deleteAccountSuccess"),
         },
       });
     } catch (error) {
       setDeleteAccountError(
-        getAuthMessage(
-          error,
-          "We could not delete your account right now. Please try again.",
-        ),
+        getAuthMessage(error, t("settings.deleteAccountErrorFallback")),
       );
     } finally {
       setIsDeletingAccount(false);
@@ -574,6 +578,13 @@ export default function Settings() {
           </div>
         </section>
 
+        {isAuthenticated && (
+          <section className="space-y-3">
+            <SectionTitle>{t("settings.account")}</SectionTitle>
+            <GoogleConnectionSection />
+          </section>
+        )}
+
         <section className="space-y-3">
           <SectionTitle>{t("settings.preferences")}</SectionTitle>
 
@@ -621,6 +632,11 @@ export default function Settings() {
                 icon={Bell}
                 t={t}
               />
+              {push.error && (
+                <p role="alert" className="text-sm text-rose-500">
+                  {t(`settings.${push.error}`)}
+                </p>
+              )}
             </div>
           </section>
         )}
@@ -639,15 +655,34 @@ export default function Settings() {
         </section>
 
         {isAuthenticated && (
-          <section className="space-y-4">
-            <BYOKSection />
+          <>
+            {/* Availability does not activate per-chat search or reasoning. */}
+            <section className="space-y-3">
+              <SectionTitle>{t("settings.advanced")}</SectionTitle>
+              <p className="-mt-1 text-sm leading-6 theme-text-muted">
+                {t("settings.advancedDescription")}
+              </p>
+              <FeatureTogglesSection />
+              <div className="rounded-2xl border p-4 theme-card">
+                <ReminderButton
+                  key={`${user?.user_id}:${sessionGeneration}`}
+                  label={t("settings.manageReminders")}
+                />
+                <p className="mt-1 text-sm leading-6 theme-text-muted">
+                  {t("settings.manageRemindersDescription")}
+                </p>
+              </div>
+              <BYOKSection />
+            </section>
 
-            <CreateCharacterCTA onClick={handleCreateCharacterClick} t={t} />
+            <section className="space-y-4">
+              <CreateCharacterCTA onClick={handleCreateCharacterClick} t={t} />
 
-            {isAdmin && <AdminQuickActions />}
+              {isAdmin && <AdminQuickActions />}
 
-            <DeleteAccountCard onClick={handleOpenDeleteDialog} t={t} />
-          </section>
+              <DeleteAccountCard onClick={handleOpenDeleteDialog} t={t} />
+            </section>
+          </>
         )}
 
         {!isAuthenticated && (
@@ -669,7 +704,24 @@ export default function Settings() {
             </div>
           </section>
         )}
+
+        {/* Deliberately tiny: credits/contributors must not compete with the
+            product UI — a quiet link at the very end of the page. */}
+        <div className="pt-2 pb-4 text-center">
+          <button
+            type="button"
+            onClick={() => setShowCredits(true)}
+            className="text-xs underline-offset-4 transition hover:underline theme-text-muted"
+          >
+            {t("settings.creditsLink")}
+          </button>
+        </div>
       </div>
+
+      <CreditsModal
+        isOpen={showCredits}
+        onClose={() => setShowCredits(false)}
+      />
 
       {/* Cost Confirmation Dialog */}
       {showCostDialog && (

@@ -234,6 +234,17 @@ describe("required disclosures are present", () => {
     expect(flatten(legalDocuments.terms.en)).toMatch(/Absolute prohibitions/i);
     expect(flatten(legalDocuments.terms.sw)).toMatch(/Marufuku ya kabisa/i);
   });
+
+  it("describes account deletion without cascading every character", () => {
+    const en = flatten(legalDocuments.privacy.en);
+    const sw = flatten(legalDocuments.privacy.sw);
+    expect(en).not.toMatch(/cascading deletion/i);
+    expect(sw).not.toMatch(/ufutaji wa mfululizo/i);
+    expect(en).toMatch(/Public characters you created remain on the Service/i);
+    expect(en).toMatch(/This is not a refund of purchases/i);
+    expect(sw).toMatch(/Wahusika wa umma uliowaunda wanabaki kwenye Huduma/i);
+    expect(sw).toMatch(/Hii si marejesho ya malipo/i);
+  });
 });
 
 function sectionText(doc, id) {

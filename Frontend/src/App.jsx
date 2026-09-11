@@ -26,6 +26,7 @@ import CharacterEdit from "./pages/edit/";
 import CharacterDetail from "./pages/CharacterDetail";
 import EditProfile from "./pages/EditProfile";
 import Profile from "./pages/Profile";
+import Contact from "./pages/Contact";
 import ManageFlaggedMessages from "./pages/admin/ManageFlaggedMessages";
 import ManageFlaggedCharacters from "./pages/admin/ManageFlaggedCharacters";
 import ManageOccupations from "./pages/admin/ManageOccupations";
@@ -118,6 +119,7 @@ export default function App() {
                       <Route path="/chats" element={<Chats />} />
                       <Route path="/edit-profile" element={<EditProfile />} />
                       <Route path="/profile" element={<Profile />} />
+                      <Route path="/contact" element={<Contact />} />
 
                       {/* TEMPORARY old chat routes for testing */}
                       <Route path="/chat/:characterId" element={<Chat />} />

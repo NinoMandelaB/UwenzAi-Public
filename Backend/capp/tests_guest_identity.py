@@ -858,6 +858,19 @@ class LegacyGuestMigrationTests(GuestTestMixin, TestCase):
         self.assertFalse(GuestIdentity.objects.exists())
 
     @override_settings(**MIGRATION_OPEN)
+    def test_erased_claimer_does_not_make_old_legacy_quota_adoptable(self):
+        GuestTokenQuota.objects.create(
+            session_id=self.legacy_id,
+            sparks=0,
+            claimed_at=timezone.now(),
+            claimed_by=None,
+        )
+        resp = self._migrate()
+        self.assertEqual(resp.status_code, 409)
+        self.assertEqual(resp.json()["data"], "legacy_session_already_claimed")
+        self.assertFalse(GuestIdentity.objects.exists())
+
+    @override_settings(**MIGRATION_OPEN)
     def test_non_uuid_values_are_refused(self):
         GuestTokenQuota.objects.create(session_id=self.legacy_id, sparks=5)
         hex_form = self.legacy_id.replace("-", "")

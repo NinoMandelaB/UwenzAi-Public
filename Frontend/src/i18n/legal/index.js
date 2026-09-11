@@ -10,13 +10,12 @@ import { privacySw } from "./privacy.sw";
 import { subprocessorsEn } from "./subprocessors.en";
 import { subprocessorsSw } from "./subprocessors.sw";
 
-export const LEGAL_LAST_UPDATED = "08-AUG-2026";
+export const LEGAL_LAST_UPDATED = "11-SEP-2026";
 
 // Sent with registration consent so we can prove which version a user accepted.
-// The suffix distinguishes same-day revisions: .1 corrected the AI-provider
-// disclosure, which had named the wrong embeddings provider, and .2 added the
-// severability and language-precedence clauses to the Terms.
-export const LEGAL_POLICY_VERSION = "2026-08-08";
+// 2026-09-11 records the account-deletion change: public characters remain
+// without the creator’s name instead of cascading away with the account.
+export const LEGAL_POLICY_VERSION = "2026-09-11";
 
 export const legalDocuments = {
   terms: { en: termsEn, sw: termsSw },

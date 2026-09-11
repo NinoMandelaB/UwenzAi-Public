@@ -22,6 +22,7 @@ Design:
 
 import json
 import logging
+import re
 from typing import List, Optional, Tuple
 
 from django.conf import settings
@@ -39,6 +40,50 @@ from capp.classes.search.open_url import (
 logger = logging.getLogger(__name__)
 
 SEARCH_TOOL_NAME = "web_search"
+
+# App-authored instructions, not web data. tasks injects these before the
+# unchanged safety tail; unlike optional results they survive rebudgeting.
+SEARCH_GROUNDING_NOTICE = (
+    "For current information and follow-up requests for exact details, use the offered search tools now, "
+    "not a promise to look something up later. Resolve relative dates such as 'this weekend' to calendar dates "
+    "using the supplied current time and the user's relevant location. Include those dates and the event/location "
+    "in a short topic-focused query, without private identifiers. Verify each result's event date and year, "
+    "time and venue against the requested period; an annual event or a publication date is not proof it occurs then. "
+    "Treat earlier assistant suggestions as unverified, not as evidence. Correct an earlier suggestion if the "
+    "evidence does not support it. Do not claim you searched or verified anything without supporting tool results. "
+    "Use only supported details, identify missing details honestly, and include a compact source URL where available."
+)
+TOOL_COMPLETION_NOTICE = (
+    "This is the final answer for this turn; no more tools will run after it. Answer the user's request now "
+    "using the tool outcomes actually provided, not a progress update or promise to fetch details later. "
+    "Do not claim a lookup or action succeeded when it was refused, denied, failed, or returned no usable results. "
+    "If results are absent or were omitted to fit the context, say you could not verify the requested details; "
+    "do not fill gaps from earlier assistant claims. For events, give dates, times and locations only where the "
+    "returned evidence supports the requested date range and year, with a compact source URL where available. "
+    "Clearly state any remaining uncertainty in the user's language."
+)
+SEARCH_INCOMPLETE_REPLY = (
+    "I couldn't verify the requested information in this reply, so I don't have confirmed details."
+)
+_LOOKUP_HANDOFF_RE = re.compile(
+    r"(?:sorry[^.!?\n]{0,80}[.!?]\s*)?"
+    r"(?:let me|i['’]ll|i will)\s+(?:just\s+|quickly\s+)?"
+    r"(?:look up|check|fetch|grab|pull up)\s+(?:(?:the|those|these)\s+)?"
+    r"(?:exact\s+|event\s+)?details(?:\s+for\s+(?:you|those events|these events))?"
+    r"(?:\s+now)?[.!?]?",
+    re.IGNORECASE,
+)
+
+
+def is_lookup_handoff(text: str) -> bool:
+    """Catch short English lookup-only promises, not substantive answers.
+
+    This is a narrow backstop for a known failure phrasing, not semantic
+    factuality validation. Other languages/phrases rely on the grounding
+    instructions; no extra generation or speculative search is performed.
+    """
+    return bool(_LOOKUP_HANDOFF_RE.fullmatch(text))
+
 
 # Per-field caps for attacker-influenced search result data. Snippets are
 # already clipped provider-side; titles and URLs were not bounded anywhere,
@@ -58,7 +103,8 @@ SEARCH_TOOL_SPEC = {
         "description": (
             "Search the web for current, factual information you don't "
             "already know (news, prices, recent events, real-world facts). "
-            "Use only when needed to answer accurately."
+            "Use when needed to answer accurately, including follow-up requests for exact details. "
+            "For date-sensitive queries include the relevant calendar dates/year and location."
         ),
         "parameters": {
             "type": "object",
@@ -159,6 +205,8 @@ def _get_str_arg(args: dict, key: str) -> str:
 def run_search_tool_calls(
     tool_calls,
     max_calls: Optional[int] = None,
+    *,
+    user=None,
 ) -> Tuple[str, int]:
     """
     Execute up to `max_calls` search-tool invocations requested by the model.
@@ -169,8 +217,10 @@ def run_search_tool_calls(
 
     Returns (condensed_block, calls_executed). ``condensed_block`` is a
     single string ready for the prompt builder to wrap as untrusted data and
-    insert before the safety tail; empty string if no calls were executed
-    (e.g. provider not configured, or no search tool calls present).
+    insert before the safety tail. Refused/malformed calls return an explicit
+    outcome without counting as provider calls or echoing their arguments.
+    Empty means no outcome was available (e.g. provider not configured);
+    callers must still finalize, never reuse the tool-request preamble.
     """
     provider = get_search_provider()
     if provider is None:
@@ -195,16 +245,20 @@ def run_search_tool_calls(
         args = _get_function_args(fn)
         topic = _get_str_arg(args, "query")
         if not topic:
+            blocks.append("[web_search failed: missing or invalid query; no search was performed]")
             continue
-        query = build_search_query(topic)
+        query = build_search_query(topic, user=user)
         if not query:
+            blocks.append("[web_search refused: query did not pass privacy validation; no search was performed]")
             continue
 
         try:
             results = provider.search(query, max_results=3)
         except Exception as e:  # defensive: never let a search failure crash the reply pipeline
-            logger.warning("Search provider %s failed for query=%r: %s", provider.name, query, e)
-            results = []
+            logger.warning("Search provider %s failed (%s)", provider.name, type(e).__name__)
+            blocks.append("[web_search failed: provider unavailable; no results could be verified]")
+            executed += 1
+            continue
 
         blocks.append(_condense_results(query, results))
         executed += 1

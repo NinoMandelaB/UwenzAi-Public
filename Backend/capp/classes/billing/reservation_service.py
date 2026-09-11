@@ -89,6 +89,12 @@ class InvalidTransition(ReservationError):
     code = "invalid_transition"
 
 
+class RefundOwnerDeleted(ReservationError):
+    """No live beneficiary remains; hold for explicit manual compensation."""
+
+    code = "refund_owner_deleted"
+
+
 class BillingReservationService:
     # ------------------------------------------------------------------
     # reserve
@@ -357,6 +363,11 @@ class BillingReservationService:
                 },
             )
             return beneficiary, None
+
+        if reservation.claimed_from_guest_at or (
+            reservation.guest_identity and reservation.guest_identity.status == GuestIdentity.Status.CLAIMED
+        ):
+            raise RefundOwnerDeleted(reservation_id=str(reservation.pk))
 
         quota = lock_guest_quota(reservation.guest_identity.owner_key)
         credit_locked(quota, amount)

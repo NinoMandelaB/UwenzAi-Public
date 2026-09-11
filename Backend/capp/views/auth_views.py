@@ -5,13 +5,15 @@ import json
 from django.conf import settings
 from django.http import JsonResponse
 from django.views.decorators.csrf import ensure_csrf_cookie
-from capp.csrf import csrf_protect_for_guests
+from capp.authentication import OptionalAccountJWTAuthentication
+from capp.csrf import csrf_protect_api, csrf_protect_for_guests
 from django.middleware.csrf import get_token
-from rest_framework.decorators import api_view, permission_classes, throttle_classes
+from rest_framework.decorators import api_view, authentication_classes, permission_classes, throttle_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
 from capp.classes.auth.auth import Auth
+from capp.classes.auth.feature_preferences import FeaturePreferences
 from capp.classes.guest.guest_claim_service import GuestClaimService
 from capp.classes.guest.guest_cookie import clear_guest_cookie
 from capp.classes.guest.guest_identity_service import GuestIdentityService
@@ -175,6 +177,36 @@ def api_export_user_data(request):
 
 
 @csrf_protect_for_guests
+@api_view(["GET", "PATCH", "PUT"])
+@permission_classes([IsAuthenticated])
+def api_feature_preferences(request):
+    """Read / update the per-account optional-feature toggles.
+
+    GET    -> {"status": "success", "data": {"feature_preferences": {...}}}
+    PATCH  -> partial update, body e.g. {"reminders": true, "websearch": false}
+    """
+    try:
+        if request.method == "GET":
+            return Response(
+                {
+                    "status": "success",
+                    "data": {"feature_preferences": FeaturePreferences.get(request.user)},
+                }
+            )
+
+        result = FeaturePreferences.update(request.user, request.data)
+
+        if result["status"] != "success":
+            return Response(result, status=400)
+
+        return Response(result, status=200)
+
+    except Exception:
+        logger.exception("Unexpected error in api_feature_preferences")
+        return Response({"status": "fail", "data": "server_error"}, status=500)
+
+
+@csrf_protect_for_guests
 @api_view(["PATCH"])
 @permission_classes([IsAuthenticated])
 def api_update_profile(request):
@@ -322,6 +354,11 @@ def api_google_auth_user(request):
         if result["status"] != "success":
             return Response(result, status=400)
 
+        if result["data"].get("linked") is True:
+            # Account linking is not login. In particular, a late response
+            # must never overwrite another tab/account's refresh cookie.
+            return Response(result, status=200)
+
         response_data = {
             "status": "success",
             "data": {
@@ -377,7 +414,7 @@ def api_signin_user(request):
         return Response({"status": "fail", "data": "server_error"}, status=500)
 
 
-@csrf_protect_for_guests
+@csrf_protect_api
 @api_view(["POST"])
 @permission_classes([AllowAny])
 @throttle_classes([RefreshTokenThrottle])
@@ -415,6 +452,7 @@ def api_refresh_access_token(request):
 
 @csrf_protect_for_guests
 @api_view(["POST"])
+@authentication_classes([OptionalAccountJWTAuthentication])
 @permission_classes([AllowAny])
 @throttle_classes([SignoutThrottle])
 def api_signout_user(request):

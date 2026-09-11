@@ -1,6 +1,7 @@
 // src/hooks/useChat.js
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { validUserMessage } from "../utils/textLimits";
 import { useChatSocket } from "./useChatSocket";
 import { useMessageHistory } from "./useMessageHistory";
 import { useMarkConversationRead } from "./useMarkConversationRead";
@@ -150,7 +151,7 @@ export function useChat(
 
   const sendUserMessage = useCallback(
     async (content) => {
-      if (!conversationId || !content.trim()) return false;
+      if (!conversationId || !validUserMessage(content)) return false;
 
       const operationId = reuseOperationId(sendOperationRef, content);
       setError(null);

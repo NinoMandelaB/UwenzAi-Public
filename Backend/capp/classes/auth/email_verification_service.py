@@ -1,6 +1,4 @@
-import hashlib
 import logging
-import random
 from datetime import timedelta
 from typing import Dict
 
@@ -9,6 +7,7 @@ from django.utils import timezone
 from typing import Optional
 
 from capp.models import CustomUser, EmailVerification
+from capp.classes.auth.codes import generate_code, digest_code, code_matches
 
 logger = logging.getLogger(__name__)
 
@@ -24,11 +23,11 @@ class EmailVerificationService:
 
     @classmethod
     def _generate_code(cls) -> str:
-        return "".join(str(random.randint(0, 9)) for _ in range(cls.CODE_LENGTH))
+        return generate_code(cls.CODE_LENGTH)
 
     @classmethod
-    def _hash_code(cls, code: str) -> str:
-        return hashlib.sha256(code.encode("utf-8")).hexdigest()
+    def _hash_code(cls, code: str, user_id, purpose="email_verification") -> str:
+        return digest_code(code, user_id, purpose)
 
     @classmethod
     def create_verification_for_user(
@@ -49,10 +48,11 @@ class EmailVerificationService:
             raise ValueError("User is required")
 
         code = cls._generate_code()
-        code_hash = cls._hash_code(code)
+        code_hash = cls._hash_code(code, user.pk, purpose)
         expires_at = timezone.now() + timedelta(minutes=cls.EXPIRY_MINUTES)
 
         with transaction.atomic():
+            CustomUser.objects.select_for_update().get(pk=user.pk)
             # expire previous pending verifications of the same purpose
             # For email change, we only invalidate other email‑change requests
             if purpose == "email_change":
@@ -94,6 +94,7 @@ class EmailVerificationService:
         }
 
     @classmethod
+    @transaction.atomic
     def verify_code(cls, user: CustomUser, code: str) -> Dict[str, str]:
         """
         Verifies a submitted code.
@@ -104,8 +105,12 @@ class EmailVerificationService:
         if not code:
             return {"status": "fail", "data": "verification_code_required"}
 
+        # Serialize issuance, attempts and consume on the owner row. A row lock
+        # on the pending record alone cannot serialize concurrent new issuances.
+        user = CustomUser.objects.select_for_update().get(pk=user.pk)
         verification = (
-            EmailVerification.objects.filter(
+            EmailVerification.objects.select_for_update()
+            .filter(
                 user=user,
                 status=EmailVerification.VerificationStatus.PENDING,
             )
@@ -117,7 +122,7 @@ class EmailVerificationService:
             return {"status": "fail", "data": "verification_not_found"}
 
         # check expiry
-        if verification.expires_at < timezone.now():
+        if verification.expires_at <= timezone.now():
             verification.status = EmailVerification.VerificationStatus.EXPIRED
             verification.save(update_fields=["status", "updated_at"])
             return {"status": "fail", "data": "verification_expired"}
@@ -129,9 +134,8 @@ class EmailVerificationService:
             return {"status": "fail", "data": "verification_attempts_exceeded"}
 
         # verify code
-        code_hash = cls._hash_code(code)
-
-        if code_hash != verification.code_hash:
+        purpose = "email_change" if verification.new_email_hash else "email_verification"
+        if not code_matches(code, verification.code_hash, user.pk, purpose):
             verification.attempts += 1
             verification.save(update_fields=["attempts", "updated_at"])
 

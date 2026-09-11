@@ -1,8 +1,16 @@
 // src/services/authService.js
 
 import { API, STORAGE_KEYS } from "../config/constants";
-import { ensureCsrfCookie, getAccessToken } from "./apiClient";
+import {
+  ensureCsrfCookie,
+  getAccessToken,
+  apiFetch,
+  getCachedCsrfToken,
+  getAuthSessionGeneration,
+  refreshAccessToken as renewAccessToken,
+} from "./apiClient";
 import { unsubscribeFromPush, unsubscribePushLocally } from "./pushService";
+import { boundedTask } from "../utils/boundedTask";
 
 // -----------------------------------------------------------------
 //  Helpers
@@ -244,16 +252,76 @@ export async function signupUser(payload) {
   return data;
 }
 
-export async function signinUser(payload) {
-  const data = await postWithCsrf(API.AUTH.SIGNIN, payload);
-  storeUserData(data.data);
+async function authenticate(
+  endpoint,
+  payload,
+  { signal, expectedUserId } = {},
+) {
+  const generation = getAuthSessionGeneration();
+  const assertCurrent = () => {
+    if (
+      signal?.aborted ||
+      generation !== getAuthSessionGeneration() ||
+      (expectedUserId &&
+        (!getAccessToken() || getStoredUser()?.user_id !== expectedUserId))
+    )
+      throw new DOMException("Authentication attempt expired.", "AbortError");
+  };
+  assertCurrent();
+  const response = await apiFetch(endpoint, {
+    method: "POST",
+    body: payload,
+    signal,
+    skipAuthHeader: !expectedUserId,
+    // A link must never retry with another session's bearer.
+    skipAuthRefresh: true,
+  });
+  assertCurrent();
+  const data = await handleFetchResponse(response);
+  assertCurrent();
+  if (expectedUserId) {
+    if (data?.data?.user?.user_id !== expectedUserId) {
+      throw createApiError({
+        code: "google_link_confirmation_required",
+        message: "google_link_confirmation_required",
+      });
+    }
+    if (data?.data?.linked !== true) {
+      throw new Error("Invalid Google connection response.");
+    }
+    // Connecting a provider is not a login: do not replace tokens or profile.
+  } else {
+    if (!data?.data?.user?.user_id || !data?.data?.access_token) {
+      throw new Error("Invalid sign-in response.");
+    }
+    storeUserData(data.data);
+  }
   return data;
 }
 
-export async function googleAuth(payload) {
-  const data = await postWithCsrf(API.AUTH.GOOGLE, payload);
-  storeUserData(data.data);
-  return data;
+export async function signinUser(payload, options) {
+  return authenticate(API.AUTH.SIGNIN, payload, options);
+}
+
+export async function googleAuth(payload, options) {
+  // Normal Google login never implicitly confirms a link or creates an account.
+  return authenticate(
+    API.AUTH.GOOGLE,
+    { credential: payload.credential },
+    options,
+  );
+}
+
+export async function linkGoogleAccount(
+  credential,
+  { expectedUserId, signal },
+) {
+  if (!expectedUserId) throw new Error("Sign in before connecting Google.");
+  return authenticate(
+    API.AUTH.GOOGLE,
+    { credential, confirm_link: true },
+    { expectedUserId, signal },
+  );
 }
 
 export async function verifyEmailCode(payload) {
@@ -352,29 +420,88 @@ export async function confirmEmailChange(payload) {
   return data;
 }
 
-export async function signoutUser() {
+// Access tokens live 15 minutes. A sign-out or push cleanup sent with an
+// expired one is rejected before the refresh cookie can be blacklisted, so a
+// verifiably expired departing token is renewed first, while the departing
+// account's cookie is still the only one in the browser. Tokens that cannot
+// be decoded are treated as unknown and used as they are.
+const TOKEN_EXPIRY_SLACK_MS = 30 * 1000;
+
+export function accessTokenExpired(token, now = Date.now()) {
+  if (!token) return false;
   try {
-    // Detach this device's push subscription while the access token is still
-    // valid, so a shared device stops receiving the signed-out account's
-    // notifications. Best-effort: it must never block sign-out (the backend
-    // prunes dead endpoints on send, so a missed cleanup self-heals).
-    try {
-      await unsubscribeFromPush();
-    } catch {
-      // Signing out matters more than a clean unsubscribe.
-    }
-    const data = await postWithCsrf(API.AUTH.SIGNOUT, {});
-    clearStoredUserData();
-    return data;
-  } catch (error) {
-    clearStoredUserData();
-    throw error;
+    const payload = JSON.parse(
+      window.atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")),
+    );
+    return (
+      typeof payload.exp === "number" &&
+      payload.exp * 1000 - TOKEN_EXPIRY_SLACK_MS <= now
+    );
+  } catch {
+    return false;
   }
 }
 
+export async function departingAccessToken() {
+  const current = getAccessToken();
+  if (!accessTokenExpired(current)) return current;
+  const generation = getAuthSessionGeneration();
+  try {
+    const refreshed = await boundedTask(() => renewAccessToken());
+    if (generation !== getAuthSessionGeneration()) return null;
+    return refreshed?.accessToken || current;
+  } catch {
+    return current;
+  }
+}
+
+export async function signoutUser({ authToken = getAccessToken() } = {}) {
+  const csrfToken = getCachedCsrfToken();
+  // Dispatch the cookie-bearing request synchronously, before local logout
+  // or a subsequent login. Never wait for a fresh CSRF request then borrow B's
+  // cookie. A missing cached token may fail remotely; local logout still wins.
+  const controller = new AbortController();
+  const signoutOptions = {
+    method: "POST",
+    body: {},
+    skipAuthRefresh: true,
+    skipCsrf: true,
+    headers: csrfToken ? { "X-CSRFToken": csrfToken } : {},
+    signal: controller.signal,
+  };
+  const request = (async () => {
+    const first = await apiFetch(API.AUTH.SIGNOUT, {
+      ...signoutOptions,
+      authToken,
+    });
+    // The refresh cookie alone identifies the session; drop a rejected bearer.
+    if (first.status !== 401 || !authToken) return first;
+    return apiFetch(API.AUTH.SIGNOUT, {
+      ...signoutOptions,
+      authToken: null,
+      skipAuthHeader: true,
+    });
+  })();
+  const remote = boundedTask(() => request).finally(() => controller.abort());
+  const push = unsubscribeFromPush({ authToken });
+  clearStoredUserData();
+  const [remoteResult, pushResult] = await Promise.allSettled([remote, push]);
+  return {
+    remoteSignedOut:
+      remoteResult.status === "fulfilled" && remoteResult.value.ok,
+    push: pushResult.status === "fulfilled" ? pushResult.value : null,
+  };
+}
+
 export function getStoredUser() {
-  const rawUser = localStorage.getItem(STORAGE_KEYS.AUTH_USER);
-  return rawUser ? JSON.parse(rawUser) : null;
+  try {
+    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEYS.AUTH_USER));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 export function getStoredSparkPool() {
@@ -384,4 +511,48 @@ export function getStoredSparkPool() {
 
 export function clearStoredAuth() {
   clearStoredUserData();
+}
+
+// -----------------------------------------------------------------
+//  Feature preferences (Settings → Advanced)
+// -----------------------------------------------------------------
+
+/**
+ * Read the per-account optional-feature toggles.
+ * @returns {Promise<Object>} - { status, data: { feature_preferences: {...} } }
+ */
+export async function getFeaturePreferences(options = {}) {
+  const response = await apiFetch(API.AUTH.FEATURE_PREFERENCES, {
+    method: "GET",
+    skipCsrf: true,
+    ...options,
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data?.data || "Failed to load feature preferences.");
+  }
+  return response.json();
+}
+
+/**
+ * Partially update the per-account optional-feature toggles.
+ * @param {Object} prefs - e.g. { reminders: true, websearch: false }
+ * @returns {Promise<Object>} - { status, data: { feature_preferences: {...} } }
+ */
+export async function updateFeaturePreferences(prefs, options = {}) {
+  const response = await apiFetch(API.AUTH.FEATURE_PREFERENCES, {
+    method: "PATCH",
+    body: prefs,
+    ...options,
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    const error = new Error(
+      data?.data || "Failed to update feature preferences.",
+    );
+    error.status = response.status;
+    error.payload = data;
+    throw error;
+  }
+  return response.json();
 }

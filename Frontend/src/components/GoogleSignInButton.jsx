@@ -3,20 +3,34 @@
 import { useEffect, useRef, useState } from "react";
 import { ENV } from "../config/constants";
 import { googleAuth } from "../services/authService";
+import { getAuthSessionGeneration } from "../services/apiClient";
+import { getAuthMessage } from "../utils/authMessageMapper";
 
 export default function GoogleSignInButton({
   onStart,
   onSuccess,
   onError,
+  onCredential,
   disabled = false,
 }) {
   const buttonRef = useRef(null);
   const [internalError, setInternalError] = useState("");
-  const initialized = useRef(false);
 
   // Store callbacks in refs to avoid re‑running the effect
-  const callbacksRef = useRef({ onStart, onSuccess, onError });
-  callbacksRef.current = { onStart, onSuccess, onError };
+  const callbacksRef = useRef({
+    onStart,
+    onSuccess,
+    onError,
+    onCredential,
+    disabled,
+  });
+  callbacksRef.current = {
+    onStart,
+    onSuccess,
+    onError,
+    onCredential,
+    disabled,
+  };
 
   useEffect(() => {
     if (!ENV.GOOGLE_CLIENT_ID) {
@@ -24,29 +38,44 @@ export default function GoogleSignInButton({
       return;
     }
 
-    // Prevent duplicate initialization
-    if (initialized.current) return;
+    const controller = new AbortController();
+    const generation = getAuthSessionGeneration();
+    const current = () =>
+      !controller.signal.aborted && generation === getAuthSessionGeneration();
+    let busy = false;
+    const container = buttonRef.current;
 
     const handleGoogleResponse = async (response) => {
-      const { onStart, onSuccess, onError } = callbacksRef.current;
+      if (!current() || busy || callbacksRef.current.disabled) return;
+      const { onStart, onSuccess, onError, onCredential } =
+        callbacksRef.current;
+      busy = true;
       try {
+        if (!response?.credential)
+          throw new Error("Google did not return a credential.");
         onStart?.();
         setInternalError("");
-        const result = await googleAuth({
-          credential: response.credential,
-          preferred_language: "en",
-          compliance_version: "v1",
-        });
-        onSuccess?.(result);
+        if (onCredential) {
+          // Settings receives an in-memory selection, not an automatic link.
+          onCredential(response.credential);
+        } else {
+          const result = await googleAuth(
+            { credential: response.credential },
+            { signal: controller.signal },
+          );
+          if (current()) onSuccess?.(result);
+        }
       } catch (err) {
-        const message = err.message || "Google sign-in failed.";
-        setInternalError(message);
-        onError?.(message);
+        if (!current() || err.name === "AbortError") return;
+        if (onError) onError(err);
+        else setInternalError(getAuthMessage(err, "Google sign-in failed."));
+      } finally {
+        busy = false;
       }
     };
 
     const initializeGoogle = () => {
-      if (!window.google || !buttonRef.current) return;
+      if (!current() || !window.google || !container) return;
       try {
         window.google.accounts.id.initialize({
           client_id: ENV.GOOGLE_CLIENT_ID,
@@ -56,51 +85,51 @@ export default function GoogleSignInButton({
         });
 
         // Only clear once, then render
-        buttonRef.current.innerHTML = "";
-        window.google.accounts.id.renderButton(buttonRef.current, {
+        container.innerHTML = "";
+        window.google.accounts.id.renderButton(container, {
           theme: "outline",
           size: "large",
           shape: "pill",
           text: "continue_with",
           width: 260,
         });
-
-        initialized.current = true;
       } catch (err) {
-        console.warn("GSI Initialization failed:", err);
+        setInternalError(
+          "Google sign-in could not be loaded. Please try again.",
+        );
       }
     };
 
     // Attach the script or use existing one
-    const existingScript = document.getElementById("google-identity-script");
+    let script = document.getElementById("google-identity-script");
+    const handleScriptError = () => {
+      if (current())
+        setInternalError("Failed to load Google sign-in. Please reload.");
+    };
 
     if (window.google) {
       initializeGoogle();
-    } else if (existingScript) {
-      existingScript.addEventListener("load", initializeGoogle);
     } else {
-      const script = document.createElement("script");
-      script.src = "https://accounts.google.com/gsi/client";
-      script.id = "google-identity-script";
-      script.async = true;
-      script.defer = true;
-      script.onload = initializeGoogle;
-      script.onerror = () => {
-        const message = "Failed to load Google script.";
-        setInternalError(message);
-        onError?.(message);
-      };
-      document.body.appendChild(script);
+      const isNew = !script;
+      if (isNew) {
+        script = document.createElement("script");
+        script.src = "https://accounts.google.com/gsi/client";
+        script.id = "google-identity-script";
+        script.async = true;
+        script.defer = true;
+      }
+      script.addEventListener("load", initializeGoogle);
+      script.addEventListener("error", handleScriptError);
+      if (isNew) document.body.appendChild(script);
     }
 
     // Cleanup: remove the Google button on unmount
     return () => {
-      if (buttonRef.current) {
-        buttonRef.current.innerHTML = "";
-      }
-      const script = document.getElementById("google-identity-script");
+      controller.abort();
+      if (container) container.innerHTML = "";
       if (script) {
         script.removeEventListener("load", initializeGoogle);
+        script.removeEventListener("error", handleScriptError);
       }
     };
   }, []); // ← now runs only once

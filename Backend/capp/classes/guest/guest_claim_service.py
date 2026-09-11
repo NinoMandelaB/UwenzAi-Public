@@ -240,6 +240,7 @@ class GuestClaimService:
         return PaystackTransaction.objects.filter(
             guest_session_id=owner_key,
             user__isnull=True,
+            owner_deleted_at__isnull=True,
         ).update(
             user=user,
             guest_session_id=None,

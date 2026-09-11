@@ -1,23 +1,22 @@
 # capp/classes/byok/byok_service.py
 
 import logging
-import sys
-import traceback
 from typing import Dict, Any
 
 from openai import OpenAI
+from capp.classes.byok.transport import ProviderPolicy, ProviderURLRejected, origin, provider_http_client
 
 logger = logging.getLogger(__name__)
 
 
 class BYOKService:
     """
-        Service layer for Bring-Your-Own-Key (BYOK) configuration.
-    å
-        Responsibilities:
-        - Save / retrieve / delete UserBYOKConfig
-        - Validate a user-supplied API key by firing a minimal test call
-        - Execute a BYOK chat completion during message processing
+    Service layer for Bring-Your-Own-Key (BYOK) configuration.
+
+    Responsibilities:
+    - Save / retrieve / delete UserBYOKConfig
+    - Validate a user-supplied API key by firing a minimal test call
+    - Execute a BYOK chat completion during message processing
     """
 
     # ── Save ─────────────────────────────────────────────────────────────────
@@ -34,6 +33,8 @@ class BYOKService:
     ) -> Dict[str, Any]:
         from capp.models import UserBYOKConfig
 
+        if not all(isinstance(value, str) for value in (api_url, api_key, model_name, system_prompt)):
+            return {"status": "fail", "data": "invalid_byok_payload"}
         api_url = api_url.strip().rstrip("/")
         api_key = api_key.strip()
         model_name = model_name.strip()
@@ -43,15 +44,24 @@ class BYOKService:
             return {"status": "fail", "data": "api_url_required"}
         if not model_name:
             return {"status": "fail", "data": "model_name_required"}
+        try:
+            ProviderPolicy.for_url(api_url)
+        except ProviderURLRejected:
+            return {"status": "fail", "data": "provider_url_not_allowed"}
 
         # ── If api_key is blank, keep the existing stored key ────────────────────
         existing = None
         if not api_key:
             try:
                 existing = UserBYOKConfig.objects.get(user=user)
+                # Do not send the old provider's saved secret to a new authority.
+                if origin(api_url) != origin(existing.api_url):
+                    return {"status": "fail", "data": "api_key_required_for_origin_change"}
                 api_key = existing.get_decrypted_api_key()
             except UserBYOKConfig.DoesNotExist:
                 return {"status": "fail", "data": "api_key_required"}
+            except ProviderURLRejected:
+                return {"status": "fail", "data": "api_key_required_for_origin_change"}
 
         if not api_key:
             return {"status": "fail", "data": "api_key_required"}
@@ -151,12 +161,13 @@ class BYOKService:
     @classmethod
     def validate_credentials(cls, api_url: str, api_key: str, model_name: str) -> Dict[str, Any]:
         try:
-            client = OpenAI(api_key=api_key, base_url=api_url)
-            client.chat.completions.create(
-                model=model_name,
-                messages=[{"role": "user", "content": "hi"}],
-                max_tokens=1,
-            )
+            with provider_http_client(api_url) as http_client:
+                client = OpenAI(api_key=api_key, base_url=api_url, http_client=http_client, max_retries=0)
+                client.chat.completions.create(
+                    model=model_name,
+                    messages=[{"role": "user", "content": "hi"}],
+                    max_tokens=1,
+                )
             logger.info(
                 "BYOK credential validation succeeded: url=%s model=%s",
                 api_url,
@@ -171,22 +182,14 @@ class BYOKService:
             except Exception:
                 error_str = repr(exc)
 
-            # Log full traceback to stderr — Railway shows this as [err] lines
-            logger.error(
-                f"BYOK validate_credentials FAILED url={api_url} model={model_name}\n" + traceback.format_exc(),
-                file=sys.stderr,
-                flush=True,
-            )
-
-            logger.warning(
-                "BYOK validation failed: url=%s model=%s error=%s",
-                api_url,
-                model_name,
-                error_str[:200],
-            )
+            # Provider error bodies may echo the API key. Never log them (and
+            # logging.Logger does not accept print's file/flush arguments).
+            logger.warning("BYOK validation failed (%s)", type(exc).__name__)
 
             low = error_str.lower()
-            if "401" in low or "authentication" in low or "invalid api key" in low or "unauthorized" in low:
+            if isinstance(exc, ProviderURLRejected):
+                reason = "provider_url_not_allowed"
+            elif "401" in low or "authentication" in low or "invalid api key" in low or "unauthorized" in low:
                 reason = "invalid_api_key"
             elif "404" in low or "not found" in low or "model" in low:
                 reason = "model_not_found"
@@ -276,7 +279,8 @@ class BYOKService:
         from capp.classes.ai import reasoning as reasoning_module
 
         api_key = byok_config.get_decrypted_api_key()
-        client = OpenAI(api_key=api_key, base_url=byok_config.api_url)
+        http_client = provider_http_client(byok_config.api_url)
+        client = OpenAI(api_key=api_key, base_url=byok_config.api_url, http_client=http_client, max_retries=0)
 
         reasoning_kwargs = reasoning_module.byok_reasoning_kwargs((reasoning_effort or "fast").lower())
 
@@ -296,10 +300,7 @@ class BYOKService:
         except Exception as exc:
             if reasoning_kwargs and cls._is_unknown_reasoning_param_error(exc):
                 logger.warning(
-                    "BYOK endpoint rejected reasoning param (url=%s model=%s): %s -- " "retrying once without it",
-                    byok_config.api_url,
-                    byok_config.model_name,
-                    exc,
+                    "BYOK endpoint rejected reasoning parameter; retrying once without it",
                 )
                 response = client.chat.completions.create(
                     model=byok_config.model_name,
@@ -310,6 +311,8 @@ class BYOKService:
                 )
             else:
                 raise
+        finally:
+            http_client.close()
 
         message = response.choices[0].message
         message_dict = {"content": message.content}

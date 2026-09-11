@@ -1,10 +1,25 @@
 # capp/classes/search/query_builder.py
 """
-Privacy-safe outbound search query construction.
+Privacy-aware outbound search query construction.
 
-Requirement: search queries must be derived from the topic, not sent
-verbatim with user identifiers -- never include the user's id, display
-name, or email in the outbound query string.
+Policy (2026-09-10): the search provider is Staan, run by European
+Perspective (Paris, France). Per Staan's privacy policy the API queries are
+not linked to any person or device, processing is EU-based (OVH France) with
+no US CLOUD Act exposure, and the account offers Zero Data Retention.
+Because of that, public phone numbers and email addresses may appear in
+outbound queries -- e.g. verifying the phone number of an embassy or a
+business contact is a legitimate search.
+
+Still refused (fail closed, return "" so no search runs at all):
+
+* the requesting user's OWN identifiers (pk/user_id, email, username,
+  display name, full name) -- data minimization under the Kenya DPA even
+  with a no-logs provider;
+* UUIDs -- internal object identifiers with no legitimate search use.
+
+Refusals log the refused query verbatim: worker logs already contain full
+prompts and user messages, so this adds no new exposure while making false
+refusals diagnosable.
 """
 
 import logging
@@ -12,58 +27,54 @@ import re
 
 logger = logging.getLogger(__name__)
 
-# Identifier-shaped tokens. If any of these appear in a proposed query we
-# FAIL CLOSED (return "", i.e. run no search at all) rather than stripping
-# them and searching the remainder: a query like "who owns 0712345678" is
-# meaningless without the number, and silently searching the rest still
-# leaks intent to the provider. Refusing is both safer and more honest.
-_EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
-# 8+ digits allowing spaces/dashes/parens/leading +: phone numbers, national
-# IDs, account numbers. Deliberately not matching short numbers so ordinary
-# topical queries ("top 10 songs 2026") are unaffected.
-_PHONE_RE = re.compile(r"(?<!\w)\+?\d(?:[\d \-().]{6,})\d(?!\w)")
 _UUID_RE = re.compile(r"\b[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\b", re.IGNORECASE)
 _WHITESPACE_RE = re.compile(r"\s+")
 
-_IDENTIFIER_PATTERNS = (
-    ("email", _EMAIL_RE),
-    ("phone-or-id", _PHONE_RE),
-    ("uuid", _UUID_RE),
-)
+_IDENTIFIER_PATTERNS = (("uuid", _UUID_RE),)
 
 MAX_QUERY_LENGTH = 400
 
 
 def build_search_query(topic: str, user=None) -> str:
     """
-    Build a privacy-safe search query string from a topic.
+    Build a privacy-aware search query string from a topic.
 
     ``topic`` should already be the model's distilled search-tool-call
-    argument (what it wants to look up), not the raw user message and not
-    anything containing account identifiers.
+    argument (what it wants to look up), not the raw user message.
 
-    Returns ``""`` (meaning: do not search) when the topic contains an
-    email address, a phone-number/national-ID-shaped digit run, a UUID, or
-    -- when ``user`` is supplied -- any of that user's own identifying
+    Returns ``""`` (meaning: do not search) when the topic contains a UUID
+    or -- when ``user`` is supplied -- any of that user's own identifying
     values. Callers treat an empty query as "skip this tool call".
-
-    Kenya DPA note: outbound queries are sent to a third-party search
-    provider (Staan) and appear in their logs, so identifiers must never
-    reach them.
     """
     if not isinstance(topic, str) or not topic.strip():
         return ""
 
+    # Normalize whitespace FIRST (NBSP/tab/newline become spaces) so the
+    # own-identifier check below cannot be bypassed with exotic whitespace
+    # that the normalizer would otherwise straighten out afterwards.
+    query = _WHITESPACE_RE.sub(" ", topic).strip()
+    if not query:
+        return ""
+
     for label, pattern in _IDENTIFIER_PATTERNS:
-        if pattern.search(topic):
-            logger.warning("Refusing web search: query contains %s-shaped identifier", label)
+        if pattern.search(query):
+            logger.warning("Refusing web search: query contains %s-shaped identifier; refused query: %r", label, query)
             return ""
 
     if user is not None:
-        folded = topic.casefold()
+        folded = query.casefold()
         candidates = []
-        for attr in ("pk", "user_id", "email", "username"):
+        for attr in ("pk", "user_id", "email", "username", "display_name"):
             candidates.append(getattr(user, attr, None))
+        # CustomUser stores its email encrypted (CustomUser.email does not
+        # exist); the plaintext address only surfaces via get_decrypted_email.
+        # A model echoing the requesting user's own email must still refuse.
+        get_decrypted_email = getattr(user, "get_decrypted_email", None)
+        if callable(get_decrypted_email):
+            try:
+                candidates.append(get_decrypted_email())
+            except Exception:  # pragma: no cover - defensive
+                pass
         get_full_name = getattr(user, "get_full_name", None)
         if callable(get_full_name):
             try:
@@ -75,8 +86,10 @@ def build_search_query(topic: str, user=None) -> str:
             # Ignore very short values ('' or a 1-char username) which would
             # match almost any query and block search entirely.
             if len(text) >= 3 and text.casefold() in folded:
-                logger.warning("Refusing web search: query contains the requesting user's own identifier")
+                logger.warning(
+                    "Refusing web search: query contains the requesting user's own identifier; refused query: %r",
+                    query,
+                )
                 return ""
 
-    query = _WHITESPACE_RE.sub(" ", topic).strip()
     return query[:MAX_QUERY_LENGTH]

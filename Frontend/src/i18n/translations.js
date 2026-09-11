@@ -9,6 +9,10 @@ export const translations = {
         "By entering, you agree to our Terms of Service and confirm that adult content is legal in your jurisdiction.",
     },
     chat: {
+      messageCount: "{count} / {limit} characters",
+      messageTooLong:
+        "Your message can contain at most 800 characters. Shorten it to send; AI replies are not subject to this limit.",
+      dismissNotification: "Dismiss notification",
       generateImage: "Generate an image",
       imagePromptTitle: "Create an image",
       imagePromptSubtitle:
@@ -39,6 +43,61 @@ export const translations = {
       photoOfferAccepting: "Accepting…",
       photoOfferDecline: "Decline",
     },
+    memory: {
+      loadMore: "Load more memories",
+      reloadLatest: "Reload latest (keep draft)",
+      reviewLatest:
+        "Your draft is kept. Review the latest version shown above it before saving again.",
+      latestVersion: "Latest saved version",
+      latestUnavailable:
+        "This item is absent from the refreshed pages. Your draft is retained, but its old version cannot overwrite a missing item.",
+      staleError:
+        "This memory changed elsewhere. Your draft is kept here. Reload the latest version before editing again.",
+      summaryTooLong: "Summary edits can contain at most 12,000 characters.",
+      title: "Memory",
+      toggle: "View and edit what this character remembers",
+      close: "Close memory",
+      description:
+        "Everything {name} remembers about you and your life. Correct anything that is wrong — this does not change your relationship or how memories are created.",
+      privacyNote:
+        "Private to your account. Memories marked shared may also be used by your other characters; other users cannot see them.",
+      loading: "Loading memories…",
+      loadError: "Could not load memories.",
+      retry: "Try again",
+      saving: "Saving…",
+      save: "Save",
+      add: "Add",
+      cancel: "Cancel",
+      edit: "Edit",
+      delete: "Delete",
+      confirmDelete: "Delete?",
+      shared: "Shared with all characters",
+      saveError: "Could not save your change. Please try again.",
+      deleteError: "Could not delete. Please try again.",
+      factRequired: "Please write something first.",
+      relationRequired: "Please enter a subject and relationship.",
+      summaryRequired: "The summary cannot be empty.",
+      facts: {
+        title: "Memories",
+        add: "Add memory",
+        placeholder: "e.g. I work as a teacher in Mombasa",
+        empty:
+          "{name} does not remember any details yet. Chat a while, or add a memory yourself.",
+      },
+      relations: {
+        title: "People & places",
+        add: "Add",
+        subjectPlaceholder: "Who or what (e.g. my sister)",
+        predicatePlaceholder: "Relationship (e.g. works at)",
+        objectPlaceholder: "Name (e.g. Safaricom)",
+        empty: "Nothing here yet.",
+      },
+      summary: {
+        title: "Conversation summary",
+        empty:
+          "No summary yet — one is created automatically after longer conversations.",
+      },
+    },
     systemMessages: {
       guest_insufficient_sparks:
         "You don't have enough sparks. [Sign up](/register) to get extra sparks and keep chatting, or [buy sparks to continue chatting](/spark_pool).\n\nAre you in psychological distress? Get help here: https://findahelpline.com",
@@ -46,6 +105,30 @@ export const translations = {
         "You've reached your daily free limit. [Sign up](/register) to continue chatting.",
       guest_lifetime_limit:
         "You've used up your free guest allowance. [Sign up](/register) to keep chatting.\n\nAre you in psychological distress? Get help here: https://findahelpline.com",
+    },
+    contact: {
+      title: "Contact / Feedback",
+      subtitle: "Get in touch with us or share what you think about UwenzAi.",
+      detailsTitle: "Contact details",
+      companyLabel: "Company",
+      company: "UwenzAi Limited",
+      addressLabel: "Address",
+      address: "P.O. Box 13583 – 00800, Westlands, Nairobi, Kenya",
+      emailLabel: "Email",
+      socialLabel: "Social",
+      feedbackTitle: "Send feedback",
+      feedbackDescription:
+        "Found a bug, have an idea, or just want to tell us how we're doing? We'd love to hear from you.",
+      rating: "Rating (optional)",
+      message: "Message",
+      messagePlaceholder: "Tell us what you think...",
+      submit: "Submit Feedback",
+      submitting: "Sending...",
+      submitted: "Thank you for your feedback!",
+      messageRequired: "Please enter a message.",
+      rateLimited:
+        "You've sent too many messages. Please wait a while before trying again.",
+      sendFailed: "Failed to send feedback. Please try again.",
     },
     common: {
       intervalMustBeBetween: "Interval must be between {min} and {max} hours.",
@@ -180,6 +263,7 @@ export const translations = {
       user: "User",
       profile: "Profile",
       transactions: "Transactions",
+      contactFeedback: "Contact / Feedback",
       signIn: "Sign In",
       signUp: "Sign Up",
       signOut: "Sign Out",
@@ -196,6 +280,45 @@ export const translations = {
       languageSubtitle: "Choose your app language",
       preferences: "Preferences",
       privacyAndSafety: "Privacy & Safety",
+      advanced: "Advanced",
+      advancedDescription:
+        "Reminders, Deep Thinking and Web Search are available by default unless you saved a different choice. Search and Deep Thinking still need to be switched on separately in each chat. Memory Editor starts off.",
+      feature_reminders: "Reminders",
+      feature_reminders_subtitle:
+        "Show the chat calendar and allow new reminders. Turning this off keeps scheduled reminders active; use Manage reminders below to edit or cancel them.",
+      manageReminders: "Manage reminders",
+      manageRemindersDescription:
+        "Edit or cancel scheduled reminders, even when the chat calendar is hidden. Turning off Reminders does not stop delivery.",
+      googleConnect: "Connect Google",
+      googleConnectDescription:
+        "Use Google to sign in to this existing account. Choose the Google account with the same email, then explicitly confirm. This does not create an account.",
+      googleSignedInAs: "Signed in as",
+      googleChoose: "Choose Google account",
+      googleConfirmDescription:
+        "Allow future Google sign-ins to the UwenzAi account shown above using:",
+      googleConfirm: "Confirm Google connection",
+      googleConnecting: "Connecting…",
+      googleConnected:
+        "Google is connected. You can use Google on the login page next time.",
+      googleWrongAccount:
+        "No connection was made. Choose the Google account with the same email as your signed-in UwenzAi account, or sign in to the correct UwenzAi account first.",
+      googleExpired:
+        "This Google selection is invalid or expired. Choose your Google account again.",
+      googleConnectError:
+        "Could not connect Google. Choose your Google account again and retry.",
+      googleReauth: "Sign in again with password",
+      googleReauthRequired:
+        "Your sign-in has expired. Sign in again with your password, then choose Google again and confirm. Nothing is linked automatically.",
+      feature_deepthink: "Deep Thinking",
+      feature_deepthink_subtitle:
+        "A per-chat toggle for slower, more thoughtful replies",
+      feature_websearch: "Web Search",
+      feature_websearch_subtitle:
+        "A per-chat toggle that lets your companion search the web",
+      feature_memory_editor: "Memory Editor",
+      feature_memory_editor_subtitle:
+        "The brain icon in chat — view and correct what your companion remembers",
+      featureToggleError: "Could not save — please try again",
       support: "Support",
       admin: "Admin",
       darkMode: "Dark Mode",
@@ -206,6 +329,12 @@ export const translations = {
       notifications: "Notifications",
       pushNotifications: "Push Notifications",
       pushNotificationsSubtitle: "Get notified when a companion messages you",
+      pushLocalCleanupError:
+        "Notifications could not be removed from this browser. Try again or disable them in browser settings.",
+      pushRemoteCleanupWarning:
+        "Notifications are off on this browser, but server cleanup could not be confirmed.",
+      pushChangeError:
+        "Notification settings could not be changed. Please try again.",
       pushDeniedHint:
         "Notifications are blocked — enable them in your browser settings",
       mySparkPool: "My Spark Pool",
@@ -214,14 +343,44 @@ export const translations = {
       account: "Account",
       permanentlyDeleteAccount: "Permanently delete account",
       deleteAccountDescription:
-        "This removes your account and may permanently delete your characters, conversations, messages, spark pool data, and other associated records.",
+        "Permanently closes your account. Your chats, memory, and private content are removed. Public characters stay without your name. Purchase records are kept for accounting. This cannot be undone.",
       deleteAccountPermanently: "Delete account permanently",
       deleteAccountWarning: "This action cannot be undone.",
+      deleteAccountDialogLead:
+        "This cannot be undone. You will be signed out straight away.",
+      deleteAccountCannotBeUndone: "This cannot be undone.",
+      deleteAccountDialogBody1:
+        "We will delete your profile, chats, messages, memory, reminders, private images, and Spark balance. Unused private characters are deleted. This is not a refund.",
+      deleteAccountDialogBody2:
+        "Public characters you created stay on UwenzAi without your name. Other people's chats with them stay in their accounts. If someone else already chatted with a private character of yours, that character is taken down and those chats are closed, but their history is not deleted.",
+      deleteAccountDialogBody3:
+        "We keep purchase records for accounting, tax, and fraud prevention, with your account removed. We cannot always erase copies already sent to AI providers, held in backups, or saved in someone else's chat.",
+      deleteAccountConfirmPrompt: "To confirm, type {word} below.",
+      deleteAccountConfirmPlaceholder: "Type {word}",
+      deleteAccountCancel: "Cancel",
+      deleteAccountDeleting: "Deleting account...",
+      deleteAccountCloseLabel: "Close delete account dialog",
+      deleteAccountSuccess:
+        "Your account has been permanently deleted. This action cannot be undone.",
+      deleteAccountErrorFallback:
+        "We could not delete your account right now. Please try again.",
       success: "Success",
       termsOfService: "Terms of Service",
       privacyPolicy: "Privacy Policy",
       responsibleUseGuide: "Responsible Use Guide",
       termsAndPolicies: "Terms & Policies",
+      creditsLink: "Contributors & Roadmap",
+    },
+
+    credits: {
+      title: "Contributors & Roadmap",
+      description:
+        "UwenzAi is built by a small team, with support from our community.",
+      shippedTitle: "Recently shipped",
+      nextTitle: "What's next",
+      openSource:
+        "UwenzAi is source-available — view the public repository and license",
+      madeIn: "Made in Kenya, for the world",
     },
 
     byok: {
@@ -279,6 +438,12 @@ export const translations = {
         "You can only set a system prompt when an API key is configured.",
       errorValidationFailed:
         "Credential validation failed. Please double-check all fields.",
+      errorUrlNotAllowed:
+        "That API URL is not allowed. Use a public https:// address without a query string, or an address your operator has enabled.",
+      errorKeyRequiredForOriginChange:
+        "Enter the API key again when changing the API URL to a different host.",
+      errorInvalidPayload:
+        "The settings could not be read. Please check the fields and try again.",
       errorGeneric: "Something went wrong. Please try again.",
     },
 
@@ -286,7 +451,10 @@ export const translations = {
       usernameRequired: "Username is required.",
       emailRequired: "Email is required.",
       passwordRequired: "Password is required.",
-      passwordMinLength: "Password must be at least 6 characters.",
+      passwordMinLength: "Password must be at least 8 characters.",
+      passwordMaxLength: "Password must not exceed 128 characters.",
+      passwordLengthHint:
+        "Use 8 to 128 characters. Avoid common passwords and personal information.",
       passwordMismatch: "Passwords do not match.",
       displayNameRequired: "Screen name is required.",
       genderRequired: "Please select your gender.",
@@ -1097,6 +1265,10 @@ export const translations = {
         "Kwa kuingia, unakubali Masharti yetu ya Huduma na kuthibitisha kuwa maudhui ya watu wazima ni halali katika eneo lako.",
     },
     chat: {
+      messageCount: "Herufi {count} / {limit}",
+      messageTooLong:
+        "Ujumbe wako unaweza kuwa na herufi zisizozidi 800. Ufupishe ili utume; kikomo hiki hakitumiki kwa majibu ya AI.",
+      dismissNotification: "Funga arifa",
       generateImage: "Tengeneza picha",
       imagePromptTitle: "Tengeneza picha",
       imagePromptSubtitle: "Eleza picha ungependa {name} aonekane ndani yake.",
@@ -1126,6 +1298,62 @@ export const translations = {
       photoOfferAccepting: "Inakubali…",
       photoOfferDecline: "Kataa",
     },
+    memory: {
+      loadMore: "Pakia kumbukumbu zaidi",
+      reloadLatest: "Pakia toleo jipya (hifadhi rasimu)",
+      reviewLatest:
+        "Rasimu yako imehifadhiwa. Kagua toleo jipya lililo juu yake kabla ya kuhifadhi tena.",
+      latestVersion: "Toleo la mwisho lililohifadhiwa",
+      latestUnavailable:
+        "Kipengee hiki hakipo katika kurasa zilizopakiwa upya. Rasimu imehifadhiwa, lakini toleo lake la zamani haliwezi kubadilisha kipengee kilichokosekana.",
+      staleError:
+        "Kumbukumbu hii imebadilishwa kwingine. Rasimu yako imehifadhiwa hapa. Pakia toleo jipya kabla ya kuhariri tena.",
+      summaryTooLong:
+        "Muhtasari uliohaririwa unaweza kuwa na herufi zisizozidi 12,000.",
+      title: "Kumbukumbu",
+      toggle: "Angalia na hariri anachokumbuka mhusika huu",
+      close: "Funga kumbukumbu",
+      description:
+        "Yote anayokumbuka {name} kuhusu wewe na maisha yako. Rekebisha chochote kisicho sahihi — hii haibadilishi uhusiano wenu wala jinsi kumbukumbu zinavyotengenezwa.",
+      privacyNote:
+        "Ni za faragha kwenye akaunti yako. Kumbukumbu zilizo na alama ya kushirikiwa zinaweza kutumiwa na wahusika wako wengine; watumiaji wengine hawawezi kuziona.",
+      loading: "Inapakia kumbukumbu…",
+      loadError: "Imeshindwa kupakia kumbukumbu.",
+      retry: "Jaribu tena",
+      saving: "Inahifadhi…",
+      save: "Hifadhi",
+      add: "Ongeza",
+      cancel: "Ghairi",
+      edit: "Hariri",
+      delete: "Futa",
+      confirmDelete: "Futa?",
+      shared: "Inashirikiwa na wahusika wote",
+      saveError: "Mabadiliko hayakuhifadhiwa. Tafadhali jaribu tena.",
+      deleteError: "Imeshindwa kufuta. Tafadhali jaribu tena.",
+      factRequired: "Tafadhali andika kitu kwanza.",
+      relationRequired: "Tafadhali jaza kiima na uhusiano.",
+      summaryRequired: "Muhtasari hauwezi kuwa mtupu.",
+      facts: {
+        title: "Kumbukumbu",
+        add: "Ongeza kumbukumbu",
+        placeholder: "mf. Nafanya kazi kama mwalimu Mombasani",
+        empty:
+          "{name} bado hakumbuki maelezo yoyote. Zungumza naye kwa muda, au ongeza kumbukumbu wewe mwenyewe.",
+      },
+      relations: {
+        title: "Watu na maeneo",
+        add: "Ongeza",
+        subjectPlaceholder: "Nani au nini (mf. dada yangu)",
+        predicatePlaceholder: "Uhusiano (mf. anafanya kazi)",
+        objectPlaceholder: "Jina (mf. Safaricom)",
+        empty: "Hakuna kitu bado.",
+      },
+      summary: {
+        title: "Muhtasari wa mazungumzo",
+        empty:
+          "Hakuna muhtasari bado — unaundwa kiotomatiki baada ya mazungumzo marefu.",
+      },
+    },
     systemMessages: {
       guest_insufficient_sparks:
         "Huna cheche za kutosha. [Jisajili](/register) upate cheche za ziada uendelee kuzungumza, au [nunua cheche ili uendelee kuzungumza](/spark_pool).\n\nUnapitia dhiki ya kiakili? Pata msaada hapa: https://findahelpline.com",
@@ -1133,6 +1361,30 @@ export const translations = {
         "Umefikia kikomo chako cha bure cha kila siku. [Jisajili](/register) ili uendelee kuzungumza.",
       guest_lifetime_limit:
         "Umemaliza mgao wako wa bure wa mgeni. [Jisajili](/register) ili uendelee kuzungumza.\n\nUnapitia dhiki ya kiakili? Pata msaada hapa: https://findahelpline.com",
+    },
+    contact: {
+      title: "Wasiliana / Maoni",
+      subtitle: "Wasiliana nasi au ushiriki unachofikiri kuhusu UwenzAi.",
+      detailsTitle: "Maelezo ya mawasiliano",
+      companyLabel: "Kampuni",
+      company: "UwenzAi Limited",
+      addressLabel: "Anwani",
+      address: "S.L.P. 13583 – 00800, Westlands, Nairobi, Kenya",
+      emailLabel: "Barua pepe",
+      socialLabel: "Mitandao ya kijamii",
+      feedbackTitle: "Tuma maoni",
+      feedbackDescription:
+        "Umeona hitilafu, una wazo, au unataka kutujulia tunavyofanya? Tungefurahi kusikia kutoka kwako.",
+      rating: "Kadirio (si lazima)",
+      message: "Ujumbe",
+      messagePlaceholder: "Tuambie unachofikiri...",
+      submit: "Tuma Maoni",
+      submitting: "Inatuma...",
+      submitted: "Asante kwa maoni yako!",
+      messageRequired: "Tafadhali andika ujumbe.",
+      rateLimited:
+        "Umetuma ujumbe mwingi mno. Tafadhali subiri kidogo kabla ya kujaribu tena.",
+      sendFailed: "Imeshindwa kutuma maoni. Tafadhali jaribu tena.",
     },
     common: {
       intervalMustBeBetween: "Muda lazima uwe kati ya {min} na {max} saa.",
@@ -1268,6 +1520,7 @@ export const translations = {
       user: "Mtumiaji",
       profile: "Wasifu",
       transactions: "Miamala",
+      contactFeedback: "Wasiliana / Maoni",
       signIn: "Ingia",
       signUp: "Jisajili",
       signOut: "Toka",
@@ -1284,6 +1537,45 @@ export const translations = {
       languageSubtitle: "Chagua lugha ya programu",
       preferences: "Mapendeleo",
       privacyAndSafety: "Faragha na Usalama",
+      advanced: "Vipengele Vinavyopendelewa",
+      advancedDescription:
+        "Vikumbusho, Ufikiri Mpana na Utafutaji Wavuti vinapatikana kwa chaguo-msingi isipokuwa umehifadhi chaguo tofauti. Utafutaji na Ufikiri Mpana bado vinahitaji kuwashwa kando katika kila mazungumzo. Kihariri cha Kumbukumbu huanza kikiwa kimezimwa.",
+      feature_reminders: "Vikumbusho",
+      feature_reminders_subtitle:
+        "Onyesha kalenda ya mazungumzo na uruhusu vikumbusho vipya. Ukizima, vikumbusho vilivyopangwa vinaendelea; tumia Dhibiti vikumbusho hapa chini kuvihariri au kuvighairi.",
+      manageReminders: "Dhibiti vikumbusho",
+      manageRemindersDescription:
+        "Hariri au ghairi vikumbusho vilivyopangwa, hata kalenda ya mazungumzo ikiwa imefichwa. Kuzima Vikumbusho hakusimamishi uwasilishaji.",
+      googleConnect: "Unganisha Google",
+      googleConnectDescription:
+        "Tumia Google kuingia kwenye akaunti hii iliyopo. Chagua akaunti ya Google yenye barua pepe ileile, kisha uthibitishe wazi. Hii haifungui akaunti mpya.",
+      googleSignedInAs: "Umeingia kama",
+      googleChoose: "Chagua akaunti ya Google",
+      googleConfirmDescription:
+        "Ruhusu kuingia kwa Google baadaye kwenye akaunti ya UwenzAi iliyoonyeshwa hapo juu ukitumia:",
+      googleConfirm: "Thibitisha muunganisho wa Google",
+      googleConnecting: "Inaunganisha…",
+      googleConnected:
+        "Google imeunganishwa. Unaweza kutumia Google kwenye ukurasa wa kuingia wakati ujao.",
+      googleWrongAccount:
+        "Hakuna muunganisho uliofanywa. Chagua akaunti ya Google yenye barua pepe sawa na akaunti yako ya UwenzAi iliyoingia, au ingia kwenye akaunti sahihi ya UwenzAi kwanza.",
+      googleExpired:
+        "Chaguo hili la Google si halali au limeisha muda. Chagua akaunti yako ya Google tena.",
+      googleConnectError:
+        "Imeshindwa kuunganisha Google. Chagua akaunti yako ya Google tena na ujaribu.",
+      googleReauth: "Ingia tena kwa nenosiri",
+      googleReauthRequired:
+        "Muda wa kuingia kwako umeisha. Ingia tena kwa nenosiri lako, kisha chagua Google tena na uthibitishe. Hakuna kinachounganishwa kiotomatiki.",
+      feature_deepthink: "Ufikiri Mpana",
+      feature_deepthink_subtitle:
+        "Kitufe cha kila mazungumzo cha majibu yenye mafikiri zaidi, taratibu zaidi",
+      feature_websearch: "Utafutaji Wavuti",
+      feature_websearch_subtitle:
+        "Kitufe cha kila mazungumzo kinachomruhusu mwandani wako kutafuta mtandaoni",
+      feature_memory_editor: "Kihariri cha Kumbukumbu",
+      feature_memory_editor_subtitle:
+        "Alama ya ubongo kwenye mazungumzo — angalia na sahihisha anavyokumbuka mwandani wako",
+      featureToggleError: "Imeshindwa kuhifadhi — tafadhali jaribu tena",
       support: "Msaada",
       admin: "Msimamizi",
       darkMode: "Hali ya Giza",
@@ -1294,6 +1586,12 @@ export const translations = {
       notifications: "Arifa",
       pushNotifications: "Arifa za Push",
       pushNotificationsSubtitle: "Pata arifa mwandani wako anapokutumia ujumbe",
+      pushLocalCleanupError:
+        "Arifa hazikuweza kuondolewa kwenye kivinjari hiki. Jaribu tena au uzime kwenye mipangilio ya kivinjari.",
+      pushRemoteCleanupWarning:
+        "Arifa zimezimwa kwenye kivinjari hiki, lakini uondoaji kwenye seva haukuweza kuthibitishwa.",
+      pushChangeError:
+        "Mipangilio ya arifa haikuweza kubadilishwa. Tafadhali jaribu tena.",
       pushDeniedHint:
         "Arifa zimezuiwa — ziruhusu kwenye mipangilio ya kivinjari chako",
       mySparkPool: "Hifadhi ya Cheche Yangu",
@@ -1302,14 +1600,43 @@ export const translations = {
       account: "Akaunti",
       permanentlyDeleteAccount: "Futa akaunti kabisa",
       deleteAccountDescription:
-        "Hii inaondoa akaunti yako na inaweza kufuta kabisa wahusika wako, mazungumzo, ujumbe, data ya hifadhi ya cheche, na rekodi nyingine zinazohusiana.",
+        "Hii inafunga akaunti yako kabisa. Mazungumzo yako, kumbukumbu, na maudhui ya faragha yanaondolewa. Wahusika wa umma wanabaki bila jina lako. Rekodi za malipo zinahifadhiwa kwa ajili ya uhasibu. Kitendo hiki hakiwezi kutenduliwa.",
       deleteAccountPermanently: "Futa akaunti kabisa",
       deleteAccountWarning: "Kitendo hiki hakiwezi kutenduliwa.",
+      deleteAccountDialogLead:
+        "Kitendo hiki hakiwezi kutenduliwa. Utaondolewa mara moja.",
+      deleteAccountCannotBeUndone: "Kitendo hiki hakiwezi kutenduliwa.",
+      deleteAccountDialogBody1:
+        "Tutafuta wasifu wako, mazungumzo, ujumbe, kumbukumbu, vikumbusho, picha za faragha, na salio lako la cheche. Wahusika wa faragha ambao hakuna mtu mwingine aliyewatumia watafutwa. Hii si marejesho ya malipo.",
+      deleteAccountDialogBody2:
+        "Wahusika wa umma uliowatengeneza wanabaki kwenye UwenzAi bila jina lako. Mazungumzo ya watu wengine nao yanabaki kwenye akaunti zao. Ikiwa mtu mwingine tayari alizungumza na mhusika wako wa faragha, mhusika huyo anaondolewa na mazungumzo hayo yanafungwa, lakini historia yao haifutwi.",
+      deleteAccountDialogBody3:
+        "Tunahifadhi rekodi za malipo kwa ajili ya uhasibu, kodi, na kuzuia udanganyifu, bila akaunti yako. Hatuwezi kufuta kila wakati nakala zilizotumwa kwa watoa huduma wa AI, zilizohifadhiwa kwenye nakala rudufu, au zilizo kwenye mazungumzo ya mtu mwingine.",
+      deleteAccountConfirmPrompt: "Ili kuthibitisha, andika {word} hapa chini.",
+      deleteAccountConfirmPlaceholder: "Andika {word}",
+      deleteAccountCancel: "Ghairi",
+      deleteAccountDeleting: "Akaunti inafutwa...",
+      deleteAccountCloseLabel: "Funga dirisha la kufuta akaunti",
+      deleteAccountSuccess:
+        "Akaunti yako imefutwa kabisa. Kitendo hiki hakiwezi kutenduliwa.",
+      deleteAccountErrorFallback:
+        "Hatukuweza kufuta akaunti yako sasa hivi. Tafadhali jaribu tena.",
       success: "Imefanikiwa",
       termsOfService: "Masharti ya Huduma",
       privacyPolicy: "Sera ya Faragha",
       responsibleUseGuide: "Mwongozo wa Matumizi ya Kuwajibika",
       termsAndPolicies: "Masharti na Sera",
+      creditsLink: "Wachangiaji na Ramani",
+    },
+
+    credits: {
+      title: "Wachangiaji na Ramani",
+      description: "UwenzAi imejengwa na timu ndogo, kwa msaada wa jamii yetu.",
+      shippedTitle: "Mambo mapya",
+      nextTitle: "Inayokuja",
+      openSource:
+        "Msimbo wa UwenzAi unapatikana kwa umma — tazama hifadhi na leseni",
+      madeIn: "Imeundwa Kenya, kwa dunia nzima",
     },
 
     byok: {
@@ -1364,6 +1691,12 @@ export const translations = {
         "Unaweza kuweka maagizo ya mfumo tu ufunguo wa API ukiwa umewekwa.",
       errorValidationFailed:
         "Uthibitishaji wa vitambulisho umeshindwa. Tafadhali angalia tena mashamba yote.",
+      errorUrlNotAllowed:
+        "URL hiyo ya API hairuhusiwi. Tumia anwani ya umma ya https:// bila query string, au anwani iliyoruhusiwa na mwendeshaji wako.",
+      errorKeyRequiredForOriginChange:
+        "Weka ufunguo wa API tena unapobadilisha URL ya API kwenda kwa mwenyeji tofauti.",
+      errorInvalidPayload:
+        "Mipangilio haikuweza kusomwa. Tafadhali kagua mashamba na jaribu tena.",
       errorGeneric: "Kitu fulani kilienda vibaya. Tafadhali jaribu tena.",
     },
 
@@ -1371,7 +1704,10 @@ export const translations = {
       usernameRequired: "Jina la mtumiaji linahitajika.",
       emailRequired: "Barua pepe inahitajika.",
       passwordRequired: "Nenosiri linahitajika.",
-      passwordMinLength: "Nenosiri lazima liwe na angalau herufi 6.",
+      passwordMinLength: "Nenosiri lazima liwe na angalau herufi 8.",
+      passwordMaxLength: "Nenosiri halipaswi kuzidi herufi 128.",
+      passwordLengthHint:
+        "Tumia herufi 8 hadi 128. Epuka manenosiri ya kawaida na taarifa binafsi.",
       passwordMismatch: "Manenosiri hayalingani.",
       displayNameRequired: "Jina la skrini linahitajika.",
       genderRequired: "Tafadhali chagua jinsia yako.",

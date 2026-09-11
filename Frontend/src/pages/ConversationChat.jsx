@@ -8,6 +8,12 @@ import { useConversation } from "../hooks/useConversation";
 import { useChatScroll } from "../hooks/useChatScroll";
 import { useAuth } from "../context/AuthContext";
 import { useLanguage } from "../context/LanguageContext";
+import MessageLimitStatus from "../components/MessageLimitStatus";
+import {
+  characterCount,
+  USER_MESSAGE_LIMIT,
+  validUserMessage,
+} from "../utils/textLimits";
 import { API } from "../config/constants";
 import { localizeImageError } from "../utils/imageErrorMapper";
 import { localizeSystemMessage } from "../utils/systemMessage";
@@ -571,6 +577,7 @@ export default function ConversationChat() {
 
   // Send message handler
   async function handleSend(textToSend = input) {
+    if (!validUserMessage(textToSend)) return;
     const trimmed = textToSend.trim();
     if (!trimmed || isSending || !isCharacterActive) return;
 
@@ -669,6 +676,7 @@ export default function ConversationChat() {
       {/* HEADER */}
       <ChatHeader
         character={activeCharacter}
+        activeConvId={conversationId}
         onBack={() => navigate("/chats")}
         showQuickReplies={showQuickReplies}
         onToggleQuickReplies={() => setShowQuickReplies((prev) => !prev)}
@@ -797,6 +805,8 @@ export default function ConversationChat() {
               ref={textareaRef}
               rows="1"
               value={input}
+              aria-describedby="conversation-message-count"
+              aria-invalid={characterCount(input) > USER_MESSAGE_LIMIT}
               onChange={(event) => {
                 setInput(event.target.value);
                 autoResizeTextarea();
@@ -813,12 +823,13 @@ export default function ConversationChat() {
               className="min-h-[24px] w-full resize-none bg-transparent text-sm leading-6 theme-text outline-none"
               style={{ maxHeight: "112px" }}
             />
+            <MessageLimitStatus id="conversation-message-count" value={input} />
           </div>
 
           <button
             type="submit"
             disabled={
-              !input.trim() ||
+              !validUserMessage(input) ||
               isSending ||
               isWaitingForAI ||
               !isCharacterActive ||

@@ -15,18 +15,11 @@
     <priority>0.9</priority>
   </url>
 
-  <!-- spark pool / Pricing -->
+  <!-- Spark Pool / Pricing -->
   <url>
-    <loc>https://www.uwenzai.com/spark_pool</loc>
+    <loc>https://uwenzai.com/spark_pool</loc>
     <changefreq>weekly</changefreq>
     <priority>0.8</priority>
-  </url>
-
-  <!-- About -->
-  <url>
-    <loc>https://uwenzai.com/about</loc>
-    <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
   </url>
 
   <!-- Legal & Policy -->
@@ -46,6 +39,12 @@
     <loc>https://uwenzai.com/responsible-use</loc>
     <changefreq>monthly</changefreq>
     <priority>0.4</priority>
+  </url>
+
+  <url>
+    <loc>https://uwenzai.com/subprocessors</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.3</priority>
   </url>
 
   <!-- Auth pages -->

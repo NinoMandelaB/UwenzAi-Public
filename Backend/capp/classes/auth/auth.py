@@ -3,7 +3,10 @@ from typing import Any, Dict
 
 from django.conf import settings
 from django.contrib.auth import authenticate
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
+from django.db.models import Q
 from django.utils import timezone
 from datetime import timedelta
 
@@ -14,12 +17,12 @@ from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from capp.models import (
-    Character,
     ComplianceConfirmationLog,
     CustomUser,
     EmailVerification,
     MemoryFact,
     PasswordRecovery,
+    ReminderDeliveryAttempt,
     UserSubscription,
     SparkPool,
     Conversation,
@@ -28,6 +31,9 @@ from capp.models import (
 )
 
 from capp.classes.auth.email_verification_service import EmailVerificationService
+from capp.classes.auth.codes import code_matches
+from capp.authentication import account_can_authenticate
+from capp.classes.auth.feature_preferences import FeaturePreferences
 from capp.classes.auth.lockout import LoginLockoutService
 from capp.classes.auth.recaptcha import RecaptchaService
 from capp.classes.guest.guest_identity_service import GuestIdentityService
@@ -46,10 +52,28 @@ logger = logging.getLogger(__name__)
 
 class Auth:
 
+    @staticmethod
+    def _password_error(password, user=None):
+        """New credentials only. Existing sign-in passwords remain unchanged."""
+        if not isinstance(password, str):
+            return "invalid_password"
+        if len(password) < 8:
+            return "password_too_short"
+        if len(password) > 128:
+            return "password_too_long"
+        try:
+            validate_password(password, user=user)
+        except ValidationError:
+            return "password_validation_failed"
+        return None
+
     @classmethod
+    @transaction.atomic
     def request_email_change(cls, user: CustomUser, payload: Dict[str, Any], request=None) -> Dict[str, Any]:
         try:
             from capp.models import EmailChangeRequest
+
+            user = CustomUser.objects.select_for_update().get(pk=user.pk)
 
             new_email = (payload.get("new_email") or "").strip()
             if not new_email:
@@ -105,8 +129,7 @@ class Auth:
                 return {"status": "fail", "data": "email_send_failed"}
 
             logger.info(
-                "Email change verification sent to %s for user_id=%s",
-                new_email,
+                "Email change verification sent for user_id=%s",
                 user.user_id,
             )
             return {
@@ -119,8 +142,12 @@ class Auth:
             return {"status": "fail", "data": "server_error"}
 
     @classmethod
+    @transaction.atomic
     def confirm_email_change(cls, user: CustomUser, payload: Dict[str, Any], request=None) -> Dict[str, Any]:
         try:
+            user = CustomUser.objects.select_for_update().get(pk=user.pk)
+            if not account_can_authenticate(user):
+                return {"status": "fail", "data": "account_inactive"}
             code = (payload.get("code") or "").strip()
             if not code:
                 return {"status": "fail", "data": "verification_code_required"}
@@ -129,7 +156,8 @@ class Auth:
 
             # Find the most recent pending request for this user
             change_request = (
-                EmailChangeRequest.objects.filter(
+                EmailChangeRequest.objects.select_for_update()
+                .filter(
                     user=user,
                     is_used=False,
                 )
@@ -146,7 +174,7 @@ class Auth:
             if change_request.attempts >= 5:
                 return {"status": "fail", "data": "too_many_attempts"}
 
-            if change_request.code != code:
+            if not code_matches(code, change_request.code, user.pk, "email_change"):
                 change_request.attempts += 1
                 change_request.save(update_fields=["attempts", "updated_at"])
                 return {"status": "fail", "data": "invalid_code"}
@@ -594,10 +622,27 @@ class Auth:
                 return {"status": "fail", "data": "user_not_found"}
 
             with transaction.atomic():
-                # Delete characters owned by this user first so their entire trees
-                # (conversations, messages, relationship states, memory facts, etc.)
-                # are removed as well.
-                Character.objects.filter(created_by=existing_user).delete()
+                from capp.classes.auth.account_erasure import erase_private_content
+
+                # Serialize account erasure with publication of user-owned
+                # content. Writers lock the actor before the character.
+                existing_user = CustomUser.objects.select_for_update().filter(pk=existing_user.pk).first()
+                if existing_user is None:
+                    return {"status": "fail", "data": "user_not_found"}
+                erase_private_content(existing_user)
+
+                # Reminder delivery attempts hold a PROTECT reference from their
+                # billing reservation, which would otherwise block the cascade
+                # delete of the user's own reservations below (ProtectedError on
+                # every account deletion for users with reminder history). The
+                # attempts are per-user operational lease records — the billing
+                # ledger itself is untouched — so drop them first. The second
+                # arm is defensive: any attempt referencing one of the user's
+                # reservations blocks that reservation's deletion regardless of
+                # who owns the attempt row.
+                ReminderDeliveryAttempt.objects.filter(
+                    Q(user=existing_user) | Q(reservation__user=existing_user)
+                ).delete()
 
                 # Delete the user itself. All user-owned relations with CASCADE/OneToOne
                 # will be permanently removed automatically.
@@ -638,11 +683,9 @@ class Auth:
             if new_password != confirm_password:
                 return {"status": "fail", "data": "password_mismatch"}
 
-            if len(new_password) < 6:
-                return {"status": "fail", "data": "password_too_short"}
-
-            if len(new_password) > 20:
-                return {"status": "fail", "data": "password_too_long"}
+            error = cls._password_error(new_password, user)
+            if error:
+                return {"status": "fail", "data": error}
 
             if user.is_deleted:
                 return {"status": "fail", "data": "account_deleted"}
@@ -679,6 +722,7 @@ class Auth:
             return {"status": "fail", "data": "server_error"}
 
     @classmethod
+    @transaction.atomic
     def confirm_password_reset(cls, payload: Dict[str, Any]) -> Dict[str, Any]:
         try:
             email = (payload.get("email") or "").strip()
@@ -701,11 +745,9 @@ class Auth:
             if password != confirm_password:
                 return {"status": "fail", "data": "password_mismatch"}
 
-            if len(password) < 6:
-                return {"status": "fail", "data": "password_too_short"}
-
-            if len(password) > 20:
-                return {"status": "fail", "data": "password_too_long"}
+            error = cls._password_error(password)
+            if error:
+                return {"status": "fail", "data": error}
 
             email_fields = EncryptionService.prepare_email_fields(email)
             email_hash = email_fields.get("email_hash")
@@ -713,7 +755,7 @@ class Auth:
             if not email_hash:
                 return {"status": "fail", "data": "invalid_email"}
 
-            user = CustomUser.objects.filter(email_hash=email_hash).first()
+            user = CustomUser.objects.select_for_update().filter(email_hash=email_hash).first()
 
             if not user:
                 return {"status": "fail", "data": "invalid_recovery_code"}
@@ -731,7 +773,8 @@ class Auth:
                 return {"status": "fail", "data": "account_inactive"}
 
             recovery = (
-                PasswordRecovery.objects.filter(
+                PasswordRecovery.objects.select_for_update()
+                .filter(
                     user=user,
                     is_used=False,
                 )
@@ -748,7 +791,7 @@ class Auth:
             if recovery.attempts >= 5:
                 return {"status": "fail", "data": "recovery_attempts_exceeded"}
 
-            if recovery.code != code:
+            if not code_matches(code, recovery.code, user.pk, "password_reset"):
                 recovery.attempts += 1
                 recovery.save(update_fields=["attempts", "updated_at"])
 
@@ -756,6 +799,12 @@ class Auth:
                     return {"status": "fail", "data": "recovery_attempts_exceeded"}
 
                 return {"status": "fail", "data": "invalid_recovery_code"}
+
+            # User-aware validators (name/e-mail similarity) run only after the
+            # code is proven, so an unauthenticated caller cannot probe them.
+            error = cls._password_error(password, user)
+            if error:
+                return {"status": "fail", "data": error}
 
             with transaction.atomic():
                 user.set_password(password)
@@ -831,7 +880,7 @@ class Auth:
             sent = PasswordRecoveryEmailService.send_recovery_code(
                 to_email=to_email,
                 full_name=user.full_name or user.display_name or user.username,
-                code=recovery.code,
+                code=recovery.raw_code,
             )
 
             if sent:
@@ -973,11 +1022,9 @@ class Auth:
             if password != confirm_password:
                 return {"status": "fail", "data": "password_mismatch"}
 
-            if len(password) < 6:
-                return {"status": "fail", "data": "password_too_short"}
-
-            if len(password) > 20:
-                return {"status": "fail", "data": "password_too_long"}
+            error = cls._password_error(password, CustomUser(username=username, full_name=full_name))
+            if error:
+                return {"status": "fail", "data": error}
 
             if age_confirmed is not True:
                 return {"status": "fail", "data": "age_confirmation_required"}
@@ -1373,10 +1420,38 @@ class Auth:
 
             user = CustomUser.objects.filter(google_sub=google_sub).first()
 
+            if payload.get("confirm_link") is True:
+                # Linking is an account-bound action, not an alternate login.
+                # Also enforce this for an already-linked Google subject:
+                # otherwise choosing another Google account would issue its
+                # refresh cookie and switch the signed-in account.
+                confirming_user = getattr(request, "user", None)
+                if (
+                    not getattr(confirming_user, "is_authenticated", False)
+                    or confirming_user.email_hash != email_fields["email_hash"]
+                    or (user is not None and confirming_user.pk != user.pk)
+                ):
+                    return {"status": "fail", "data": "google_link_confirmation_required"}
+
             if not user:
                 existing_email_user = CustomUser.objects.filter(email_hash=email_fields["email_hash"]).first()
 
                 if existing_email_user:
+                    # Google email possession is not authority to attach a new
+                    # provider identity to an existing account. First sign in
+                    # using that account's credentials, then explicitly confirm
+                    # this link with the same authenticated account's JWT.
+                    confirming_user = getattr(request, "user", None)
+                    if (
+                        payload.get("confirm_link") is not True
+                        or not getattr(confirming_user, "is_authenticated", False)
+                        or confirming_user.pk != existing_email_user.pk
+                    ):
+                        return {"status": "fail", "data": "google_link_confirmation_required"}
+                    # Never replace an existing different Google binding.
+                    if existing_email_user.google_sub:
+                        return {"status": "fail", "data": "google_account_already_linked"}
+
                     if existing_email_user.is_deleted:
                         return {"status": "fail", "data": "account_deleted"}
 
@@ -1402,7 +1477,23 @@ class Auth:
                         updated_fields.append("account_status")
 
                     updated_fields.append("updated_at")
-                    existing_email_user.save(update_fields=updated_fields)
+                    # Compare-and-set prevents two concurrent confirmations
+                    # replacing each other's provider identities.
+                    changes = {field: getattr(existing_email_user, field) for field in updated_fields}
+                    changes["updated_at"] = timezone.now()
+                    linked = (
+                        CustomUser.objects.filter(
+                            pk=existing_email_user.pk,
+                            google_sub__isnull=True,
+                            email_hash=email_fields["email_hash"],
+                            is_active=True,
+                            is_deleted=False,
+                        )
+                        .exclude(account_status__in=["banned", "suspended"])
+                        .update(**changes)
+                    )
+                    if not linked:
+                        return {"status": "fail", "data": "google_account_already_linked"}
 
                     user = existing_email_user
                 else:
@@ -1440,6 +1531,19 @@ class Auth:
             if updated_fields:
                 updated_fields.append("updated_at")
                 user.save(update_fields=updated_fields)
+
+            if payload.get("confirm_link") is True:
+                # This mutates only the authenticated account's provider
+                # binding. It must not rotate tokens/cookies or recreate a
+                # login session if the browser changed accounts meanwhile.
+                return {
+                    "status": "success",
+                    "data": {
+                        "message": "google_link_successful",
+                        "linked": True,
+                        "user": {"user_id": str(user.pk)},
+                    },
+                }
 
             # ✅ FIXED SPARK_POOL CREATION
             spark_pool = getattr(user, "spark_pool", None)
@@ -1507,8 +1611,8 @@ class Auth:
             if not user:
                 return {"status": "fail", "data": "user_not_found"}
 
-            if user.is_deleted:
-                return {"status": "fail", "data": "account_deleted"}
+            if not account_can_authenticate(user):
+                return {"status": "fail", "data": "account_inactive"}
 
             try:
                 old_refresh.blacklist()
@@ -1595,6 +1699,7 @@ class Auth:
             "daily_tokens_used": user.daily_tokens_used,
             "total_tokens_used": user.total_tokens_used,
             "timezone": user.timezone,
+            "feature_preferences": FeaturePreferences.get(user),
         }
 
     @classmethod

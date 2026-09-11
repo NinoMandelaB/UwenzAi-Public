@@ -224,7 +224,7 @@ class DNSPinningTests(TestCase):
         self.assertTrue(ou._is_blocked_ip("100.127.255.254"))
 
     def test_unspecified_and_public_addresses(self):
-        self.assertTrue(ou._is_blocked_ip("0.0.0.0"))
+        self.assertTrue(ou._is_blocked_ip("0.0.0.0"))  # nosec B104: rejection test, not a listener bind
         self.assertFalse(ou._is_blocked_ip("93.184.216.34"))
         self.assertFalse(ou._is_blocked_ip("2606:4700:4700::1111"))
 
@@ -369,14 +369,19 @@ class ToolArgumentTypeTests(TestCase):
 
 
 class QueryPrivacyTests(TestCase):
-    def test_identifier_shaped_queries_are_refused(self):
+    def test_numbers_and_emails_are_allowed(self):
+        # Staan (EU, no person-linkage, Zero Data Retention) makes public
+        # numbers/emails searchable, e.g. verifying an embassy's number.
         for q in (
             "contact bob@example.com",
             "who owns 0712345678",
             "+254 712 345 678 lookup",
-            "user 3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+            "German embassy Bern phone +41 31 123 45 67",
         ):
-            self.assertEqual(build_search_query(q), "", q)
+            self.assertTrue(build_search_query(q), q)
+
+    def test_uuid_shaped_queries_are_refused(self):
+        self.assertEqual(build_search_query("user 3f2504e0-4f89-11d3-9a0c-0305e82c3301"), "")
 
     def test_ordinary_queries_still_work(self):
         for q in ("weather in Nairobi", "top 10 songs 2026", "Kiswahili grammar rules"):
