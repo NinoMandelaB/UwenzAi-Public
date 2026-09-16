@@ -296,7 +296,15 @@ describe("MemoryPanel", () => {
     });
     fireEvent.click(screen.getByText("memory.add"));
     await waitFor(() => expect(createMemoryFact).toHaveBeenCalled());
-    expect(screen.getAllByText(sampleData.facts[0].fact_text)).toHaveLength(1);
+    // Wait for the settled count instead of asserting synchronously: until the
+    // form state clears, the add-fact textarea still mirrors the typed text
+    // through its default content and matches getAllByText too. A real dedup
+    // regression keeps the count at 2 forever, so this still fails then.
+    await waitFor(() =>
+      expect(screen.getAllByText(sampleData.facts[0].fact_text)).toHaveLength(
+        1,
+      ),
+    );
   });
 
   it("sends the fact version captured when editing began", async () => {

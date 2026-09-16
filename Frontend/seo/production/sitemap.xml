@@ -47,6 +47,13 @@
     <priority>0.3</priority>
   </url>
 
+  <!-- Developer API (Agent Gateway) -->
+  <url>
+    <loc>https://uwenzai.com/uwenzai-dev</loc>
+    <changefreq>weekly</changefreq>
+    <priority>0.6</priority>
+  </url>
+
   <!-- Auth pages -->
   <url>
     <loc>https://uwenzai.com/login</loc>

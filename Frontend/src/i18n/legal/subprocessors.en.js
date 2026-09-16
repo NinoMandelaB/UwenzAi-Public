@@ -12,7 +12,7 @@ export const subprocessorsEn = {
     },
     {
       type: "p",
-      text: "All of these providers operate outside Kenya, so using the Service involves transferring data across borders. Some providers are used only when the relevant feature is enabled or configured.",
+      text: "Some providers are used only when a relevant feature is enabled or configured. Data-processing locations depend on the provider and the configured service, and processing may involve international transfers. See section 11 of the Privacy Policy for our international-transfer disclosure.",
     },
   ],
   sections: [
@@ -161,7 +161,29 @@ export const subprocessorsEn = {
     },
     {
       id: "8",
-      heading: "8. Changes to this list",
+      heading: "8. UwenzAi-Dev developer workspace and inference API",
+      blocks: [
+        {
+          type: "p",
+          text: "UwenzAi-Dev provides an experimental developer workspace, a text playground and an inference API for eligible signed-in account holders. It is separate from the Bring Your Own Key feature and is not available to guests.",
+        },
+        {
+          type: "p",
+          text: "The initial gateway provider set is Cortecs, Mistral AI, Fikra, Inceptron, AKI.IO and OVHcloud. A provider is available only when configured and offered in the gateway catalog. Depending on the selected provider/model, the provider processing your request receives your submitted messages, any history included in the request, and the settings needed to produce the reply. Listing a provider here does not mean every request is sent to that provider.",
+        },
+        {
+          type: "p",
+          text: "The gateway’s ordinary usage records contain operational and billing metadata rather than message or reply content. If you choose to save playground history, UwenzAi separately stores the retained conversation in encrypted form for your account and selected model/provider. The default-off setting, storage limits, retention period and deletion controls are described in sections 9, 14 and 15 of the Privacy Policy. Hosting infrastructure processes the data needed to operate this feature, as described in section 1 of this disclosure.",
+        },
+        {
+          type: "p",
+          text: "Provider availability may change. We will update this disclosure when providers are added or removed and give notice of material processing changes as described in section 20 of the Privacy Policy. Neither the word “experimental” nor a change to this list removes your statutory data-protection rights.",
+        },
+      ],
+    },
+    {
+      id: "9",
+      heading: "9. Changes to this list",
       blocks: [
         {
           type: "p",

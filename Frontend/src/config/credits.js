@@ -105,6 +105,11 @@ export const CREDITS = {
   // What's new since the beta release — newest first, ~6 entries max.
   shipped: [
     {
+      date: "2026-09-15",
+      en: "UwenzAi-Dev — your personal UwenzAi API key to access AI models for your personal use",
+      sw: "UwenzAi-Dev — ufunguo wako wa API wa UwenzAi wa kufikia mifano ya AI kwa matumizi yako binafsi",
+    },
+    {
       date: "2026-09-11",
       en: "Reminders — ask your companion to remind you, and they will",
       sw: "Vikumbusho — mwombe mwandani wako akukumbushe, naye atafanya",
@@ -149,19 +154,18 @@ export const CREDITS = {
       en: "Your companion can now offer you photos",
       sw: "Mwandani wako sasa anaweza kukupa picha",
     },
-    {
-      date: "2026-07-23",
-      en: "Photos inside the chat",
-      sw: "Picha ndani ya mazungumzo",
-    },
     // Add newly shipped items above this line (newest first).
   ],
 
   // What's coming next — short, benefit-first, no dates.
   roadmap: [
     {
-      en: "UwenzAi-Dev — your personal UwenzAi API key to access AI models for your personal use",
-      sw: "UwenzAi-Dev — ufunguo wako wa API wa UwenzAi wa kufikia mifano ya AI kwa matumizi yako binafsi",
+      en: "Voice chat — talk to your AI companion and hear them reply",
+      sw: "Mazungumzo ya sauti — sema na mwandani wako wa AI na usikie anavyojibu",
+    },
+    {
+      en: "Connect UwenzAi to your own AI agent",
+      sw: "Unganisha UwenzAi na kipasha chako cha AI",
     },
     {
       en: "…and a few surprises",

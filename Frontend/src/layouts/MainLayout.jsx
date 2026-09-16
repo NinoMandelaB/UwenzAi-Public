@@ -44,15 +44,22 @@ export default function MainLayout() {
                   <item.icon size={20} />
                   {item.to === "/chats" && <NavUnreadBadge />}
                 </span>
-                <span>{item.label}</span>
+                <span className="flex items-center gap-2">
+                  {item.label}
+                  {item.badge && (
+                    <span className="px-2 py-0.5 text-xs bg-amber-500/20 text-amber-600 dark:bg-amber-500/30 dark:text-amber-400 rounded-full">
+                      {item.badge}
+                    </span>
+                  )}
+                </span>
               </NavLink>
             ))}
           </nav>
         </aside>
 
         {/* Main scrollable content */}
-        <main className="flex-1 overflow-y-auto px-4 pb-24 lg:pb-6 pt-5">
-          <div className="w-full max-w-md mx-auto lg:max-w-none lg:mx-0">
+        <main className="min-w-0 flex-1 overflow-y-auto px-4 pb-24 lg:pb-6 pt-5">
+          <div className="min-w-0 w-full max-w-md mx-auto lg:max-w-none lg:mx-0">
             <Outlet />
           </div>
         </main>

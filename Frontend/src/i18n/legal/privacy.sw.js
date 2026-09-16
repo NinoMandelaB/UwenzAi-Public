@@ -8,7 +8,11 @@ export const privacySw = {
   intro: [
     {
       type: "p",
-      text: "Sera hii ya Faragha inaeleza jinsi UwenzAi Limited (“UwenzAi”, “sisi”, “yetu”), kampuni iliyosajiliwa Kenya na yenye makao yake Nairobi, inakusanya na kutumia taarifa unapotumia huduma ya mwandani wa AI ya UwenzAi, ikijumuisha tovuti na programu zetu (“Huduma”).",
+      text: "Sera hii ya Faragha inaeleza jinsi UwenzAi Limited (“UwenzAi”, “sisi”, “yetu”), kampuni iliyosajiliwa nchini Kenya yenye makao yake Nairobi, inavyokusanya na kutumia taarifa unapotumia huduma yetu ya mwenzi wa AI, tovuti, programu, pamoja na eneo la wasanidi na API ya uendeshaji wa modeli za AI ya UwenzAi-Dev (kwa pamoja, “Huduma”).",
+    },
+    {
+      type: "p",
+      text: "UwenzAi-Dev ni huduma ya wasanidi yenye utendaji tofauti na programu ya wenzi wa AI. Unaweza kutumia API na eneo lake la wasanidi bila kutumia vipengele vya wenzi wa AI, kupitia akaunti ileile ya UwenzAi na salio lilelile la Sparks. Tofauti hii haimaanishi kwamba huduma hizi zina waendeshaji tofauti au miundombinu iliyotenganishwa kikamilifu: taratibu za usimamizi wa akaunti, uthibitishaji wa ufikiaji, malipo na usalama zinaweza kutumiwa kwa pamoja. Eneo la majaribio halijumuishi kiotomatiki mazungumzo na wenzi wa AI, kumbukumbu za wahusika au mihtasari katika maombi yanayotumwa kwa modeli. Uchakataji mahususi wa huduma za wasanidi ulioelezwa katika sera hii unatumika kwa UwenzAi-Dev; kuitumia hakumaanishi peke yake kwamba unatumia vipengele vya wenzi wa AI.",
     },
     {
       type: "p",
@@ -17,6 +21,10 @@ export const privacySw = {
     {
       type: "p",
       text: "Sera hii inatumika kwa Huduma halisi inayotumika na watumiaji. Imeandikwa kueleza yale ambayo mifumo yetu inafanya kwa kweli, pamoja na mahali ambapo ulinzi wetu una mipaka.",
+    },
+    {
+      type: "p",
+      text: "“UwenzAi-Dev” ni jina la kipengele chetu cha wasanidi. Jina hilo halimaanishi kwamba unatumia seva yetu ya ndani ya maendeleo au majaribio. Sera hii ya huduma ya uzalishaji inatumika kwa kipengele hicho kinapotolewa kwenye Huduma ya uzalishaji; mazingira ya ndani ya majaribio yaliyotambulishwa kando yana taarifa yake kuhusu seva ya maendeleo.",
     },
   ],
   sections: [
@@ -106,6 +114,10 @@ export const privacySw = {
         },
         {
           type: "p",
+          text: "Data ya eneo la wasanidi na API. Tunachakata ujumbe na mipangilio ya maombi unayotuma kupitia UwenzAi-Dev. Ukiwasha hifadhi ya historia katika eneo la majaribio, tunahifadhi pia ujumbe unaobakizwa na majibu ya modeli, tukiunganisha taarifa hizo na akaunti yako pamoja na modeli na mtoa huduma uliyemchagua. Kando na hayo, tunahifadhi majina na vitambulisho vya funguo za API, sehemu fupi ya kutambua ufunguo na alama ya hashi ya kuuthibitisha, hali ya ufunguo na tarehe za matumizi, pamoja na metadata ya maombi kama modeli, mtoa huduma, idadi ya tokeni, gharama, muda, matokeo na vitambulisho vya shughuli. Rekodi hizi hutusaidia kuthibitisha ufikiaji, kutoza na kuripoti matumizi, kulinda Huduma na kuzuia malipo yanayojirudia.",
+        },
+        {
+          type: "p",
           text: "Data ya kiufundi. Taarifa zinazohitajika kuendesha na kulinda Huduma, kama vile kuki za uthibitishaji, tokeni za CSRF, data ya maombi, vihesabu vya kupunguza kasi ya maombi na majaribio ya kuingia yaliyoshindwa, na kumbukumbu za seva. Kumbukumbu zetu huandikwa kurekodi matukio ya utendaji badala ya yaliyomo ya mazungumzo yako.",
         },
         {
@@ -133,6 +145,10 @@ export const privacySw = {
           type: "p",
           text: "Hatutumii mazungumzo, wahusika au picha zako za faragha kufundisha modeli zetu za AI au za watu wa tatu, na hatuuzi data yako binafsi.",
         },
+        {
+          type: "p",
+          text: "Kwa UwenzAi-Dev, tunachakata maombi unayotuma ili kutoa huduma ya modeli ya AI unayoomba. Hifadhi ya hiari ya historia katika eneo la majaribio husaidia kuendeleza muktadha kati ya maombi yako, na historia huhifadhiwa tu unapowasha kipengele hicho. Msingi wa uchakataji ni kutekeleza mkataba wetu nawe kwa huduma uliyoomba. Unaweza kutumia eneo la majaribio bila kuwasha hifadhi ya historia. Kuwasha historia hakutupi ruhusa ya kuitumia kwa madhumuni yasiyohusiana, na ahadi yetu ya kutotumia maudhui ya faragha kufundisha modeli zetu za AI au za watu wa tatu inatumika pia kwa historia hii.",
+        },
       ],
     },
     {
@@ -152,6 +168,10 @@ export const privacySw = {
             "Ikiwa unatumia Leta Kitufe Chako Mwenyewe, majibu yako ya mazungumzo huzalishwa badala yake na mahali pa kufikia pa mtu wa tatu uliposanidi. Masharti ya faragha ya mtoa huduma huyo ndiyo yanayoongoza anachofanya na maudhui yako, na hatuna udhibiti wowote juu ya muda wanaobakiza data wala uwezo wa kuiona. Uwakilishi wa kihesabu na kazi zinazoendeshwa nyuma zilizotajwa hapo juu huendelea kutumia watoa huduma tuliowataja hapa.",
             "Kanuni zetu za maudhui yaliyopigwa marufuku na utozaji wetu wa bili vinaendelea kutumika unapotumia kitufe chako mwenyewe.",
           ],
+        },
+        {
+          type: "p",
+          text: "UwenzAi-Dev hutumia mtoa huduma wa modeli aliyechaguliwa kwa ombi husika. Katika eneo la majaribio, huyu ni mtoa huduma unayemchagua kwenye kiolesura; programu zinazotumia API zinaweza kubainisha mtoa huduma, au kutumia utaratibu wa lango uliosanidiwa wa kuelekeza modeli ikiwa hazijabainisha chaguo hilo. Tunamtumia mtoa huduma huyo ujumbe uliowasilishwa, historia yoyote ya mazungumzo iliyojumuishwa katika ombi hilo, na mipangilio inayohitajika kuzalisha jibu. Eneo la majaribio haliongezi kiotomatiki mazungumzo yako na wenzi wa AI, kumbukumbu za wahusika au mihtasari yao. Maudhui hayatumwi kwa kila mtoa huduma aliyeorodheshwa kwa sababu tu anapatikana. Angalia Taarifa ya Watoa Huduma kwa orodha ya watoa huduma wa lango. Chaguo letu la kuhifadhi data halidhibiti uchakataji au uhifadhi wa mtoa huduma mwenyewe, na kuzima hifadhi ya historia si ahadi kwamba mtoa huduma huyo hatabaki na nakala yoyote.",
         },
       ],
     },
@@ -234,6 +254,10 @@ export const privacySw = {
           type: "p",
           text: "Hakuna kipimo cha usalama kilicho kamili. Hatutoi dhamana kwamba data yako haiwezi kufikiwa, kubadilishwa au kupotea.",
         },
+        {
+          type: "p",
+          text: "Historia iliyohifadhiwa katika eneo la majaribio la UwenzAi-Dev husimbwa kwa njia fiche kabla ya kuwekwa katika hifadhidata ya programu yetu, kwa kutumia funguo zinazoshikiliwa na seva zetu. Huu si usimbaji fiche wa mwisho hadi mwisho: mifumo yetu lazima isimbue historia ili kukuonyesha au kuijumuisha katika ombi, na wafanyakazi walioidhinishwa wanaweza kuifikia inapohitajika kwa madhumuni yaliyoelezwa katika sera hii. Vitambulisho vya akaunti, modeli na mtoa huduma, pamoja na metadata ya utendaji inayohusiana na historia hiyo, havifunikwi na safu hii ya usimbaji fiche wa maudhui. Funguo za API ya lango tunazotoa huonyeshwa kwa ukamilifu wakati zinapoundwa tu; tunahifadhi alama ya hashi ya uthibitishaji na sehemu fupi ya kutambua ufunguo badala ya siri nzima. Hii ni tofauti na ufunguo unaotupatia tuuhifadhi kupitia kipengele tofauti cha Bring Your Own Key.",
+        },
       ],
     },
     {
@@ -262,7 +286,7 @@ export const privacySw = {
         },
         {
           type: "p",
-          text: "UwenzAi iko Kenya, lakini watoa huduma hawa wanafanya kazi nje ya Kenya, na eneo letu la uwekaji mtandaoni linaamuliwa na usanidi wa mtoa huduma wetu wa uwekaji mtandaoni. Kwa hivyo kutumia Huduma kunahusisha kuhamisha data yako kuvuka mipaka, ikijumuisha kwa watoa huduma walioko Ulaya na Marekani.",
+          text: "UwenzAi iko Kenya. Maeneo ya kuchakata data hutegemea mtoa huduma na huduma iliyosanidiwa, na eneo letu la uwekaji mtandaoni linaamuliwa na usanidi wa mtoa huduma wetu wa uwekaji mtandaoni. Uchakataji unaweza kuhusisha uhamishaji wa data kati ya nchi.",
         },
         {
           type: "p",
@@ -332,6 +356,18 @@ export const privacySw = {
           type: "p",
           text: "Unaweza kufuta mazungumzo, wahusika na picha mmoja mmoja mwenyewe wakati wowote, na unaweza kusafisha kumbukumbu ya mhusika kutoka mipangilio yake.",
         },
+        {
+          type: "p",
+          text: "Hifadhi ya historia katika eneo la majaribio la UwenzAi-Dev imezimwa kwa chaguo-msingi. Ikiwa imezimwa, kila ombi katika eneo hilo hutuma ujumbe wako mpya pekee, na hatuhifadhi ujumbe huo na jibu lake kama historia ya eneo la majaribio. Ujumbe unaweza kuendelea kuonekana kwenye ukurasa ulio wazi unapoutumia. Kufungua tena eneo hilo huku historia ikiwa imezimwa, kuondoka kwenye ukurasa, au kubadilisha modeli au mtoa huduma hakufuti chenyewe historia uliyohifadhi awali.",
+        },
+        {
+          type: "p",
+          text: "Unapowasha historia, eneo la majaribio linaweza kupakia mazungumzo yaliyohifadhiwa kwa akaunti yako na modeli pamoja na mtoa huduma uliowachagua, kujumuisha ujumbe uliobakizwa katika maombi yanayofuata, na kuhifadhi mazungumzo mapya. Kila mazungumzo yaliyohifadhiwa yana hadi ujumbe 60 wa mwisho uliobakizwa, ukihesabu ujumbe wako na majibu ya modeli. Vikomo vidogo vya tokeni, ukubwa wa data na muktadha wa modeli vinaweza kusababisha kubakizwa kwa ujumbe michache zaidi. Kinga za sasa zinajumuisha kikomo cha tokeni za ingizo zinazokadiriwa kuwa 8,192, baiti 32,768 kwa ujumbe uliowekwa katika muundo wa kuhifadhi au kutuma, na hadi mazungumzo 20 yaliyohifadhiwa kwa modeli na watoa huduma kwa kila akaunti. Hivi ni vikomo vya kiasi cha data, si vya muda wala dhamana kwamba kila ujumbe utaendelea kupatikana.",
+        },
+        {
+          type: "p",
+          text: "Kwa sasa hakuna ufutaji wa kiotomatiki baada ya idadi maalum ya siku. Historia iliyohifadhiwa hubaki hadi uifute, uzime kwa mafanikio hifadhi iliyokuwa imewashwa kwa modeli na mtoa huduma huyo, ibadilishwe au ipunguzwe na mazungumzo yanayohifadhiwa baadaye, au akaunti yako ifutwe. Kitufe cha kufuta historia kinahusu modeli na mtoa huduma uliowachagua; hakifuti mazungumzo mengine yote yaliyohifadhiwa. Kufuta historia ya eneo la majaribio pekee hakuondoi rekodi za malipo, usalama au shughuli, hakurudishi ombi ambalo tayari limetumwa, wala hakuondoi nakala zilizoko kwa mtoa huduma au kwenye nakala rudufu kwa kuzingatia mipaka iliyoelezwa katika kifungu cha 15. Maombi ya kawaida ya API ya nje hayaundi historia ya eneo la majaribio; programu unayounganisha inaweza kuhifadhi nakala yake kwa kufuata mipangilio na taratibu zake.",
+        },
       ],
     },
     {
@@ -345,6 +381,10 @@ export const privacySw = {
         {
           type: "p",
           text: "Kufuta akaunti yako kunaondoa rekodi yako ya mtumiaji, maelezo ya wasifu wako, mazungumzo yako, ujumbe, muhtasari, kumbukumbu, vikumbusho, wahusika wa faragha ambao hakuna mtu mwingine aliyewatumia, na picha za faragha — ikijumuisha picha za faragha ulizoongeza kwenye mhusika wa umma wa mtu mwingine. Salio lako lililobaki la cheche linaondolewa. Hii si marejesho ya malipo.",
+        },
+        {
+          type: "p",
+          text: "Kufuta akaunti pia huondoa historia iliyohifadhiwa katika eneo la majaribio la UwenzAi-Dev na kusitisha ufikiaji kupitia funguo zako za API ya lango. Kufuta historia ya eneo la majaribio pekee hakubatilishi funguo hizo, na kubatilisha ufunguo pekee hakufuti historia iliyohifadhiwa. Mipaka inayohusu rekodi za kifedha zinazobakizwa, nakala rudufu na taarifa ambazo tayari zimetumwa kwa watoa huduma inatumika pia kwa UwenzAi-Dev.",
         },
         {
           type: "p",
@@ -380,7 +420,15 @@ export const privacySw = {
         },
         {
           type: "p",
-          text: "Mbili za haki hizi zimewekwa ndani ya programu: unaweza kupakua data yako na unaweza kufuta akaunti yako kutoka mipangilio yako. Faili unayopakua ni faili ya JSON iliyo na maelezo ya wasifu wako, rekodi zako za ridhaa, kumbukumbu zako zinazotumika, ujumbe wako mwenyewe na shughuli yako ya uthibitishaji. Haijumuishi majibu ya AI, data ya wahusika, picha wala rekodi za malipo — ikiwa unahitaji nakala pana zaidi, tuambie na tutakusaidia.",
+          text: "Mbili za haki hizi zimewekwa ndani ya programu: unaweza kupakua data yako na unaweza kufuta akaunti yako kutoka mipangilio yako. Faili unayopakua ni faili ya JSON iliyo na maelezo ya wasifu wako, rekodi zako za ridhaa, kumbukumbu zako zinazotumika, ujumbe wako mwenyewe katika mazungumzo na wenzi wa AI, na shughuli yako ya uthibitishaji, pamoja na rekodi za UwenzAi-Dev zilizoelezwa hapa chini. Haijumuishi majibu ya AI katika mazungumzo na wenzi wa AI, data ya wahusika, picha wala rekodi za miamala ya manunuzi au malipo. Majibu yaliyohifadhiwa katika eneo la majaribio na gharama za matumizi ya lango zinajumuishwa kama ilivyoelezwa hapa chini. Ikiwa unahitaji nakala pana zaidi, tuambie na tutakusaidia.",
+        },
+        {
+          type: "p",
+          text: "Faili ya JSON ya akaunti yako unayopakua inajumuisha pia historia yako ya UwenzAi-Dev ambayo bado imehifadhiwa, pamoja na modeli na mtoa huduma wa AI anayehusishwa na kila mazungumzo yaliyohifadhiwa, na rekodi zako zilizohifadhiwa za matumizi ya lango na hali ya maombi. Inajumuisha idadi ya tokeni na malipo yaliyorekodiwa, tarehe husika, na taarifa zisizo za siri za usimamizi wa funguo za API, kama majina, vitambulisho, hali na vikwazo vilivyosanidiwa. Rekodi zako za ridhaa ya lango zinajumuishwa pamoja na rekodi za ridhaa za akaunti. Faili ina data ambayo bado tunayo, si historia iliyofutwa, ujumbe ambao haukuhifadhiwa, au chaguo za modeli na mtoa huduma zilizoko tu kwenye ukurasa wa sasa wa kivinjari.",
+        },
+        {
+          type: "p",
+          text: "Ujumbe uliohifadhiwa husimbuliwa kuwa maandishi yanayosomeka kwa ajili ya kupakua. Linda faili uliyopakua: usimbaji fiche unaotumika katika hifadhidata yetu haulindi nakala hiyo. Faili haijumuishi siri za API kutoka hifadhi ya taarifa za siri za ufikiaji, alama za hashi za uthibitishaji wa funguo, taarifa za siri za ufikiaji wa watoa huduma, wala funguo za usimbaji fiche za seva. Ujumbe au majina uliyoweka mwenyewe yanaweza bado kuwa na taarifa nyeti ulizoingiza. Ikiwa mazungumzo yaliyohifadhiwa hayawezi kusimbuliwa, faili hutambua mazungumzo hayo kuwa hayapatikani badala ya kuyaonyesha kana kwamba hayana ujumbe. Kwa data binafsi ambayo haijajumuishwa kwenye faili ya kawaida, au rekodi isiyopatikana, wasiliana na info@uwenzai.com. Tutathibitisha utambulisho wako inapohitajika na kushughulikia ombi lako kwa kufuata haki na mipaka iliyoelezwa katika kifungu hiki.",
         },
         {
           type: "p",

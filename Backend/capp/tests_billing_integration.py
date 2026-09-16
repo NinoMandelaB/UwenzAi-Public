@@ -828,12 +828,22 @@ class BillingInvariantTests(TestCase):
         )
 
     def test_every_paid_feature_has_a_price(self):
+        """Every fixed-price feature must appear in FEATURE_COST.
+
+        The Agent Gateway feature is priced dynamically per request (token
+        usage via AgentPricingService) and is deliberately absent from the
+        fixed FEATURE_COST map; it must never be reserved through PaidFeature.
+        """
         from capp.classes.billing.paid_features import FEATURE_COST
 
+        dynamically_priced = {BillingReservation.Feature.AGENT_GATEWAY}
         self.assertEqual(
             sorted(FEATURE_COST),
-            sorted(choice for choice, _ in BillingReservation.Feature.choices),
+            sorted(choice for choice, _ in BillingReservation.Feature.choices if choice not in dynamically_priced),
         )
+
+        # The dynamically-priced feature must not silently gain a fixed price.
+        self.assertNotIn(BillingReservation.Feature.AGENT_GATEWAY, FEATURE_COST)
 
 
 class ReservationAuditTrailTests(BillingFeatureTestCase):

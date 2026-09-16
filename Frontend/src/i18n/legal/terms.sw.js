@@ -83,13 +83,17 @@ export const termsSw = {
     },
     {
       id: "4",
-      heading: "4. Matumizi ya kibinafsi tu, si ya kibiashara",
+      heading:
+        "4. Matumizi binafsi ya jukwaa na ruhusa ya kipekee ya API ya wasanidi",
       blocks: [
         {
           type: "p",
-          text: "4.1. Isipokuwa ikiwa unayo makubaliano tofauti ya maandishi na UwenzAi, Huduma inatolewa kwa matumizi yako ya kibinafsi, yasiyo ya kibiashara pekee.",
+          text: "4.1. Jukwaa la wenzi wa AI na vipengele vingine vya Huduma visivyo vya API vinatolewa kwa matumizi binafsi yasiyo ya kibiashara pekee, isipokuwa uwe na makubaliano tofauti ya maandishi na UwenzAi. API ya wasanidi, matokeo yake na matumizi yenye mipaka ya eneo la wasanidi yanayosaidia API na kuruhusiwa wazi katika kifungu cha 11.4 hayazuiliwi na sharti hili.",
         },
-        { type: "p", text: "4.2. Hupaswi:" },
+        {
+          type: "p",
+          text: "4.2. Isipokuwa kwa matumizi yanayoruhusiwa wazi katika kifungu cha 11.4 au na makubaliano tofauti ya maandishi na UwenzAi, hupaswi:",
+        },
         {
           type: "ul",
           items: [
@@ -99,7 +103,7 @@ export const termsSw = {
         },
         {
           type: "p",
-          text: "4.3. Mianya midogo ya kipekee (kwa mfano, kutumia matokeo kwenye masoko, shughuli za ushirika, au maudhui yanayozalisha kipato) inaruhusiwa tu ikiwa imetolewa wazi kwa ridhaa ya maandishi ya awali ya UwenzAi. Bila ridhaa hiyo ya maandishi, matumizi yote ya kibiashara yamepigwa marufuku.",
+          text: "4.3. Ruhusa tofauti ya maandishi haihitajiki kwa matumizi ya kibiashara ya API ya wasanidi yaliyo ndani ya kifungu cha 11.4. Matumizi mengine ya kibiashara, ikiwemo matumizi ya matokeo ya jukwaa la wenzi wa AI katika masoko, shughuli za ushirika au maudhui yanayozalisha kipato, yanaendelea kupigwa marufuku isipokuwa UwenzAi itoe wazi ridhaa ya awali ya maandishi. Ruhusa ya kipekee ya API haipanui matumizi yanayoruhusiwa ya jukwaa la wenzi wa AI.",
         },
       ],
     },
@@ -282,6 +286,14 @@ export const termsSw = {
           type: "p",
           text: "8.9. Maoni. Ikiwa unatutumia mapendekezo kuhusu Huduma, tunaweza kuyatumia bila kikomo na bila kukudai fidia.",
         },
+        {
+          type: "p",
+          text: "8.10. Maombi ya UwenzAi-Dev na historia ya hiari. Leseni ya maudhui katika kifungu hiki inahusu pia ujumbe na maudhui ya maombi unayotuma kupitia eneo la wasanidi au API ya uendeshaji wa modeli za AI ya UwenzAi-Dev. Tunachakata maudhui hayo ili kutoa huduma uliyoomba. Ukiwasha hifadhi ya historia katika eneo la majaribio, unatuagiza tuhifadhi mazungumzo yanayobakizwa na tuyajumuishe katika maombi yanayofuata kwa modeli na mtoa huduma uliowachagua, kwa kufuata vikomo vinavyoonyeshwa na Sera ya Faragha. Kuhifadhi ni hiari na si sharti la kutumia eneo la majaribio. Hili halipanui madhumuni ya leseni wala kuruhusu kufundisha modeli kwa kutumia maudhui yako ya faragha.",
+        },
+        {
+          type: "p",
+          text: "8.11. Udhibiti wa historia na wajibu kuhusu data inayotumwa. Unaweza kufuta historia iliyohifadhiwa katika eneo la majaribio au kuzima hifadhi kwa kutumia vidhibiti vya modeli na mtoa huduma uliowachagua. Historia ni kipengele chenye mipaka cha kukurahisishia matumizi, si hifadhi ya kudumu iliyohakikishwa, na inaweza kupunguzwa kutokana na vikomo vya tokeni, ukubwa wa data au idadi ya ujumbe. Ufutaji haurudishi nyuma uchakataji ambao tayari umefanyika wala kuondoa rekodi zinazoweza kubakizwa kisheria kama ilivyoelezwa katika Sera ya Faragha. Usitume manenosiri, funguo za siri za API, au taarifa binafsi au za siri ambazo huna mamlaka ya kushiriki na UwenzAi pamoja na mtoa huduma anayechakata ombi lako. Hakuna sehemu ya kifungu hiki inayopunguza haki zako za kisheria za ulinzi wa data au kuhamisha wajibu wa kisheria wa UwenzAi kwako.",
+        },
       ],
     },
     {
@@ -381,11 +393,23 @@ export const termsSw = {
         },
         {
           type: "p",
-          text: "11.2. Kwa kuzingatia Masharti haya, UwenzAi inakupa leseni ndogo, inayoweza kubatilishwa, isiyo ya kipekee, isiyoweza kuhamishwa ya kufikia na kutumia Huduma kwa madhumuni ya kibinafsi, yasiyo ya kibiashara.",
+          text: "11.2. Kwa kuzingatia Masharti haya, UwenzAi inakupa leseni yenye mipaka, inayoweza kubatilishwa, isiyo ya kipekee na isiyoweza kuhamishwa, ya kufikia na kutumia Huduma kwa madhumuni binafsi yasiyo ya kibiashara, isipokuwa ruhusa ya API ya wasanidi iliyoelezwa wazi katika kifungu cha 11.4. Jukwaa la wenzi wa AI na vipengele vyake vingine visivyo vya API vinaendelea kuruhusiwa kwa matumizi binafsi yasiyo ya kibiashara pekee.",
         },
         {
           type: "p",
-          text: "11.3. Kati yako na UwenzAi, UwenzAi inamiliki au imepewa haki zote, hati miliki, na maslahi (kwa kiwango cha juu kinachoruhusiwa na sheria) katika matokeo yaliyozalishwa na AI (kama ujumbe, wahusika, picha, na hadithi). UwenzAi inakupa leseni ya kibinafsi, isiyo ya kipekee, isiyoweza kuhamishwa ya kutumia matokeo hayo kwa madhumuni ya kibinafsi, yasiyo ya kibiashara, isipokuwa ikiwa imekubaliwa vinginevyo wazi kwa maandishi. Hii haiathiri haki unazobakiza kwenye Maingizo Yako chini ya kifungu cha 8.2.",
+          text: "11.3. Kati yako na UwenzAi, UwenzAi inamiliki au inakabidhiwa haki zote, umiliki na maslahi (kwa kiwango cha juu kinachoruhusiwa na sheria) katika matokeo yanayozalishwa na AI (kama ujumbe, wahusika, picha na hadithi). UwenzAi inakupa leseni binafsi, isiyo ya kipekee na isiyoweza kuhamishwa, ya kutumia matokeo hayo kwa madhumuni binafsi yasiyo ya kibiashara, isipokuwa kifungu cha 11.4 kinatumika au tukikubaliana vinginevyo wazi kwa maandishi. Hili haliathiri haki unazobakiza katika Maudhui Yako Unayoingiza chini ya kifungu cha 8.2.",
+        },
+        {
+          type: "p",
+          text: "11.4. Matumizi ya kibiashara ya API ya wasanidi. Kwa kuzingatia Masharti haya na masharti ya modeli na mtoa huduma yanayotumika kama ilivyoelezwa katika kifungu cha 11.5, unaweza kutumia API ya uendeshaji wa modeli za AI ya UwenzAi-Dev kwa madhumuni binafsi au ya kibiashara, ikiwemo kuiunganisha katika programu, bidhaa na huduma zako. Kwa kiwango ambacho UwenzAi ina haki katika matokeo yanayozalishwa kupitia API hiyo, tunakupa leseni isiyo ya kipekee ya kutumia, kunakili, kurekebisha na kusambaza matokeo hayo kwa madhumuni hayo, ikiwemo kwa wateja wako na watumiaji wa mwisho. Unaweza kutumia eneo la wasanidi kusanidi, kusimamia na kujaribu miunganisho hiyo ya API. Isipokuwa matumizi hayo ya eneo la wasanidi yaliyoruhusiwa wazi, ruhusa hii ya kipekee hairuhusu matumizi ya kibiashara au uuzaji upya wa jukwaa la wenzi wa AI, wahusika wake, mazungumzo na wenzi wa AI au vipengele vingine visivyo vya API, wala haitoi haki kwa programu, chapa au mali nyingine za jukwaa la UwenzAi. Wajibu mwingine katika Masharti haya, ikiwemo usalama wa akaunti, maudhui yanayoruhusiwa na malipo, unaendelea kutumika.",
+        },
+        {
+          type: "p",
+          text: "11.5. Modeli na watoa huduma wa AI waliochaguliwa. Matumizi yako ya API na matokeo yake lazima pia yazingatie leseni, vikwazo vya matumizi yanayokubalika na masharti yanayotumika kwa modeli na mtoa huduma aliyetumiwa kwa ombi lako. Ruhusa yetu ya matumizi ya kibiashara haibatilishi vikwazo vya mtu wa tatu wala kutoa haki ambazo UwenzAi haina. Hakikisha kwamba modeli na mtoa huduma uliowachagua wanaruhusu matumizi unayokusudia, yakiwemo ya kibiashara, kabla ya kuwategemea. Modeli, matoleo, watoa huduma, uwezo, vikomo vya muktadha na bei zinazopatikana zinaweza kubadilika; kutajwa kwenye orodha au kufanikiwa kwa ombi la awali hakuhakikishi kuendelea kupatikana kwa modeli, toleo au mtoa huduma yuleyule. Mabadiliko makubwa yanaendelea kufuata masharti ya kutoa taarifa katika Masharti haya na Sera ya Faragha, pale yanapotumika.",
+        },
+        {
+          type: "p",
+          text: "11.6. Uhusiano na programu ya wenzi wa AI. UwenzAi-Dev ni huduma ya wasanidi yenye utendaji tofauti na inaweza kutumiwa bila kutumia vipengele vya programu ya wenzi wa AI. Inatumia akaunti ileile ya UwenzAi na salio lilelile la Sparks; malipo ya matumizi ya huduma yoyote kati ya hizi hukatwa kwenye salio hilo la pamoja kwa kufuata kanuni za malipo zinazotumika. Tofauti hii ya utendaji haiundi akaunti tofauti, mtoa huduma tofauti wa kimkataba au hakikisho la utengano wa kiufundi. Hatua zinazohusu akaunti nzima, ikiwemo kusimamishwa au kufutwa kwa akaunti chini ya Masharti haya, zinaweza kuathiri ufikiaji wa huduma zote mbili. Ruhusa ya kibiashara katika kifungu cha 11.4 inatumika tu kwa API, matokeo yake na matumizi ya eneo la wasanidi yaliyoruhusiwa wazi; haihusishi programu ya wenzi wa AI. Masharti ya pamoja kuhusu akaunti, usalama, malipo na masharti mengine yanayotumika kwa ujumla yanaendelea kutumika.",
         },
       ],
     },
@@ -536,6 +560,10 @@ export const termsSw = {
         {
           type: "p",
           text: "16.4. Hakuna kitu katika kifungu hiki kinachoathiri haki zozote za kisheria unazo kama mteja ambazo haziwezi kutengwa au kupunguzwa kwa makubaliano.",
+        },
+        {
+          type: "p",
+          text: "16.5. Hakuna SLA ya API ya wasanidi. Ruhusa ya kibiashara ya API ya uendeshaji wa modeli za AI ya UwenzAi-Dev haijumuishi mkataba wa kiwango cha huduma (SLA). Isipokuwa tuingie nawe wazi katika SLA tofauti ya maandishi, hatutoi ahadi ya kimkataba ya asilimia ya chini ya muda wa huduma kuwa hewani au kupatikana, muda wa kujibu, kiasi cha maombi kinachoweza kuchakatwa kwa muda fulani, ufikiaji usiokatizwa wa modeli au mtoa huduma, muda wa kujibu maombi ya msaada, muda wa kutatua hitilafu, wala kiwango kingine cha huduma. Kulipia matumizi hakuundi ahadi hiyo, na hakuna salio la fidia ya huduma chini ya SLA linaloahidiwa. Una wajibu wa kuamua ikiwa huduma hii inakidhi mahitaji yako ya uendeshaji na kuweka njia mbadala na hatua zinazofaa za kuendeleza shughuli. Kifungu hiki hakiondoi marekebisho ya malipo, urejeshaji wa fedha au suluhisho linalotakiwa na sheria inayotumika au lililotolewa wazi katika Masharti haya, wala hakipunguzi haki au wajibu ambao hauwezi kuondolewa kisheria.",
         },
       ],
     },

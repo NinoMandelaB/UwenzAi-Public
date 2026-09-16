@@ -30,12 +30,26 @@ Compatibility alias:
                               both are set. Prefer the canonical name; this alias
                               exists so operators need not duplicate the value.
 
+Per-service opt-out (production only):
+
+    MEDIA_STORAGE_VALIDATION   Set to "off" on a service that runs this settings
+                               module but never touches media (e.g. the agent
+                               service). The service then boots with a local
+                               media backend and a loud log warning instead of
+                               failing closed — no bucket credentials needed on
+                               a service that has no business reading or
+                               writing media. Default (unset): fail closed.
+
 Behaviour:
   * All four required vars present  -> private S3 bucket backend.
   * Some but not all present        -> misconfiguration: raise in production,
                                         warn + local fallback in dev/test.
   * None present                    -> raise in production, local filesystem in
                                         dev/test.
+  * Production + MEDIA_STORAGE_VALIDATION=off
+                                    -> local backend + warning (explicit
+                                        per-service opt-out for media-less
+                                        services).
 
 Production fails closed in both the partial and the absent case. There is no
 longer a Railway volume behind ``MEDIA_ROOT``, so a local-filesystem fallback in
@@ -59,6 +73,10 @@ _BUCKET_ALIAS = "BUCKET_NAME"
 _ACCESS = "AWS_ACCESS_KEY_ID"
 _SECRET = "AWS_SECRET_ACCESS_KEY"
 _ENDPOINT = "AWS_S3_ENDPOINT_URL"
+# Explicit per-service opt-out of the production fail-closed check, for services
+# that run this settings module but never touch media (e.g. the agent service).
+# Off is opt-in per service; the default remains fail-closed.
+_VALIDATION = "MEDIA_STORAGE_VALIDATION"
 _REGION = "AWS_S3_REGION_NAME"
 _ADDRESSING = "AWS_S3_ADDRESSING_STYLE"
 _EXPIRE = "AWS_QUERYSTRING_EXPIRE"
@@ -164,18 +182,32 @@ def build_storages(
         message = (
             "Railway Bucket storage is partially configured: present="
             f"{sorted(cfg['present'])} missing={sorted(cfg['missing'])}. "
-            f"Set ALL of {_REQUIRED_LIST} on BOTH the backend and Celery "
-            "services, or unset them all to use local media in development."
+            f"Set ALL of {_REQUIRED_LIST} on EVERY service running this "
+            "codebase (web, Celery worker, agent service), or unset them all "
+            "to use local media in development."
         )
     else:
         message = (
             "Railway Bucket storage is not configured. Production requires a "
-            f"shared private bucket: set ALL of {_REQUIRED_LIST} on BOTH the "
-            "backend and Celery services. Local media is only supported in "
-            "development and tests."
+            f"shared private bucket: set ALL of {_REQUIRED_LIST} on EVERY "
+            "service running this codebase (web, Celery worker, agent "
+            "service). Local media is only supported in development and tests."
         )
 
     if is_production:
+        validation_off = _clean(env.get(_VALIDATION)).lower() in {"off", "false", "0"}
+        if validation_off:
+            # Explicitly opted out for a service that never touches media.
+            # Any accidental media write would land on ephemeral container
+            # disk, so keep the misconfiguration visible in the logs.
+            logger.warning(
+                "MEDIA_STORAGE_VALIDATION is off and the bucket is not fully "
+                "configured. This service must never read or write media: "
+                "uploads would go to ephemeral container storage. %s",
+                message,
+            )
+            return _storages(_local_backend()), "local", message
+
         from django.core.exceptions import ImproperlyConfigured
 
         raise ImproperlyConfigured(message)

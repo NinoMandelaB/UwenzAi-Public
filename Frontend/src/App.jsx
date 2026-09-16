@@ -43,6 +43,7 @@ import PaymentVerify from "./pages/PaymentVerify";
 // New Support pages
 import Support from "./pages/Support";
 import SupportDetail from "./pages/SupportDetail";
+import UwenzAiDev from "./pages/UwenzAiDev";
 
 import { AuthProvider } from "./context/AuthContext";
 import { ChatModalProvider } from "./context/ChatModalContext";
@@ -51,6 +52,7 @@ import { SparkPoolBalanceProvider } from "./context/SparkPoolBalanceContext"; //
 import { UnreadProvider } from "./context/UnreadContext";
 import ChatModal from "./components/ChatModal";
 import AgeGate from "./components/AgeGate";
+import NotFound from "./pages/NotFound";
 import ProtectedRoute from "./components/ProtectedRoute";
 import PublicOnlyRoute from "./components/PublicOnlyRoute";
 
@@ -116,6 +118,7 @@ export default function App() {
                       />
                       <Route path="/transactions" element={<Transactions />} />
                       <Route path="/settings" element={<Settings />} />
+                      <Route path="/uwenzai-dev" element={<UwenzAiDev />} />
                       <Route path="/chats" element={<Chats />} />
                       <Route path="/edit-profile" element={<EditProfile />} />
                       <Route path="/profile" element={<Profile />} />
@@ -202,6 +205,12 @@ export default function App() {
                         element={<AdminCreateCharacter />}
                       />
                     </Route>
+
+                    {/* Catch-all 404. The host returns 200 for every path
+                        (single-page app), so the page itself sets a
+                        `robots: noindex` meta to keep unknown URLs out of
+                        search indexes. */}
+                    <Route path="*" element={<NotFound />} />
                   </Routes>
                 </AgeGate>
               </BrowserRouter>

@@ -3,6 +3,7 @@ import logging
 from decimal import Decimal
 from datetime import timedelta
 
+from django.conf import settings
 from django.db.models.signals import pre_save, pre_delete, post_delete
 from django.dispatch import receiver
 
@@ -323,19 +324,24 @@ class CustomUser(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
         return EncryptedTextField.decrypt_text(self.email_encrypted)
 
     def soft_delete(self):
-        self.is_deleted = True
-        self.deleted_at = timezone.now()
-        self.is_active = False
-        self.account_status = self.AccountStatus.DEACTIVATED
-        self.save(
-            update_fields=[
-                "is_deleted",
-                "deleted_at",
-                "is_active",
-                "account_status",
-                "updated_at",
-            ]
-        )
+        with transaction.atomic():
+            type(self).objects.select_for_update().get(pk=self.pk)
+            # Fence pending playground saves even on a soft-delete-only path.
+            AgentPlaygroundHistory.objects.filter(user=self).delete()
+            AgentAPIKey.objects.filter(user=self).update(is_active=False)
+            self.is_deleted = True
+            self.deleted_at = timezone.now()
+            self.is_active = False
+            self.account_status = self.AccountStatus.DEACTIVATED
+            self.save(
+                update_fields=[
+                    "is_deleted",
+                    "deleted_at",
+                    "is_active",
+                    "account_status",
+                    "updated_at",
+                ]
+            )
 
     def mark_email_verified(self):
         self.is_verified = True
@@ -625,6 +631,7 @@ class ComplianceConfirmationLog(TimeStampedModel):
         AGE_GATE = "age_gate", "Age Gate"
         TERMS = "terms", "Terms"
         PRIVACY = "privacy", "Privacy"
+        AGENT_GATEWAY = "agent_gateway", "Agent Gateway"
 
     compliance_confirmation_log_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name="compliance_logs")
@@ -2735,6 +2742,7 @@ class BillingReservation(TimeStampedModel):
         CHARACTER_GENERATION = "character_generation", "Character generation"
         CHARACTER_EDIT = "character_edit", "Character edit"
         IMAGE_GENERATION = "image_generation", "Image generation"
+        AGENT_GATEWAY = "agent_gateway", "Agent Gateway"
 
     reservation_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
@@ -3083,3 +3091,321 @@ def delete_old_avatar_on_change(sender, instance, **kwargs):
         raise ValueError("Cannot publish an avatar on an archived character")
     if old_avatar and old_avatar != new_avatar:
         delete_file_after_commit(old_avatar, kwargs.get("using"))
+
+
+# ============================================================
+# AGENT GATEWAY MODELS
+# ============================================================
+
+
+class AgentAPIKey(TimeStampedModel):
+    """
+    API keys for the UwenzAi Agent Gateway (UwenzAi-Dev feature).
+
+    Users create these keys to allow external AI agents (Hermes, OpenClaw, etc.)
+    to call the UwenzAi API. The plaintext key is NEVER stored — only a
+    SHA-256 hash and the last 4 characters (hint) are persisted.
+
+    Auth flow:
+      1. Client presents: Authorization: Bearer uwenzai-dev-...
+      2. Hash the presented key (SHA-256 hex)
+      3. Look up by key_hash
+      4. Check is_active and expires_at
+      5. Update last_used_at on successful auth
+    """
+
+    class Status(models.TextChoices):
+        ACTIVE = "active", "Active"
+        REVOKED = "revoked", "Revoked"
+        EXPIRED = "expired", "Expired"
+
+    agent_api_key_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="agent_api_keys",
+        verbose_name="User",
+        help_text="Owner of this API key",
+    )
+    label = models.CharField(
+        max_length=100,
+        blank=True,
+        default="",
+        help_text="User-chosen label for this key (e.g., 'Hermes agent', 'Production')",
+    )
+    # NEVER store plaintext. Hash is SHA-256 hex of the full key.
+    key_hash = models.CharField(
+        max_length=64,
+        unique=True,
+        db_index=True,
+        help_text="SHA-256 hex digest of the API key",
+    )
+    # Last 4 characters for display in UI (e.g., "...7f3a")
+    key_hint = models.CharField(
+        max_length=4,
+        help_text="Last 4 characters of the key for display purposes only",
+    )
+    is_active = models.BooleanField(
+        default=True,
+        help_text="If False, the key is revoked and will be rejected",
+    )
+    # Optional: per-key monthly spending cap in sparks
+    monthly_spark_budget = models.PositiveBigIntegerField(
+        null=True,
+        blank=True,
+        help_text="Optional: maximum sparks that can be spent with this key per calendar month",
+    )
+    # Optional expiration date
+    expires_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="If set, key is invalid after this date",
+    )
+    # Track when this key was last used for a successful request
+    last_used_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Last time this key was used for a successful request",
+    )
+
+    class Meta:
+        db_table = "agent_api_keys"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["user", "is_active"]),
+            models.Index(fields=["user", "created_at"]),
+            models.Index(fields=["expires_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.user.username} — {self.label or self.key_hint} — {'active' if self.is_active else 'revoked'}"
+
+    @property
+    def display_hint(self) -> str:
+        """Return a displayable hint like '...7f3a' for the UI."""
+        return f"...{self.key_hint}"
+
+    def is_expired(self) -> bool:
+        """Check if the key has expired."""
+        if self.expires_at is None:
+            return False
+        return timezone.now() >= self.expires_at
+
+    def can_be_used(self) -> bool:
+        """Check if the key is active and not expired."""
+        return self.is_active and not self.is_expired()
+
+
+class AgentModelPrice(TimeStampedModel):
+    """
+    Cost catalog for Agent Gateway models.
+
+    Stores the upstream (provider) pricing per 1M tokens in the provider's
+    native currency. UwenzAi adds a 12.5% markup (configurable via
+    AGENT_MARKUP_PERCENT) on top, then converts to KES using live FX.
+
+    Editable via Django admin so price updates don't require a deploy.
+    """
+
+    provider = models.CharField(
+        max_length=50,
+        help_text="Provider name (e.g., 'cortecs', 'mistral', 'fikra', 'aki', 'ovh', 'inceptron')",
+    )
+    model = models.CharField(
+        max_length=100,
+        help_text="Model identifier (e.g., 'deepseek-v4-flash', 'mistral-large-latest')",
+    )
+    currency = models.CharField(
+        max_length=10,
+        default="EUR",
+        help_text="Currency of the upstream price (e.g., 'EUR', 'USD')",
+    )
+    input_price_per_1m = models.DecimalField(
+        max_digits=12,
+        decimal_places=6,
+        help_text="Upstream input token price per 1 million tokens (in native currency)",
+    )
+    output_price_per_1m = models.DecimalField(
+        max_digits=12,
+        decimal_places=6,
+        help_text="Upstream output token price per 1 million tokens (in native currency)",
+    )
+    is_active = models.BooleanField(
+        default=True,
+        help_text="If False, this model is hidden from GET /agent/models",
+    )
+
+    max_context = models.PositiveIntegerField(null=True, blank=True)
+    max_output_tokens = models.PositiveIntegerField(null=True, blank=True)
+    description = models.TextField(blank=True, default="")
+    capabilities = models.JSONField(
+        default=list, blank=True, help_text="Verified capability labels only; [] means unknown"
+    )
+
+    class Meta:
+        db_table = "agent_model_prices"
+        ordering = ["provider", "model"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["provider", "model"],
+                name="unique_provider_model",
+            ),
+        ]
+        verbose_name = "Agent Model Price"
+        verbose_name_plural = "Agent Model Prices"
+
+    def __str__(self):
+        return (
+            f"{self.provider}/{self.model} — "
+            f"in:{self.currency}{self.input_price_per_1m}/"
+            f"out:{self.currency}{self.output_price_per_1m}"
+        )
+
+
+class AgentUsageLog(TimeStampedModel):
+    """
+    Usage log for Agent Gateway API calls.
+
+    One row per gateway call. Does NOT store prompt/response content (v1 privacy rule).
+    Contains only metadata: tokens, cost, status, latency, etc.
+    """
+
+    class Status(models.TextChoices):
+        SUCCESS = "success", "Success"
+        UPSTREAM_ERROR = "upstream_error", "Upstream Provider Error"
+        REFUND_PENDING = "refund_pending", "Refund awaiting reconciliation"
+        REJECTED = "rejected", "Rejected"
+        INVALID_API_KEY = "invalid_api_key", "Invalid API Key"
+        INSUFFICIENT_SPARKS = "insufficient_sparks", "Insufficient Sparks"
+        BUDGET_EXCEEDED = "budget_exceeded", "Budget Exceeded"
+        IDENTICAL_REQUEST = "identical_request", "Identical Request (Idempotency)"
+
+    usage_log_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    # The key that was used for this call (SET_NULL so logs survive key deletion)
+    key = models.ForeignKey(
+        AgentAPIKey,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="usage_logs",
+        help_text="The API key used for this call",
+    )
+    # Denormalize key_hint for display when key is deleted
+    key_hint = models.CharField(
+        max_length=4,
+        blank=True,
+        default="",
+        help_text="Last 4 chars of the key, for display when key is deleted",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="agent_usage_logs",
+        help_text="User who owns the key that made this call",
+    )
+    provider = models.CharField(
+        max_length=50,
+        help_text="Provider name (e.g., 'cortecs')",
+    )
+    model = models.CharField(
+        max_length=100,
+        help_text="Model identifier",
+    )
+    input_tokens = models.PositiveBigIntegerField(
+        help_text="Input tokens from provider usage block",
+    )
+    output_tokens = models.PositiveBigIntegerField(
+        help_text="Output tokens from provider usage block",
+    )
+    # Pre-markup upstream cost in provider's native currency
+    cost_native = models.DecimalField(
+        max_digits=12,
+        decimal_places=6,
+        help_text="Upstream cost in provider's native currency (before UwenzAi markup)",
+    )
+    cost_currency = models.CharField(
+        max_length=10,
+        default="EUR",
+        help_text="Currency of the upstream cost (e.g., 'EUR', 'USD')",
+    )
+    # FX rate used for this request (for audit/reconciliation)
+    fx_rate = models.DecimalField(
+        max_digits=12,
+        decimal_places=4,
+        null=True,
+        blank=True,
+        help_text="Exchange rate (native currency to KES) used for this charge",
+    )
+    # Final charge in sparks (after markup + FX conversion)
+    sparks_charged = models.PositiveBigIntegerField(
+        help_text="Final charge in sparks",
+    )
+    status = models.CharField(
+        max_length=30,
+        choices=Status.choices,
+        default=Status.SUCCESS,
+        help_text="Status of this call",
+    )
+    latency_ms = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Request latency in milliseconds",
+    )
+    # Idempotency: same client_operation_id = same charge, one log row
+    client_operation_id = models.CharField(
+        max_length=300,
+        null=True,
+        blank=True,
+        help_text="Client-provided operation ID for idempotency",
+    )
+
+    class Meta:
+        db_table = "agent_usage_logs"
+        constraints = [
+            models.UniqueConstraint(fields=["user", "key", "client_operation_id"], name="unique_agent_usage_operation")
+        ]
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["user", "created_at"]),
+            models.Index(fields=["key", "created_at"]),
+            models.Index(fields=["status"]),
+            models.Index(fields=["provider", "model"]),
+            models.Index(fields=["client_operation_id"]),
+        ]
+        verbose_name = "Agent Usage Log"
+        verbose_name_plural = "Agent Usage Logs"
+
+    def __str__(self):
+        return f"{self.user.username} — {self.provider}/{self.model} — {self.status} — {self.sparks_charged} sparks"
+
+
+class AgentPlaygroundHistory(TimeStampedModel):
+    """Opt-in ciphertext only. Deleting the row fences any in-flight save."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="agent_playground_histories"
+    )
+    provider = models.CharField(max_length=50)
+    model = models.CharField(max_length=100)
+    messages_encrypted = models.TextField(blank=True, default="", editable=False)
+    revision = models.UUIDField(default=uuid.uuid4, editable=False)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["user", "provider", "model"], name="unique_playground_history")]
+
+
+class AgentGatewayOperation(TimeStampedModel):
+    """Durable execution claim: a lost lock or worker crash must not repeat inference."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    key = models.ForeignKey(AgentAPIKey, on_delete=models.CASCADE)
+    client_operation_id = models.CharField(max_length=300)
+    provider = models.CharField(max_length=50)
+    model = models.CharField(max_length=100)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["user", "key", "client_operation_id"], name="unique_agent_operation")
+        ]

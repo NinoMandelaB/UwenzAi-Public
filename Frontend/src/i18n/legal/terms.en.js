@@ -83,13 +83,16 @@ export const termsEn = {
     },
     {
       id: "4",
-      heading: "4. Personal, non-commercial use only",
+      heading: "4. Personal platform use and the developer API exception",
       blocks: [
         {
           type: "p",
-          text: "4.1. Unless you have a separate written agreement with UwenzAi, the Service is provided solely for your personal, non-commercial use.",
+          text: "4.1. The companion platform and the Service’s other non-API features are provided solely for personal, non-commercial use, unless you have a separate written agreement with UwenzAi. The developer API, its outputs and the limited ancillary developer-workspace use expressly permitted in section 11.4 are exceptions to this restriction.",
         },
-        { type: "p", text: "4.2. You may not:" },
+        {
+          type: "p",
+          text: "4.2. Except for uses expressly permitted in section 11.4 or by a separate written agreement with UwenzAi, you may not:",
+        },
         {
           type: "ul",
           items: [
@@ -99,7 +102,7 @@ export const termsEn = {
         },
         {
           type: "p",
-          text: "4.3. Limited exceptions (for example, using outputs in marketing, affiliate activities, or monetized content) are only allowed if expressly granted in prior written consent by UwenzAi. Without such written consent, all commercial use is prohibited.",
+          text: "4.3. No separate written permission is required for commercial developer API use that falls within section 11.4. Other commercial uses, including use of companion-platform outputs in marketing, affiliate activities or monetized content, remain prohibited unless UwenzAi expressly gives prior written consent. The API exception does not expand the permitted uses of the companion platform.",
         },
       ],
     },
@@ -279,6 +282,14 @@ export const termsEn = {
           type: "p",
           text: "8.9. Feedback. If you send us suggestions about the Service, we may use them without restriction and without owing you compensation.",
         },
+        {
+          type: "p",
+          text: "8.10. UwenzAi-Dev requests and optional history. The content licence in this section also covers messages and request content you submit through the UwenzAi-Dev developer workspace or inference API. We process that content to provide the requested service. If you enable saved playground history, you instruct us to store the retained conversation and include it in subsequent requests for the selected model and provider, subject to the displayed limits and the Privacy Policy. Saving is optional and is not required to use the playground. This does not expand the purposes of the licence or authorise training on your private content.",
+        },
+        {
+          type: "p",
+          text: "8.11. History controls and responsibility for submitted data. You may delete saved playground history or switch saving off using the controls for the selected model/provider. History is a limited convenience feature, not a guaranteed archive, and may be shortened by token, size or message limits. Deletion does not undo processing already carried out or remove records that may lawfully be retained as described in the Privacy Policy. Do not submit passwords, secret API keys, or personal or confidential information that you do not have authority to share with UwenzAi and the provider processing your request. Nothing in this clause limits your statutory data-protection rights or transfers UwenzAi’s own legal obligations to you.",
+        },
       ],
     },
     {
@@ -381,11 +392,23 @@ export const termsEn = {
         },
         {
           type: "p",
-          text: "11.2. Subject to these Terms, UwenzAi grants you a limited, revocable, non-exclusive, non-transferable license to access and use the Service for personal, non-commercial purposes.",
+          text: "11.2. Subject to these Terms, UwenzAi grants you a limited, revocable, non-exclusive, non-transferable licence to access and use the Service for personal, non-commercial purposes, except for the developer API permission expressly set out in section 11.4. The companion platform and its other non-API features remain limited to personal, non-commercial use.",
         },
         {
           type: "p",
-          text: "11.3. As between you and UwenzAi, UwenzAi owns or is assigned all rights, title, and interest (to the maximum extent permitted by law) in AI-generated outputs (such as messages, characters, images, and stories). UwenzAi grants you a personal, non-exclusive, non-transferable license to use such outputs for personal, non-commercial purposes, unless explicitly agreed otherwise in writing. This does not affect the rights you retain in Your Inputs under section 8.2.",
+          text: "11.3. As between you and UwenzAi, UwenzAi owns or is assigned all rights, title, and interest (to the maximum extent permitted by law) in AI-generated outputs (such as messages, characters, images, and stories). UwenzAi grants you a personal, non-exclusive, non-transferable licence to use such outputs for personal, non-commercial purposes, unless section 11.4 applies or we explicitly agree otherwise in writing. This does not affect the rights you retain in Your Inputs under section 8.2.",
+        },
+        {
+          type: "p",
+          text: "11.4. Commercial developer API use. Subject to these Terms and the applicable model and provider conditions described in section 11.5, you may use the UwenzAi-Dev inference API for personal or commercial purposes, including integration into your own applications, products and services. To the extent UwenzAi holds rights in outputs generated through that API, we grant you a non-exclusive licence to use, reproduce, modify and distribute those outputs for those purposes, including to your customers and end users. You may use the developer workspace to configure, manage and test those API integrations. Except for that expressly permitted workspace use, this exception does not permit commercial use or resale of the companion platform, its characters, companion conversations or other non-API features, and does not grant rights to UwenzAi’s software, branding or other platform assets. The other obligations in these Terms, including account security, permitted content and payment obligations, continue to apply.",
+        },
+        {
+          type: "p",
+          text: "11.5. Selected models and inference providers. Your API use and use of its outputs must also comply with the applicable licence, acceptable-use restrictions and terms for the model and inference provider used for your request. Our commercial-use permission does not override a third party’s restrictions or grant rights that UwenzAi does not hold. Check that the selected model and provider permit your intended use, including commercial use, before relying on them. Available models, versions, providers, capabilities, context limits and prices may change; a catalog listing or a previous successful request does not guarantee continuing access to the same model, version or provider. Material changes remain subject to the notice provisions in these Terms and the Privacy Policy, where applicable.",
+        },
+        {
+          type: "p",
+          text: "11.6. Relationship to the companion app. UwenzAi-Dev is a functionally separate developer offering and may be used without using the companion app’s features. It uses the same UwenzAi account and Sparks balance; charges for either offering draw on that shared balance under the applicable billing rules. This functional distinction does not create a separate account, separate contractual provider or guarantee of technical isolation. Account-wide actions, including suspension or deletion under these Terms, may affect access to both offerings. The commercial permission in section 11.4 applies only to the API, its outputs and the expressly permitted developer-workspace uses; it does not extend to the companion app. The common account, security, payment and other generally applicable provisions of these Terms continue to apply.",
         },
       ],
     },
@@ -536,6 +559,10 @@ export const termsEn = {
         {
           type: "p",
           text: "16.4. Nothing in this section affects any statutory rights you have as a consumer that cannot be excluded or limited by agreement.",
+        },
+        {
+          type: "p",
+          text: "16.5. No developer API SLA. Commercial permission for the UwenzAi-Dev inference API does not include a service-level agreement (SLA). Unless we expressly enter into a separate written SLA with you, we make no contractual commitment to any minimum uptime or availability percentage, response time, throughput, uninterrupted model or provider access, support response time, incident-resolution time, or other service level. Paid usage does not create such a commitment, and no SLA service credits are promised. You are responsible for deciding whether this service meets your operational needs and for arranging appropriate fallback and continuity measures. This clause does not remove any billing correction, refund or remedy required by applicable law or otherwise expressly provided under these Terms, and does not limit rights or obligations that cannot lawfully be excluded.",
         },
       ],
     },

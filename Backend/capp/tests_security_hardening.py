@@ -387,6 +387,26 @@ class FakeProviderSocket:
 
 @override_settings(BYOK_PRIVATE_ORIGINS=[])
 class ProviderTransportTests(SimpleTestCase):
+    def test_uwenzai_gateway_detection_is_origin_exact(self):
+        from capp.classes.byok.transport import is_uwenzai_gateway_url
+
+        # Canonical production origin matches regardless of path or port style.
+        self.assertTrue(is_uwenzai_gateway_url("https://agent-api.uwenzai.com/api/v1"))
+        self.assertTrue(is_uwenzai_gateway_url("https://agent-api.uwenzai.com/api/v1/"))
+        # Lookalikes must NOT match.
+        self.assertFalse(is_uwenzai_gateway_url("https://agent-api.uwenzai.com.evil.example/v1"))
+        self.assertFalse(is_uwenzai_gateway_url("https://api.cortecs.ai/v1"))
+        self.assertFalse(is_uwenzai_gateway_url("https://agent-api.uwenzai.com:8443/v1"))
+        self.assertFalse(is_uwenzai_gateway_url("http://agent-api.uwenzai.com/v1"))
+        self.assertFalse(is_uwenzai_gateway_url(None))
+
+        # The advertised AGENT_BASE_URL and extra origins count as the gateway.
+        with override_settings(AGENT_BASE_URL="https://agent-dev.example.test/api/v1"):
+            self.assertTrue(is_uwenzai_gateway_url("https://agent-dev.example.test/api/v1"))
+        with override_settings(BYOK_EXTRA_GATEWAY_ORIGINS=["https://gw2.example.test"]):
+            self.assertTrue(is_uwenzai_gateway_url("https://gw2.example.test/any/path"))
+            self.assertFalse(is_uwenzai_gateway_url("https://other.example.test/v1"))
+
     def test_default_policy_rejects_local_http_and_malformed_urls(self):
         for url in (
             "http://example.com/v1",
@@ -540,6 +560,20 @@ class ProviderTransportTests(SimpleTestCase):
         self.assertEqual(result["status"], "fail")
         self.assertNotIn("offline-key", "".join(logs.output))
 
+    def test_gateway_insufficient_sparks_maps_to_clear_reason(self):
+        # UwenzAi's own Agent Gateway rejects a spend beyond the remaining
+        # Sparks balance with 402 insufficient_sparks; that must surface as a
+        # dedicated reason, not a generic validation failure.
+        with mock.patch(
+            "capp.classes.byok.byok_service.OpenAI",
+            side_effect=RuntimeError(
+                "Error code: 402 - {'error': {'status': 'insufficient_sparks', "
+                "'message': 'Insufficient sparks for this request'}}"
+            ),
+        ):
+            result = BYOKService.validate_credentials("https://model.example/v1", "offline-key", "model")
+        self.assertEqual(result, {"status": "fail", "data": "insufficient_sparks"})
+
     def test_chat_completion_uses_same_guarded_sdk_path_as_validation(self):
         config = SimpleNamespace(
             api_url="https://model.example/v1", model_name="model", get_decrypted_api_key=lambda: "offline-key"
@@ -640,6 +674,21 @@ class SavedProviderKeyTests(TestCase):
             result = BYOKService.save_config(self.user, "https://new.example/v1", "new-key", "model")
             self.assertEqual(result["status"], "success")
             self.assertEqual(validate.call_args.args[1], "new-key")
+
+    def test_config_reports_uses_gateway_only_for_own_gateway_origins(self):
+        self.assertFalse(BYOKService.get_config(self.user)["data"]["uses_gateway"])
+        with mock.patch.object(BYOKService, "validate_credentials", return_value={"status": "success"}):
+            result = BYOKService.save_config(self.user, "https://agent-api.uwenzai.com/api/v1", "new-key", "model")
+        self.assertTrue(result["data"]["uses_gateway"])
+        self.assertTrue(BYOKService.get_config(self.user)["data"]["uses_gateway"])
+        # A lookalike origin must not flip the flag: the companion UI relies
+        # on it to explain that tool calls are unavailable on this endpoint.
+        with mock.patch.object(BYOKService, "validate_credentials", return_value={"status": "success"}):
+            result = BYOKService.save_config(
+                self.user, "https://agent-api.uwenzai.com.evil.example/api/v1", "new-key", "model"
+            )
+        self.assertFalse(result["data"]["uses_gateway"])
+        self.assertFalse(BYOKService.get_config(self.user)["data"]["uses_gateway"])
 
 
 class EncryptedReadTests(SimpleTestCase):

@@ -4,7 +4,13 @@ import logging
 from typing import Dict, Any
 
 from openai import OpenAI
-from capp.classes.byok.transport import ProviderPolicy, ProviderURLRejected, origin, provider_http_client
+from capp.classes.byok.transport import (
+    ProviderPolicy,
+    ProviderURLRejected,
+    is_uwenzai_gateway_url,
+    origin,
+    provider_http_client,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +105,7 @@ class BYOKService:
                     "system_prompt": obj.system_prompt,
                     "store_on_platform": obj.store_on_platform,
                     "is_active": obj.is_active,
+                    "uses_gateway": is_uwenzai_gateway_url(obj.api_url),
                 },
             }
         except Exception:
@@ -130,6 +137,7 @@ class BYOKService:
                 "system_prompt": cfg.system_prompt,
                 "store_on_platform": cfg.store_on_platform,
                 "is_active": cfg.is_active,
+                "uses_gateway": is_uwenzai_gateway_url(cfg.api_url),
             },
         }
 
@@ -191,6 +199,10 @@ class BYOKService:
                 reason = "provider_url_not_allowed"
             elif "401" in low or "authentication" in low or "invalid api key" in low or "unauthorized" in low:
                 reason = "invalid_api_key"
+            elif "insufficient_sparks" in low or "insufficient sparks" in low or "402" in low:
+                # UwenzAi's own Agent Gateway rejects a spend beyond the
+                # remaining Sparks balance with 402 insufficient_sparks.
+                reason = "insufficient_sparks"
             elif "404" in low or "not found" in low or "model" in low:
                 reason = "model_not_found"
             elif "connection" in low or "timeout" in low or "network" in low or "connect" in low:

@@ -21,6 +21,10 @@ The platform is built and maintained by **UwenzAi Limited**, based in Nairobi, K
 - **Deep character customization** — create fully custom AI companions: gender, age, occupation, personality traits, hobbies, tone of voice, relationship style, clothing style, and detailed appearance (skin tone, eye color, hairstyle/length/color, body type, beard style, and more) across **realistic, anime, and cartoon** visual styles.
 - **Persistent memory** — conversations are summarized and stored per character using a `pgvector`-backed semantic memory layer, so companions recall context across sessions instead of starting from zero every time.
 - **Proactive chat** — companions can be configured to send a follow-up message after a period of inactivity, keeping the conversation alive.
+- **Agentic reminders** — characters can schedule, edit and deliver reminders themselves through a `create_reminder` tool, with a Celery Beat delivery pipeline and per-user limits.
+- **In-chat memory editor** — review and edit what a character remembers about you, directly from the chat.
+- **Advanced feature toggles** — per-user, backend-enforced switches for optional chat features (deep thinking, web search, proactive messages), default off.
+- **UwenzAi-Dev (Agent Gateway)** — an OpenAI-compatible inference API for developers: mint API keys (shown once, stored as verification hashes), optionally cap each key with a monthly Sparks budget, and call six configurable providers — Cortecs, Mistral AI, Fikra, Inceptron, AKI.IO, OVHcloud — with automatic routing to the cheapest provider, all metered through the same Sparks balance with scoped idempotency for usage accounting.
 - **Multi-provider AI backend** — both chat generation and memory embeddings are routed through Cortecs first, with automatic fallback to Mistral, keeping the platform resilient to any single provider's downtime.
 - **Bilingual UI** — the frontend is fully localized in **English** and **Kiswahili**, with automatic language detection for incoming messages.
 - **Guest mode** — visitors can chat immediately without creating an account, using a limited free allowance of Sparks credits tied to a local session ID.
@@ -35,8 +39,9 @@ The platform is built and maintained by **UwenzAi Limited**, based in Nairobi, K
 **Backend**
 - Django 6 + Django REST Framework
 - Django Channels (WebSockets) with Redis-backed channel layer
-- Celery for background tasks, split across isolated `general` / `images` queues
+- Celery for background tasks, split across isolated `general` / `images` queues, plus Celery Beat for reminder delivery and daily agent-catalog sync
 - PostgreSQL with the `pgvector` extension for semantic memory
+- Agent Gateway: OpenAI-compatible multi-provider inference API with Sparks metering, per-key budgets and idempotent usage accounting (`capp/classes/agent_gateway/`)
 - Media in a private S3-compatible object storage bucket shared by the web and worker services
 - Dependencies compiled with `pip-compile` from `requirements.in`
 - JWT auth (`djangorestframework-simplejwt`) + Google OAuth
@@ -118,6 +123,10 @@ Jukwaa hili linajengwa na kudumishwa na **UwenzAi Limited**, kampuni yenye makaz
 - **Ubinafsishaji wa kina wa wahusika** — unda wahusika wa AI wa kipekee kabisa: jinsia, umri, kazi, sifa za utu, mambo anayopenda, sauti ya mazungumzo, mtindo wa uhusiano, mtindo wa mavazi, na maelezo ya kina ya sura (rangi ya ngozi, rangi ya macho, mtindo/urefu/rangi ya nywele, umbo la mwili, mtindo wa ndevu, na zaidi) katika mitindo ya kuona ya **halisi, anime, na katuni**.
 - **Kumbukumbu ya kudumu** — mazungumzo yanafupishwa na kuhifadhiwa kwa kila mhusika kwa kutumia mfumo wa kumbukumbu wa kisemantiki unaotegemea `pgvector`, hivyo wahusika hukumbuka muktadha kati ya vipindi vya mazungumzo badala ya kuanza kutoka sifuri kila wakati.
 - **Mazungumzo shirikishi (proactive chat)** — wahusika wanaweza kusanidiwa kutuma ujumbe wa kufuatilia baada ya muda wa kutokuwepo, kuendeleza mazungumzo hai.
+- **Vikumbusho vya kiamri (agentic reminders)** — wahusika wenyewe wanaweza kupanga, kuhariri na kutuma vikumbusho kupitia zana ya `create_reminder`, kwa mfumo wa Celery Beat wa kusambaza na mipaka kwa kila mtumiaji.
+- **Kihariri cha kumbukumbu ndani ya mazungumzo** — kagua na uhariri kile mhusika anakikumbuka kuhusu wewe, moja kwa moja kutoka kwenye mazungumzo.
+- **Swichi za vipengele vya ziada** — swichi za kila mtumiaji zinazotekelezwa upande wa seva kwa vipengele vya hiari vya mazungumzo (kufikiri kwa kina, utafuti wa tovuti, ujumbe wa kuongoza), zikiwa zimezimwa kwa chaguo-msingi.
+- **UwenzAi-Dev (Lango la Wataalamu / Agent Gateway)** — API ya uamuzi inayofanana na ya OpenAI kwa waendelezaji: tengeneza funguo za API (zinaonyeshwa mara moja, huhifadhiwa kama alama za uthibitisho), weka kikomo cha bajeti ya kila mwezi ya Cheche kwa kila funguo kwa hiari, na itumie kwa watoa huduma sita wanaosanidiwa — Cortecs, Mistral AI, Fikra, Inceptron, AKI.IO, OVHcloud — ikiwa na uelekezaji wa kiotomatiki kwa mtoa huduma wa bei nafuu zaidi, vyote vikipimwa kwa salio ileile ya Cheche kwa kutumia uhakiki wa kitambulisho wa shughuli (idempotency).
 - **Mfumo wa AI wa watoa huduma wengi** — uzalishaji wa majibu ya mazungumzo na uwakilishi wa kihesabu wa kumbukumbu vyote hupitishwa kwa Cortecs kwanza, vikiwa na urejeshaji wa kiotomatiki kwa Mistral, hivyo jukwaa linakuwa thabiti hata ikiwa mtoa huduma mmoja ana tatizo.
 - **Kiolesura cha lugha mbili** — programu ya mtumiaji imetafsiriwa kikamilifu kwa **Kiingereza** na **Kiswahili**, ikiwa na utambuzi wa kiotomatiki wa lugha kwa ujumbe unaoingia.
 - **Hali ya mgeni (guest mode)** — wageni wanaweza kuzungumza mara moja bila kuunda akaunti, wakitumia kiwango kidogo cha bure cha Cheche kilichounganishwa na kitambulisho cha kipindi cha kivinjari.
@@ -132,8 +141,9 @@ Jukwaa hili linajengwa na kudumishwa na **UwenzAi Limited**, kampuni yenye makaz
 **Backend (Nyuma ya Mfumo)**
 - Django 6 + Django REST Framework
 - Django Channels (WebSockets) na tabaka la kanali linalotegemea Redis
-- Celery kwa kazi za nyuma
+- Celery kwa kazi za nyuma, pamoja na Celery Beat kwa kusambaza vikumbusho na usawazishaji wa kila siku wa orodha ya mifano
 - PostgreSQL yenye programu-jalizi ya `pgvector` kwa kumbukumbu ya kisemantiki
+- Lango la Wataalamu (Agent Gateway): API ya uamuzi inayofanana na ya OpenAI kwa watoa huduma wengi, ikiwa na upimaji wa Cheche, bajeti kwa kila funguo, na uhasibu wa matumizi wenye uhakiki wa kitambulisho (`capp/classes/agent_gateway/`)
 - Uthibitisho wa JWT (`djangorestframework-simplejwt`) + Google OAuth
 - Uvicorn (ASGI) kwa uendeshaji wa uzalishaji
 - Muunganiko wa AI/LLM: uelekezaji wa Cortecs kwa mazungumzo na uwakilishi wa kihesabu, akiba ya Mistral (`mistral-common`), mteja unaofanana na OpenAI, `tiktoken`

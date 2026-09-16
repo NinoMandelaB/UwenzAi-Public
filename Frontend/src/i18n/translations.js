@@ -5,8 +5,17 @@ export const translations = {
       body: "UwenzAi contains adult content and is intended for users aged 18 and over. Please confirm that you are at least 18 years old to continue.",
       confirm: "I am 18 or older – enter",
       decline: "I am under 18 – leave",
-      legal:
-        "By entering, you agree to our Terms of Service and confirm that adult content is legal in your jurisdiction.",
+      legalLead: "By entering, you agree to our",
+      termsLink: "Terms of Service",
+      and: "and",
+      privacyLink: "Privacy Policy",
+      legalTail:
+        ", and confirm that adult content is legal in your jurisdiction.",
+    },
+    notFound: {
+      title: "Page not found",
+      body: "The page you are looking for does not exist or may have been moved.",
+      backHome: "Back to UwenzAi",
     },
     chat: {
       messageCount: "{count} / {limit} characters",
@@ -423,12 +432,16 @@ export const translations = {
         "BYOK disabled — you are now using the platform's default model.",
       inactiveHint:
         "Your API key is saved but BYOK is currently disabled. Toggle it on to use your own model, or remove it to delete your credentials.",
+      gatewayToolsHint:
+        "This endpoint is the UwenzAi API. It does not support tool calls yet, so web search, scheduling reminders in chat, and profile updates are unavailable while it is selected. You can still manage reminders from the Reminders tab.",
 
       // Errors
       errorAllFieldsRequired:
         "API URL, API Key, and Model Name are all required.",
       errorInvalidKey:
         "The API key was rejected (401). Please check it and try again.",
+      errorInsufficientSparks:
+        "Not enough sparks left on this gateway key (402). Top up your sparks or lower the request.",
       errorModelNotFound: "Model not found (404). Please check the model name.",
       errorConnection:
         "Could not reach that API URL. Please check the address and try again.",
@@ -1253,6 +1266,80 @@ export const translations = {
       gallery_image_uploaded_successfully: "Image uploaded successfully.",
       gallery_image_deleted_successfully: "Image deleted successfully.",
     },
+    uwenzaiDev: {
+      title: "UwenzAi-Dev",
+      experimental: "(experimental)",
+      subtitle: "Agent Gateway for external AI agents",
+      experimentalNotice: "Experimental Feature",
+      experimentalNoticeDetail:
+        "This feature is experimental. API shape and pricing may change without notice.",
+      baseUrlTitle: "Base URL",
+      baseUrlDescription:
+        "Use this URL as the base for API requests from your agent.",
+      exampleTitle: "Example request",
+      exampleKeyEnv:
+        "Run 'export UWENZAI_KEY=...' with your key before pasting the command.",
+      modelsTitle: "Models & Pricing",
+      noModels: "No models are currently available. Check back soon.",
+      thModel: "Model",
+      thProvider: "Provider",
+      thNativePrice: "Provider price / 1M (in/out)",
+      thSparksInput: "Sparks in / 1M",
+      thSparksOutput: "Sparks out / 1M",
+      pricingNote:
+        "Spark prices include the {markup}% markup and the current exchange rate. 1 spark = KES {sparkValue}.",
+      pricingFailed:
+        "Could not load the model pricing. Please refresh the page.",
+      consentFailed:
+        "Could not check your consent status. Please refresh the page.",
+      loginRequired: "Please log in to use UwenzAi-Dev.",
+      keysTitle: "API Keys",
+      createKey: "Create Key",
+      createFirstKey: "Create Your First Key",
+      noKeys: "You have no API keys yet. Create one to get started.",
+      unnamedKey: "Unnamed Key",
+      keyHint: "Key hint",
+      created: "Created",
+      lastUsed: "Last used",
+      active: "Active",
+      revoked: "Revoked",
+      expired: "Expired",
+      budget: "Budget",
+      copyHint: "Copy hint",
+      revoke: "Revoke",
+      confirmRevoke:
+        "Are you sure you want to revoke this key? This cannot be undone.",
+      label: "Label",
+      labelPlaceholder: "e.g., My Hermes Agent, Production",
+      labelRequired: "Please enter a label for this key.",
+      fullKey: "Full Key",
+      keyWarning:
+        "This is your only chance to see this key. Copy it now and store it securely.",
+      keyWarningRepeat: "This key will never be shown again.",
+      create: "Create",
+      creating: "Creating...",
+      createFailed: "Failed to create key. Please try again.",
+      revokeFailed: "Failed to revoke key. Please try again.",
+      loadFailed: "Failed to load data. Please refresh the page.",
+      usageTitle: "Usage Summary",
+      totalCalls: "Total Calls",
+      totalSparks: "Total Sparks",
+      totalInputTokens: "Input Tokens",
+      totalOutputTokens: "Output Tokens",
+      loading: "Loading...",
+      consentTitle: "Before you continue — UwenzAi-Dev (experimental)",
+      consentIllegal:
+        "I will not use this feature for anything illegal according to the jurisdiction of Kenya, the country I am currently in, and international law.",
+      consentGateway:
+        "I understand that UwenzAi is solely working as a gateway and does not guarantee any availability or latency.",
+      consentSparks:
+        "I understand that this service will use Sparks (1 Spark = KES {sparkValue}), and that I will be charged per token usage.",
+      consentPricing:
+        "The cost shown is the actual provider price transferred to KES plus a {markupPercent}% surcharge.",
+      consentAccept: "I confirm and accept",
+      consentDecline: "Cancel",
+      consentLoading: "Confirming...",
+    },
   },
 
   sw: {
@@ -1261,8 +1348,17 @@ export const translations = {
       body: "UwenzAi ina maudhui ya watu wazima na imelenga watumiaji wenye umri wa miaka 18 na zaidi. Tafadhali thibitisha kuwa una angalau miaka 18 ili kuendelea.",
       confirm: "Nina miaka 18 au zaidi – ingia",
       decline: "Nina chini ya miaka 18 – ondoka",
-      legal:
-        "Kwa kuingia, unakubali Masharti yetu ya Huduma na kuthibitisha kuwa maudhui ya watu wazima ni halali katika eneo lako.",
+      legalLead: "Kwa kuingia, unakubali",
+      termsLink: "Masharti yetu ya Huduma",
+      and: "na",
+      privacyLink: "Sera yetu ya Faragha",
+      legalTail:
+        ", na kuthibitisha kuwa maudhui ya watu wazima ni halali katika eneo lako.",
+    },
+    notFound: {
+      title: "Ukurasa haupatikani",
+      body: "Ukurasa unaotafuta haupo au labda umehamishwa.",
+      backHome: "Rudi UwenzAi",
     },
     chat: {
       messageCount: "Herufi {count} / {limit}",
@@ -1676,11 +1772,15 @@ export const translations = {
         "BYOK imezimwa — sasa unatumia modeli ya msingi ya jukwaa.",
       inactiveHint:
         "Ufunguo wako wa API umehifadhiwa lakini BYOK imezimwa sasa. Iwashe ili kutumia modeli yako mwenyewe, au iondoe kufuta vitambulisho vyako.",
+      gatewayToolsHint:
+        "Mwisho huu ni API ya UwenzAi. Haipokei miito ya zana (tool calls) kwa sasa, hivyo utafutaji wa wavuti, kuweka vikumbusho ndani ya soga, na masasisho ya wasifu havipatikani ukiitumia. Bado unaweza kudhibiti vikumbusho kutoka ukurasa wa Vikumbusho.",
 
       errorAllFieldsRequired:
         "URL ya API, Ufunguo wa API, na Jina la Modeli vyote vinahitajika.",
       errorInvalidKey:
         "Ufunguo wa API ulikataliwa (401). Tafadhali ukague na jaribu tena.",
+      errorInsufficientSparks:
+        "Sparks hazitoshi kwa ufunguo huu wa lango (402). Jaza sparks zako au punguza ombi.",
       errorModelNotFound:
         "Modeli haikupatikana (404). Tafadhali kagua jina la modeli.",
       errorConnection:
@@ -2499,6 +2599,80 @@ export const translations = {
       hobby_created_successfully: "Burudani imeundwa kwa mafanikio.",
       gallery_image_uploaded_successfully: "Picha imepakiwa kwa mafanikio.",
       gallery_image_deleted_successfully: "Picha imefutwa kwa mafanikio.",
+    },
+    uwenzaiDev: {
+      title: "UwenzAi-Dev",
+      experimental: "(experimental)",
+      subtitle: "Agent Gateway kwa ajili ya agents za AI ya nje",
+      experimentalNotice: "Kipengele cha Majaribio",
+      experimentalNoticeDetail:
+        "Kipengele hiki ni cha majaribio. Mtindo wa API na bei zinaweza kubadiliwa bila ya arifu ya awali.",
+      baseUrlTitle: "URL Ya Msingi",
+      baseUrlDescription:
+        "Tumia URL hii kama msingi wa maombi ya API kutoka agent yako.",
+      exampleTitle: "Mfano wa ombi",
+      exampleKeyEnv:
+        "Endesha 'export UWENZAI_KEY=...' na ufunguo wako kabla ya kutumia amri.",
+      modelsTitle: "Modeli na Bei",
+      noModels: "Hakuna modeli zinazopatikana kwa sasa. Rudi baadaye.",
+      thModel: "Modeli",
+      thProvider: "Msambazaji",
+      thNativePrice: "Bei ya msambazaji / 1M (pembejeo/pato)",
+      thSparksInput: "Sparks pembejeo / 1M",
+      thSparksOutput: "Sparks pato / 1M",
+      pricingNote:
+        "Bei za sparks zinajumuisha markup ya {markup}% na kiwango cha sasa cha sarafu. Spark 1 = KES {sparkValue}.",
+      pricingFailed:
+        "Bei za modeli haikuweza kupakiwa. Tafadhali tafuta ukurasa upya.",
+      consentFailed:
+        "Hali ya ridhaa yako haikuweza kupimwa. Tafadhali tafuta ukurasa upya.",
+      loginRequired: "Tafadhali ingia ili kutumia UwenzAi-Dev.",
+      keysTitle: "Vifunguo vya API",
+      createKey: "Unda Kifunguo",
+      createFirstKey: "Unda Kifunguo Chako cha Kwanza",
+      noKeys: "Huna vifunguo vya API bado. Unda moja kuanzia.",
+      unnamedKey: "Kifunguo Kisichojulikana",
+      keyHint: "Kioko cha kifunguo",
+      created: "Imeundwa",
+      lastUsed: "Ilitumiwa mwisho",
+      active: "Inatumiwa",
+      revoked: "Imebatiliwa",
+      expired: "Imekwisha",
+      budget: "Bajeti",
+      copyHint: "Nakili kioko",
+      revoke: "Batili",
+      confirmRevoke:
+        "Una hakika unataka kubatili kifunguo hiki? Hii haipunguki.",
+      label: "Jina",
+      labelPlaceholder: "mf. Agent yangu ya Hermes, Uzalishaji",
+      labelRequired: "Tafadhali ingiza jina kwa kifunguo hiki.",
+      fullKey: "Kifunguo Kamli",
+      keyWarning:
+        "Hii ni nafasi yako ya pekee kuona kifunguo hiki. Nakili na hifadhi kwa ushirikiano.",
+      keyWarningRepeat: "Kifunguo hiki hakitokea tena.",
+      create: "Unda",
+      creating: "Inaundwa...",
+      createFailed: "Haikufaulu kuunda kifunguo. Tafadhali jaribu tena.",
+      revokeFailed: "Haikufaulu kubatili kifunguo. Tafadhali jaribu tena.",
+      loadFailed: "Haikufaulu kupakia data. Tafadhali refresh ukurasa.",
+      usageTitle: "Muhtasari wa Matumizi",
+      totalCalls: "Maombi Yote",
+      totalSparks: "Sparks Yote",
+      totalInputTokens: "Vipengele vya Maombi",
+      totalOutputTokens: "Vipengele vya Majibu",
+      loading: "Inapakia...",
+      consentTitle: "Kabla ya kuendelea — UwenzAi-Dev (majaribio)",
+      consentIllegal:
+        "Sitatumia kipengele hiki kwa chochote cha kiharamu kulingana na sheria za Kenya, nchi niliyo kwenye sasa, na sheria za kimataifa.",
+      consentGateway:
+        "Naelewa kwamba UwenzAi ni lango tu na huhakikisha upatikanaji au kasi yoyote.",
+      consentSparks:
+        "Naelewa kwamba huduma hii itatumia Sparks (1 Spark = KES {sparkValue}), na nitalipwa kulingana na matumizi ya tokeni.",
+      consentPricing:
+        "Bei iliyoonyeshwa ni bei halisi ya mtoa huduma iliyobadilishwa kuwa KES pamoja na ongezeko la {markupPercent}%.",
+      consentAccept: "Nakubali na kuthibitisha",
+      consentDecline: "Ghairi",
+      consentLoading: "Inathibitisha...",
     },
   },
 };

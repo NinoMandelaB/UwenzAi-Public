@@ -18,7 +18,7 @@ from capp.classes.search.open_url import BlockedURLError
 from capp.classes.search.query_builder import build_search_query
 from capp.classes.search.tool_loop import run_search_tool_calls
 from capp.constants import BYOK_MESSAGE_PAIR_COST, MESSAGE_PAIR_COST
-from capp.models import BillingReservation, Message
+from capp.models import BillingReservation, Message, UserBYOKConfig
 from capp.tests_prompt_budget import ByteTokenizer
 from capp.tests_reminder_durability import ReminderRegressionBase, tool
 
@@ -580,3 +580,92 @@ class CortecsSearchFollowupTests(SearchFollowupTaskMixin, TestCase):
 
 class BYOKSearchFollowupTests(SearchFollowupTaskMixin, TestCase):
     use_byok = True
+
+
+class GatewayBYOKSearchFollowupTests(ReminderRegressionBase, TestCase):
+    """BYOK pointed at UwenzAi's own Agent Gateway: the gateway has no tool
+    calling support, so search/reminder/profile tools are not offered and the
+    chat must run as a plain completion even when search is enabled."""
+
+    def setUp(self):
+        super().setUp()
+        FeaturePreferences.update(
+            self.user, {"websearch": True, "reminders": True, "deepthink": False, "memory_editor": False}
+        )
+        self.conversation.web_search_enabled = True
+        self.conversation.save(update_fields=["web_search_enabled"])
+        UserBYOKConfig.objects.create(
+            user=self.user,
+            api_url="https://agent-api.uwenzai.com/api/v1",
+            api_key_encrypted="offline-only",
+            model_name="offline",
+            is_active=True,
+        )
+        self.prompt = [
+            {"role": "system", "content": "Offline platform instructions."},
+            {"role": "assistant", "content": "Earlier unverified event suggestion."},
+            {"role": "system", "content": "=== SAFETY CHECK (System) ===\nOffline safety tail."},
+            {"role": "user", "content": "Any question at all? Today: 2026-09-14."},
+        ]
+        self.stack.enter_context(mock.patch.object(PromptBuilder, "build_messages", return_value=self.prompt))
+        self.stack.enter_context(
+            mock.patch("capp.classes.ai.token_utils.get_tokenizer_for_model", return_value=ByteTokenizer())
+        )
+        self.search = mock.Mock()
+        self.search.name = "offline-search"
+        self.stack.enter_context(mock.patch.object(tasks, "get_search_provider", return_value=self.search))
+        self.stack.enter_context(
+            mock.patch("capp.classes.search.tool_loop.get_search_provider", return_value=self.search)
+        )
+        for name in ("_send_ai_message", "_send_system_message", "chain_sub_tasks"):
+            self.stack.enter_context(mock.patch.object(tasks, name))
+        self.stack.enter_context(mock.patch.object(tasks.ProactiveChatService, "reset_counter"))
+
+    @staticmethod
+    def response(content, calls=None):
+        return {
+            "id": "offline-gateway-reply",
+            "choices": [
+                {
+                    "finish_reason": "tool_calls" if calls else "stop",
+                    "message": {"content": content, "tool_calls": calls or []},
+                }
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        }
+
+    def test_gateway_byok_sends_plain_completion_without_tools(self):
+        source = self.source()
+        balance = self.balance()
+        with mock.patch.object(
+            tasks.BYOKService, "chat_completion", return_value=self.response("Plain gateway reply.")
+        ) as chat:
+            tasks.process_ai_response(str(self.conversation.pk), str(source.pk))
+        self.assertEqual(chat.call_count, 1)
+        self.assertNotIn("tools", chat.call_args.kwargs)
+        self.search.search.assert_not_called()
+        reply = Message.objects.get(client_operation_id=result_key(str(source.pk)), sender_type="ai")
+        self.assertEqual(reply.content, "Plain gateway reply.")
+        self.assertEqual(BillingReservation.objects.get(idempotency_key=str(source.pk)).status, "settled")
+        self.assertEqual(self.balance(), balance - BYOK_MESSAGE_PAIR_COST)
+
+    def test_non_gateway_byok_still_offers_search_tools(self):
+        from capp.classes.search.base import SearchResult
+
+        UserBYOKConfig.objects.filter(user=self.user).update(api_url="https://provider.invalid/v1")
+        self.search.search.return_value = [
+            SearchResult("Example concert", "https://events.example.test/concert", "Example concert details.")
+        ]
+        source = self.source()
+        with mock.patch.object(
+            tasks.BYOKService,
+            "chat_completion",
+            side_effect=[
+                self.response("Let me grab the exact details for you.", [tool("web_search", {"query": "concert"})]),
+                self.response("Example concert: 12 September 2026, 18:30, Example Hall, Bern."),
+            ],
+        ) as chat:
+            tasks.process_ai_response(str(self.conversation.pk), str(source.pk))
+        self.assertEqual(chat.call_count, 2, "tool preamble must be followed by a final answer")
+        self.assertIn("tools", chat.call_args_list[0].kwargs)
+        self.assertEqual(BillingReservation.objects.get(idempotency_key=str(source.pk)).status, "settled")

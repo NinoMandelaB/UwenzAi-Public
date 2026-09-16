@@ -2,12 +2,12 @@
 
 import { NavLink } from "react-router-dom";
 import { useLanguage } from "../context/LanguageContext";
-import { NAV_ITEMS } from "../utils/navItems";
+import { BOTTOM_NAV_ITEMS } from "../utils/navItems";
 import NavUnreadBadge from "./NavUnreadBadge";
 
 export default function BottomNav() {
   const { t } = useLanguage();
-  const navItems = NAV_ITEMS(t);
+  const navItems = BOTTOM_NAV_ITEMS(t);
 
   return (
     <nav
@@ -17,7 +17,7 @@ export default function BottomNav() {
         backgroundColor: "var(--color-card-soft)",
       }}
     >
-      <div className="mx-auto flex h-[68px] max-w-md items-center justify-around px-2 py-2">
+      <div className="mx-auto flex h-[68px] max-w-md items-center justify-around gap-0.5 px-1 py-2">
         {navItems.map((item) => {
           const Icon = item.icon;
           return (
@@ -26,7 +26,7 @@ export default function BottomNav() {
               to={item.to}
               end={item.to === "/dashboard" || item.to === "/chats"}
               className={({ isActive }) =>
-                `flex min-w-0 flex-col items-center justify-center gap-1 rounded-2xl px-3 py-2 text-[11px] transition hover:opacity-90 ${
+                `flex min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-2xl px-1 py-2 text-[10px] transition hover:opacity-90 ${
                   isActive ? "font-medium" : ""
                 }`
               }
@@ -43,7 +43,9 @@ export default function BottomNav() {
                 <Icon size={19} strokeWidth={2.2} />
                 {item.to === "/chats" && <NavUnreadBadge />}
               </span>
-              <span className="truncate">{item.label}</span>
+              <span className="w-full truncate text-center">
+                {item.shortLabel || item.label}
+              </span>
             </NavLink>
           );
         })}

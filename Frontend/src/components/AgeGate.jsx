@@ -16,10 +16,18 @@
 //     and not persisting long-term also avoids implying we track guest age.
 //   - Declining sends the guest away from the app entirely (Google), rather
 //     than rendering a dead-end page inside the app.
+//   - Legal pages (/terms, /privacy, /responsible-use, /subprocessors) bypass
+//     the gate: the gate's own legal line links to them, and a visitor must be
+//     able to read the policies BEFORE consenting to anything. The pages are
+//     plain text, so no adult content is exposed by letting them through.
 
 import { useEffect, useState } from "react";
+import { Link, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useLanguage } from "../context/LanguageContext";
+
+// Routes a visitor can read without first passing the 18+ gate.
+const LEGAL_PATH_RE = /^\/(terms|privacy|responsible-use|subprocessors)(\/|$)/;
 
 // Keyed per session; the value itself is meaningless, presence = confirmed.
 const STORAGE_KEY = "age_verified";
@@ -30,6 +38,7 @@ const EXIT_URL = "https://www.google.com";
 export default function AgeGate({ children }) {
   const { isAuthenticated, isLoading } = useAuth();
   const { t } = useLanguage();
+  const { pathname } = useLocation();
 
   // Initialize from storage so a confirming guest never sees the gate again
   // within this session, even across reloads.
@@ -64,7 +73,7 @@ export default function AgeGate({ children }) {
     return null;
   }
 
-  if (isAuthenticated || confirmed) {
+  if (isAuthenticated || confirmed || LEGAL_PATH_RE.test(pathname)) {
     return children;
   }
 
@@ -121,7 +130,25 @@ export default function AgeGate({ children }) {
           </button>
         </div>
 
-        <p className="mt-4 text-xs theme-text-muted">{t("ageGate.legal")}</p>
+        <p className="mt-4 text-xs theme-text-muted">
+          {t("ageGate.legalLead")}{" "}
+          <Link
+            to="/terms"
+            className="underline hover:opacity-80"
+            style={{ color: "var(--color-accent)" }}
+          >
+            {t("ageGate.termsLink")}
+          </Link>{" "}
+          {t("ageGate.and")}{" "}
+          <Link
+            to="/privacy"
+            className="underline hover:opacity-80"
+            style={{ color: "var(--color-accent)" }}
+          >
+            {t("ageGate.privacyLink")}
+          </Link>
+          {t("ageGate.legalTail")}
+        </p>
       </div>
     </div>
   );

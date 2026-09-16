@@ -7,6 +7,8 @@ from django.db.models import Q
 from django.utils import timezone
 
 from capp.models import (
+    AgentPlaygroundHistory,
+    AgentAPIKey,
     BillingReservation,
     Character,
     CharacterFlag,
@@ -35,6 +37,8 @@ def erase_private_content(user):
     from capp.classes.auth.erasure_audit import scrub_audit_snapshots
 
     scrub_audit_snapshots(user)
+    AgentPlaygroundHistory.objects.filter(user=user).delete()
+    AgentAPIKey.objects.filter(user=user).update(is_active=False)
     for character in Character.objects.select_for_update().filter(created_by=user):
         if character.is_public:
             # Shared fictional content is functionally needed, creator-only

@@ -276,6 +276,76 @@ class BillingReservationService:
         logger.info("Settled reservation %s (%s)", locked.reservation_id, reason or "no reason given")
         return locked
 
+    @classmethod
+    def settle_actual(
+        cls,
+        reservation,
+        *,
+        actual_amount_sparks: int,
+        reason: str = None,
+    ) -> BillingReservation:
+        """
+        Settle a reservation at the actual usage amount, crediting back the
+        difference between the reserved estimate and the actual cost.
+
+        If actual < reserved: credits back (reserved - actual) through the
+        existing locking primitives (lock_spark_pool + credit_locked), then
+        marks the reservation SETTLED. The user is charged only the actual amount.
+
+        If actual >= reserved: settles at the reserved amount (no extra charge
+        beyond what was already debited; the difference is a reconciliation loss).
+
+        Never silently charges more than the reserved amount.
+        """
+        reservation_id = getattr(reservation, "pk", reservation)
+
+        with transaction.atomic():
+            locked = cls._lock(reservation_id)
+
+            if locked.status == BillingReservation.Status.SETTLED:
+                return locked
+            if locked.status != BillingReservation.Status.RESERVED:
+                raise InvalidTransition(
+                    f"Cannot settle_actual a {locked.status} reservation",
+                    reservation_id=str(reservation_id),
+                    status=locked.status,
+                )
+
+            reserved_amount = int(locked.amount_sparks)
+            actual = int(actual_amount_sparks)
+
+            credited_user = None
+            credited_guest = None
+
+            if actual < reserved_amount:
+                credit_amount = reserved_amount - actual
+                credited_user, credited_guest = cls._credit_back_partial(locked, credit_amount)
+
+            locked.status = BillingReservation.Status.SETTLED
+            locked.settled_at = timezone.now()
+            locked.settlement_reason = reason or f"actual={actual}, reserved={reserved_amount}"
+            locked.save(
+                update_fields=[
+                    "status",
+                    "settled_at",
+                    "settlement_reason",
+                    "refund_spark_transaction",
+                    "updated_at",
+                ]
+            )
+
+        if credited_user is not None or credited_guest is not None:
+            cls._push_balance_after_commit(credited_user, credited_guest)
+
+        logger.info(
+            "Settled reservation %s at actual=%d (reserved=%d) (%s)",
+            locked.reservation_id,
+            actual,
+            reserved_amount,
+            reason or "no reason given",
+        )
+        return locked
+
     # ------------------------------------------------------------------
     # refund
     # ------------------------------------------------------------------
@@ -371,6 +441,44 @@ class BillingReservationService:
 
         quota = lock_guest_quota(reservation.guest_identity.owner_key)
         credit_locked(quota, amount)
+        return None, reservation.guest_identity
+
+    @classmethod
+    def _credit_back_partial(cls, reservation, credit_amount: int) -> tuple:
+        """
+        Credit back a partial amount (less than the full reservation).
+        Used by settle_actual to release the difference between reserved and actual.
+
+        Returns ``(user, guest_identity)`` whose balance was credited.
+        """
+        beneficiary = reservation.user
+        if beneficiary is None and reservation.claimed_by_id is not None:
+            beneficiary = reservation.claimed_by
+
+        if beneficiary is not None:
+            pool = lock_spark_pool(beneficiary)
+            balance_before = int(pool.sparks)
+            balance_after = credit_locked(pool, credit_amount)
+
+            reservation.refund_spark_transaction = SparkTransaction.objects.create(
+                spark_pool=pool,
+                user=beneficiary,
+                entry_type=SparkTransaction.EntryType.CREDIT,
+                source=SparkTransaction.SourceChoices.REFUND,
+                spark_amount=credit_amount,
+                sparks_before=balance_before,
+                sparks_after=balance_after,
+                description=f"Partial refund for {reservation.feature.replace('_', ' ')}",
+                metadata={
+                    "reservation_id": str(reservation.reservation_id),
+                    "credit_amount": credit_amount,
+                    "type": "partial_settle",
+                },
+            )
+            return beneficiary, None
+
+        quota = lock_guest_quota(reservation.guest_identity.owner_key)
+        credit_locked(quota, credit_amount)
         return None, reservation.guest_identity
 
     # ------------------------------------------------------------------

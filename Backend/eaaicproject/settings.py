@@ -2,6 +2,7 @@
 Django settings for eaaicproject project.
 """
 
+import json
 import os
 import ipaddress
 from urllib.parse import urlsplit
@@ -175,6 +176,155 @@ MISTRAL_EMBED_BASE_URL = os.getenv("MISTRAL_EMBED_BASE_URL", "https://api.mistra
 MISTRAL_MODEL = os.getenv("MISTRAL_MODEL")
 MISTRAL_EMBED_MODEL = os.getenv("MISTRAL_EMBED_MODEL")
 MISTRAL_TOKENIZER_MODEL = os.getenv("MISTRAL_TOKENIZER_MODEL")
+
+# ------------------------------------------------------------------------------
+# Agent Gateway (dedicated provider credentials — NOT the companion-app keys)
+# ------------------------------------------------------------------------------
+# These are SEPARATE keys from CORTECS_API_KEY / MISTRAL_API_KEY above.
+# Companion-app usage must never be billed to or mixed with agent gateway usage.
+# If the dedicated key for the selected provider is missing, the gateway returns
+# 503 (provider_not_configured) — it never falls back to the companion keys.
+CORTECS_UWENZAI_AGENT_API_KEY = os.getenv("CORTECS_UWENZAI_AGENT_API_KEY")
+CORTECS_UWENZAI_AGENT_BASE_URL = os.getenv("CORTECS_UWENZAI_AGENT_BASE_URL", "https://api.cortecs.ai/v1")
+# Failed API-key lookup limiter (AgentGatewayAuthentication). Caps unthrottled
+# SHA-256 + DB lookup work from one client address; see auth.py. 0 disables.
+AGENT_AUTH_FAILURE_LIMIT = int(os.getenv("AGENT_AUTH_FAILURE_LIMIT", "20"))
+AGENT_AUTH_FAILURE_WINDOW_SECONDS = int(os.getenv("AGENT_AUTH_FAILURE_WINDOW_SECONDS", "900"))
+# Server-side cap for the optional per-key monthly Spark budget a developer
+# may set at key creation (None = unlimited key budget).
+AGENT_KEY_MAX_MONTHLY_BUDGET = int(os.getenv("AGENT_KEY_MAX_MONTHLY_BUDGET", "1000000"))
+# Mistral (direct, dedicated key for agent gateway)
+MISTRAL_UWENZAI_AGENT_API_KEY = os.getenv("MISTRAL_UWENZAI_AGENT_API_KEY")
+MISTRAL_UWENZAI_AGENT_BASE_URL = os.getenv("MISTRAL_UWENZAI_AGENT_BASE_URL", "https://api.mistral.ai/v1")
+# Fikra API (Kenyan AI provider, dedicated key)
+FIKRA_UWENZAI_AGENT_API_KEY = os.getenv("FIKRA_UWENZAI_AGENT_API_KEY")
+FIKRA_UWENZAI_AGENT_BASE_URL = os.getenv("FIKRA_UWENZAI_AGENT_BASE_URL", "https://api.fikraapi.co.ke/v1")
+# Inceptron (dedicated key)
+INCEPTRON_UWENZAI_AGENT_API_KEY = os.getenv("INCEPTRON_UWENZAI_AGENT_API_KEY")
+INCEPTRON_UWENZAI_AGENT_BASE_URL = os.getenv("INCEPTRON_UWENZAI_AGENT_BASE_URL", "https://api.inceptron.io/v1")
+# AKI.IO (EU-hosted, dedicated key)
+AKI_UWENZAI_AGENT_API_KEY = os.getenv("AKI_UWENZAI_AGENT_API_KEY")
+AKI_UWENZAI_AGENT_BASE_URL = os.getenv("AKI_UWENZAI_AGENT_BASE_URL", "https://aki.io/openai/v1")
+# OVHcloud AI Endpoints (dedicated key)
+OVH_AI_UWENZAI_AGENT_API_KEY = os.getenv("OVH_AI_UWENZAI_AGENT_API_KEY")
+OVH_AI_UWENZAI_AGENT_BASE_URL = os.getenv(
+    "OVH_AI_UWENZAI_AGENT_BASE_URL", "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
+)
+# Pricing: markup on upstream costs, applied per provider.
+# AGENT_MARKUP_PERCENT is the default for providers without an override.
+# Cortecs keeps 12.5% (5% pass-through + 5% UwenzAi margin + 2.5% FX safety
+# buffer); the other providers run 8%.
+AGENT_MARKUP_PERCENT = float(os.getenv("AGENT_MARKUP_PERCENT", "12.5"))
+CORTECS_UWENZAI_AGENT_MARKUP_PERCENT = float(os.getenv("CORTECS_UWENZAI_AGENT_MARKUP_PERCENT", "12.5"))
+MISTRAL_UWENZAI_AGENT_MARKUP_PERCENT = float(os.getenv("MISTRAL_UWENZAI_AGENT_MARKUP_PERCENT", "8"))
+FIKRA_UWENZAI_AGENT_MARKUP_PERCENT = float(os.getenv("FIKRA_UWENZAI_AGENT_MARKUP_PERCENT", "8"))
+INCEPTRON_UWENZAI_AGENT_MARKUP_PERCENT = float(os.getenv("INCEPTRON_UWENZAI_AGENT_MARKUP_PERCENT", "8"))
+AKI_UWENZAI_AGENT_MARKUP_PERCENT = float(os.getenv("AKI_UWENZAI_AGENT_MARKUP_PERCENT", "8"))
+OVH_AI_UWENZAI_AGENT_MARKUP_PERCENT = float(os.getenv("OVH_AI_UWENZAI_AGENT_MARKUP_PERCENT", "8"))
+# Mistral's /v1/models endpoint lists models without prices. This map supplies
+# USD prices per 1M tokens (input, output) for models the operator wants in the
+# catalog; models absent from the map stay skipped. Sources: mistral.ai pricing
+# pages, reviewed 2026-09-14. Override wholesale via the JSON env var of the
+# same name if Mistral changes prices before the next review.
+_MISTRAL_UWENZAI_AGENT_MODEL_PRICES_DEFAULT = {
+    "mistral-large-latest": ("0.50", "1.50"),
+    "mistral-large-2512": ("0.50", "1.50"),
+    "mistral-medium-latest": ("1.50", "7.50"),
+    "mistral-medium-3-5": ("1.50", "7.50"),
+    "mistral-medium-3.5": ("1.50", "7.50"),
+    "mistral-medium-3": ("0.40", "2.00"),
+    "mistral-small-latest": ("0.15", "0.60"),
+    "mistral-small-2603": ("0.15", "0.60"),
+    "ministral-3b-latest": ("0.10", "0.10"),
+    "ministral-3b-2512": ("0.10", "0.10"),
+    "ministral-8b-latest": ("0.15", "0.15"),
+    "ministral-8b-2512": ("0.15", "0.15"),
+    "ministral-14b-latest": ("0.20", "0.20"),
+    "ministral-14b-2512": ("0.20", "0.20"),
+    "codestral-latest": ("0.30", "0.90"),
+    "codestral-2508": ("0.30", "0.90"),
+    "magistral-small-latest": ("0.50", "1.50"),
+    "magistral-medium-latest": ("2.00", "5.00"),
+}
+
+
+def _env_json(name, default):
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return default
+
+
+MISTRAL_UWENZAI_AGENT_MODEL_PRICES = _env_json(
+    "MISTRAL_UWENZAI_AGENT_MODEL_PRICES", _MISTRAL_UWENZAI_AGENT_MODEL_PRICES_DEFAULT
+)
+# AKI's /openai/v1/models endpoint likewise lists models without prices (plain
+# OpenAI shape). EUR prices per 1M tokens (input, output) from aki.io's pricing
+# page, reviewed 2026-09-14. Chat variants share the base model's price. The
+# Llama models are EOL per AKI (30.09.26) and can be dropped from the map then.
+# Override wholesale via the JSON env var of the same name.
+_AKI_UWENZAI_AGENT_MODEL_PRICES_DEFAULT = {
+    "apertus-chat-70b": ("1.25", "2.00"),
+    "deepseek-v4-flash-0731-284b": ("0.20", "0.50"),
+    "gemma4-26b": ("0.10", "0.50"),
+    "gemma4-chat-26b": ("0.10", "0.50"),
+    "glm5.3-754b": ("1.00", "3.50"),
+    "gpt-oss-120b": ("0.15", "0.55"),
+    "llama3-chat-8b": ("0.15", "0.15"),
+    "llama3-chat-70b": ("0.65", "0.65"),
+    "mistral4-119b": ("0.20", "0.60"),
+    "qwen3.6-35b": ("0.15", "0.50"),
+    "qwen3.6-chat-35b": ("0.15", "0.50"),
+    "qwen3.8-27b": ("0.30", "2.20"),
+}
+AKI_UWENZAI_AGENT_MODEL_PRICES = _env_json("AKI_UWENZAI_AGENT_MODEL_PRICES", _AKI_UWENZAI_AGENT_MODEL_PRICES_DEFAULT)
+# Fikra's /v1/models now publishes per-model pricing programmatically
+# (announcement 2026-09; unit USD_PER_1M_TOKENS, flat input = output).
+# This map is the fallback for models that come back unpriced upstream,
+# with the announced USD prices per 1M tokens (input, output), reviewed
+# 2026-09-15. Override wholesale via the JSON env var of the same name.
+_FIKRA_UWENZAI_AGENT_MODEL_PRICES_DEFAULT = {
+    "fikra-flash": ("0.50", "0.50"),
+    "fikra-fast-8b": ("0.50", "0.50"),
+    "fikra-pro-20b": ("2.00", "2.00"),
+    "fikra-pro-120b": ("3.00", "3.00"),
+    "fikra-qwen-max": ("5.00", "5.00"),
+    "fikra-auto": ("2.00", "2.00"),
+    "fikra-auto-pro": ("5.00", "5.00"),
+}
+FIKRA_UWENZAI_AGENT_MODEL_PRICES = _env_json(
+    "FIKRA_UWENZAI_AGENT_MODEL_PRICES", _FIKRA_UWENZAI_AGENT_MODEL_PRICES_DEFAULT
+)
+# FX rate for EUR to KES conversion (Cortecs/AKI use EUR, review regularly)
+AGENT_FX_EUR_KES = float(os.getenv("AGENT_FX_EUR_KES", "145"))
+# FX rate for USD to KES conversion (Mistral/Fikra/Inceptron/OVH use USD, review regularly)
+AGENT_FX_USD_KES = float(os.getenv("AGENT_FX_USD_KES", "129"))
+# Optional: Configure a live exchange rate API
+# Set AGENT_EXCHANGE_RATE_API_URL to enable live rate fetching
+# Example: "https://api.exchangerate-api.com/v4/latest/EUR" (requires API key)
+AGENT_EXCHANGE_RATE_API_URL = os.getenv("AGENT_EXCHANGE_RATE_API_URL")
+AGENT_EXCHANGE_RATE_API_KEY = os.getenv("AGENT_EXCHANGE_RATE_API_KEY")
+# JSON path to extract KES rate from API response (dotted notation, e.g. "rates.KES")
+AGENT_EXCHANGE_RATE_JSON_PATH = os.getenv("AGENT_EXCHANGE_RATE_JSON_PATH", "rates.KES")
+# How often to refresh the cached exchange rate (in seconds, default: 1 hour)
+AGENT_EXCHANGE_RATE_CACHE_TTL = int(os.getenv("AGENT_EXCHANGE_RATE_CACHE_TTL", "3600"))
+# Default model for agent gateway requests when not specified
+AGENT_DEFAULT_MODEL = os.getenv("AGENT_DEFAULT_MODEL", "deepseek-v4-flash")
+# Public inference base on the dedicated Agent service (without trailing slash).
+# Explicit environment overrides, including custom path prefixes, are preserved.
+AGENT_BASE_URL = os.getenv("AGENT_BASE_URL", "https://agent-api.uwenzai.com/api/v1")
+
+# Extra origins (comma-separated) that count as UwenzAi's own Agent Gateway for
+# BYOK detection, e.g. a dev deployment: "https://uwenzai-agent-service-dev-development.up.railway.app".
+# BYOK requests aimed at these origins skip tool offers (the gateway has no
+# tool-calling support yet) and the BYOK message-pair surcharge (usage is
+# already metered per token by the gateway against the same Sparks balance).
+BYOK_EXTRA_GATEWAY_ORIGINS = [
+    item.strip() for item in os.getenv("BYOK_EXTRA_GATEWAY_ORIGINS", "").split(",") if item.strip()
+]
 
 # Web search tool (per-chat opt-in). If unset, search gracefully degrades:
 # no tool is offered to the model and no outbound search calls are made.
@@ -764,6 +914,16 @@ CELERY_BEAT_SCHEDULE = {
         # it back up regardless (bounded by REMINDER_EXPIRY_GRACE_HOURS).
         "schedule": crontab(minute="*/5"),
         "options": {"expires": 250, "queue": "general"},
+    },
+    "sync-agent-catalog": {
+        "task": "capp.tasks.sync_agent_catalog",
+        # The developer-workspace pricing view is database-only by design
+        # (browsing must never initiate provider calls), so the AgentModelPrice
+        # catalog is refreshed centrally once a night. External /models requests
+        # refresh it opportunistically in between. A failed provider fetch keeps
+        # the last known good rows; admin-disabled models are never re-enabled.
+        "schedule": crontab(hour=3, minute=40),
+        "options": {"expires": 3600, "queue": "general"},
     },
 }
 # ------------------------------------------------------------------------------

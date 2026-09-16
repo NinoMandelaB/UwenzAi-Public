@@ -1928,6 +1928,38 @@ class StorageConfigTests(TestCase):
         with self.assertRaises(ImproperlyConfigured):
             build_storages(env, is_production=True)
 
+    def test_validation_off_boots_without_bucket_in_production(self):
+        """MEDIA_STORAGE_VALIDATION=off lets a media-less service boot in
+        production (e.g. the agent service) without bucket credentials."""
+        from eaaicproject.storage_config import build_storages, LOCAL_BACKEND
+
+        env = {"MEDIA_STORAGE_VALIDATION": "off"}
+        storages, mode, warning = build_storages(env, is_production=True)
+        self.assertEqual(mode, "local")
+        self.assertIsNotNone(warning)
+        self.assertEqual(storages["default"]["BACKEND"], LOCAL_BACKEND)
+
+    def test_validation_off_boots_with_partial_config_in_production(self):
+        from eaaicproject.storage_config import build_storages, LOCAL_BACKEND
+
+        env = dict(self.BUCKET_ENV)
+        del env["AWS_ACCESS_KEY_ID"]
+        env["MEDIA_STORAGE_VALIDATION"] = "false"
+        storages, mode, warning = build_storages(env, is_production=True)
+        self.assertEqual(mode, "local")
+        self.assertIsNotNone(warning)
+        self.assertEqual(storages["default"]["BACKEND"], LOCAL_BACKEND)
+
+    def test_validation_opt_out_is_opt_in_not_opt_out_default(self):
+        """Unrecognised values keep the fail-closed default."""
+        from django.core.exceptions import ImproperlyConfigured
+        from eaaicproject.storage_config import build_storages
+
+        for value in ("", "on", "true-ish", "maybe"):
+            with self.subTest(value=value):
+                with self.assertRaises(ImproperlyConfigured):
+                    build_storages({"MEDIA_STORAGE_VALIDATION": value}, is_production=True)
+
     def test_bucket_name_alias_used_when_canonical_absent(self):
         from eaaicproject.storage_config import build_storages, S3_BACKEND
 

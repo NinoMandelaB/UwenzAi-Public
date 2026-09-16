@@ -172,3 +172,47 @@ class ConfirmPasswordResetThrottle(BaseScopedAnonThrottle):
             parts.append(code)
 
         return "|".join(parts) if parts else None
+
+
+class AgentGatewayKeyThrottle(BaseScopedAnonThrottle):
+    """
+    Rate limiting for Agent Gateway requests, keyed by the API key.
+
+    Each API key gets its own rate limit to prevent one key from being
+    abused without affecting other keys or the user's regular app usage.
+    """
+
+    scope = "agent_gateway_key"
+    rate = "60/minute"  # Adjust as needed for agent workloads
+
+    def get_request_identifier(self, request):
+        # The agent gateway uses Bearer token auth with uwenzai-dev-* keys
+        # Get the API key from the Authorization header
+        auth_header = request.META.get("HTTP_AUTHORIZATION", "")
+        if auth_header.startswith("Bearer "):
+            api_key = auth_header[7:].strip()  # Remove "Bearer " prefix
+            # Hash the API key for the cache key (don't store plaintext)
+            return self._hash_value(api_key)
+        return None
+
+
+class AgentPlaygroundUserThrottle(BaseScopedAnonThrottle):
+    """Browser calls count against the account, never a rotatable key."""
+
+    scope = "agent_playground_user"
+    rate = "20/minute"
+
+    def get_request_identifier(self, request):
+        return str(request.user.pk)
+
+    def get_cache_key(self, request, view):
+        # Account-scoped: rotating IP addresses or API keys cannot reset this limit.
+        return "agent-playground-throttle:{}".format(request.user.pk)
+
+    def allow_request(self, request, view):
+        from capp.classes.agent_gateway.guards import GatewayUnavailable
+
+        try:
+            return super().allow_request(request, view)
+        except Exception as exc:
+            raise GatewayUnavailable() from exc

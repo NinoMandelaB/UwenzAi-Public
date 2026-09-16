@@ -36,6 +36,7 @@ from capp.authentication import account_can_authenticate
 from capp.classes.auth.feature_preferences import FeaturePreferences
 from capp.classes.auth.lockout import LoginLockoutService
 from capp.classes.auth.recaptcha import RecaptchaService
+from capp.classes.agent_gateway.export_service import export_gateway_data
 from capp.classes.guest.guest_identity_service import GuestIdentityService
 from capp.classes.guest.guest_transfer_grant_service import GuestTransferGrantService
 
@@ -211,9 +212,11 @@ class Auth:
     @classmethod
     def export_user_data(cls, user: CustomUser) -> Dict[str, Any]:
         """
-        Export user's personal data including their own messages.
-        Excludes: all IDs, media paths, prompts, system instructions, AI messages,
-        spark_pool/payment/usage logs, character data, and any platform internals.
+        Export personal data with the existing account fields unchanged, plus
+        account-owned developer gateway records. Saved playground history
+        includes both user and assistant text; other chat messages remain
+        user-only. Developer record UUIDs, provider/model identifiers and usage
+        are included, but credentials and internal execution fences are not.
         """
         try:
             # ---------- Personal information (decrypted, no IDs) ----------
@@ -386,6 +389,7 @@ class Auth:
                 "user_messages": user_messages,
                 "activity_logs": activity_logs,
                 "byok_config": byok_data,
+                "developer_gateway": export_gateway_data(user),
             }
 
             return {
@@ -394,7 +398,8 @@ class Auth:
             }
 
         except Exception:
-            logger.exception("Unexpected error in export_user_data")
+            # Exception text can contain personal data; never log export contents.
+            logger.error("Unexpected error in export_user_data")
             return {"status": "fail", "data": "server_error"}
 
     @classmethod

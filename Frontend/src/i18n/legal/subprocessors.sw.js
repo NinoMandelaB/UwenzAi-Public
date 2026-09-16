@@ -12,7 +12,7 @@ export const subprocessorsSw = {
     },
     {
       type: "p",
-      text: "Watoa huduma hawa wote wanafanya kazi nje ya Kenya, kwa hivyo kutumia Huduma kunahusisha kuhamisha data kuvuka mipaka. Watoa huduma wengine hutumika tu wakati kipengele kinachohusika kimewashwa au kimesanidiwa.",
+      text: "Baadhi ya watoa huduma hutumika tu wakati kipengele husika kimewashwa au kusanidiwa. Maeneo ya kuchakata data hutegemea mtoa huduma na huduma iliyosanidiwa, na uchakataji unaweza kuhusisha uhamishaji wa data kati ya nchi. Angalia kifungu cha 11 cha Sera ya Faragha kwa taarifa yetu kuhusu uhamishaji wa data kati ya nchi.",
     },
   ],
   sections: [
@@ -161,7 +161,30 @@ export const subprocessorsSw = {
     },
     {
       id: "8",
-      heading: "8. Mabadiliko kwenye orodha hii",
+      heading:
+        "8. Eneo la wasanidi na API ya uendeshaji wa modeli za AI ya UwenzAi-Dev",
+      blocks: [
+        {
+          type: "p",
+          text: "UwenzAi-Dev hutoa eneo la majaribio kwa wasanidi, eneo la kujaribu mazungumzo ya maandishi na API ya uendeshaji wa modeli za AI kwa wenye akaunti wanaostahili na walioingia kwenye akaunti zao. Ni tofauti na kipengele cha Bring Your Own Key na haipatikani kwa wageni wasio na akaunti.",
+        },
+        {
+          type: "p",
+          text: "Watoa huduma wa awali wa lango ni Cortecs, Mistral AI, Fikra, Inceptron, AKI.IO na OVHcloud. Mtoa huduma hupatikana tu ikiwa amesanidiwa na amewekwa kwenye orodha ya lango. Kutegemea modeli na mtoa huduma uliowachagua, mtoa huduma anayechakata ombi lako hupokea ujumbe uliotuma, historia yoyote iliyojumuishwa katika ombi, na mipangilio inayohitajika kuzalisha jibu. Kutajwa kwa mtoa huduma hapa hakumaanishi kwamba kila ombi hutumwa kwake.",
+        },
+        {
+          type: "p",
+          text: "Rekodi za kawaida za matumizi ya lango zina metadata ya utendaji na malipo badala ya maudhui ya ujumbe au majibu. Ukichagua kuhifadhi historia katika eneo la majaribio, UwenzAi huhifadhi kando mazungumzo yanayobakizwa katika muundo uliosimbwa kwa njia fiche kwa akaunti yako na modeli pamoja na mtoa huduma uliowachagua. Mpangilio wa kuzimwa kwa chaguo-msingi, vikomo vya hifadhi, muda wa kuhifadhi na vidhibiti vya ufutaji vimeelezwa katika vifungu vya 9, 14 na 15 vya Sera ya Faragha. Miundombinu ya uwekaji mtandaoni huchakata data inayohitajika kuendesha kipengele hiki, kama ilivyoelezwa katika kifungu cha 1 cha taarifa hii.",
+        },
+        {
+          type: "p",
+          text: "Upatikanaji wa watoa huduma unaweza kubadilika. Tutasasisha taarifa hii watoa huduma wanapoongezwa au kuondolewa, na kutoa taarifa kuhusu mabadiliko makubwa ya uchakataji kama ilivyoelezwa katika kifungu cha 20 cha Sera ya Faragha. Neno “majaribio” wala mabadiliko ya orodha hii hayaondoi haki zako za kisheria za ulinzi wa data.",
+        },
+      ],
+    },
+    {
+      id: "9",
+      heading: "9. Mabadiliko kwenye orodha hii",
       blocks: [
         {
           type: "p",

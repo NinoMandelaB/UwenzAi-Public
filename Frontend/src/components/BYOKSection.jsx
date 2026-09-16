@@ -98,6 +98,7 @@ export default function BYOKSection() {
   const mapError = (code) => {
     const map = {
       invalid_api_key: t("byok.errorInvalidKey"),
+      insufficient_sparks: t("byok.errorInsufficientSparks"),
       model_not_found: t("byok.errorModelNotFound"),
       connection_error: t("byok.errorConnection"),
       access_forbidden: t("byok.errorForbidden"),
@@ -278,6 +279,21 @@ export default function BYOKSection() {
             <span dangerouslySetInnerHTML={{ __html: t("byok.costBanner") }} />
           </div>
 
+          {/* Gateway BYOK: no tool calls */}
+          {hasExistingConfig && savedConfig.uses_gateway && (
+            <div
+              className="flex items-start gap-2 rounded-xl p-3 text-xs"
+              style={{
+                backgroundColor: "rgba(245, 158, 11, 0.08)",
+                border: "1px solid rgba(245, 158, 11, 0.25)",
+                color: "rgb(180, 120, 0)",
+              }}
+            >
+              <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+              <span>{t("byok.gatewayToolsHint")}</span>
+            </div>
+          )}
+
           {/* Inactive hint */}
           {hasExistingConfig && !isActive && (
             <div
@@ -298,7 +314,7 @@ export default function BYOKSection() {
             label={t("byok.apiUrl")}
             value={apiUrl}
             onChange={setApiUrl}
-            placeholder="https://api.cortecs.ai/v1"
+            placeholder="https://agent-api.uwenzai.com/api/v1"
           />
 
           {/* API Key */}

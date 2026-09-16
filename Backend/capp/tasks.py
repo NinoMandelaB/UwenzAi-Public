@@ -36,6 +36,7 @@ from capp.classes.ai.cortecs_client import CortecsClient
 from capp.classes.ai.prompt_builder import PromptBuilder
 from capp.classes.ai.token_utils import PromptBudgetExceeded
 from capp.classes.byok.byok_service import BYOKService
+from capp.classes.byok.transport import is_uwenzai_gateway_url
 from capp.constants import BYOK_MESSAGE_PAIR_COST, CHARACTER_PHOTO_OFFER_COST
 from capp.classes.search.base import get_search_provider
 from capp.classes.search.tool_loop import (
@@ -660,6 +661,7 @@ def process_ai_response(self, conversation_id, user_message_id, is_guest=False, 
 
             byok = None
             byok_cost = None
+            byok_uses_gateway = False
             effective_max = 5000
             api_max_tokens = 600
 
@@ -677,10 +679,17 @@ def process_ai_response(self, conversation_id, user_message_id, is_guest=False, 
             # BYOK is resolved before reserving because it changes the price.
             byok = None
             byok_cost = None
+            byok_uses_gateway = False
             try:
                 byok = UserBYOKConfig.objects.get(user=user, is_active=True)
                 byok_cost = BYOK_MESSAGE_PAIR_COST
-                logger.info("BYOK active for user=%s model=%s", user.user_id, byok.model_name)
+                byok_uses_gateway = is_uwenzai_gateway_url(byok.api_url)
+                logger.info(
+                    "BYOK active for user=%s model=%s (gateway=%s)",
+                    user.user_id,
+                    byok.model_name,
+                    byok_uses_gateway,
+                )
             except UserBYOKConfig.DoesNotExist:
                 pass
 
@@ -851,6 +860,21 @@ def process_ai_response(self, conversation_id, user_message_id, is_guest=False, 
         profile_tools = None
         if not is_guest_conversation:
             profile_tools = build_profile_tool_specs()
+
+        # UwenzAi's own Agent Gateway does not support OpenAI tool calling
+        # yet: a request carrying `tools` is rejected as an unsupported
+        # parameter, which would fail every message. Gateway-BYOK chats
+        # therefore run plain completions — search/reminder/profile tools
+        # are not offered (reminders can still be managed from the UI).
+        if byok is not None and byok_uses_gateway:
+            if search_tools or reminder_tools or profile_tools:
+                logger.info(
+                    "Skipping tool offers for Agent Gateway BYOK (conv=%s)",
+                    conversation_id,
+                )
+            search_tools = None
+            reminder_tools = None
+            profile_tools = None
 
         offered_tools = (search_tools or []) + (reminder_tools or []) + (profile_tools or [])
         offered_tools = offered_tools or None
@@ -2084,6 +2108,19 @@ def _mark_message_failed_by_id(message_id: str, reason: str):
         _mark_message_failed(msg, reason)
     except Message.DoesNotExist:
         pass
+
+
+@shared_task(name="capp.tasks.sync_agent_catalog")
+def sync_agent_catalog():
+    """Refresh the Agent Gateway model catalog (AgentModelPrice) from configured providers.
+
+    Scheduled daily; the workspace pricing view is database-only, so this task
+    (plus opportunistic refreshes from external /models requests) is what keeps
+    the catalog populated with current models and prices.
+    """
+    from capp.classes.agent_gateway.catalog_sync import run_catalog_sync
+
+    return run_catalog_sync()
 
 
 @shared_task(name="capp.tasks.retry_media_deletions")

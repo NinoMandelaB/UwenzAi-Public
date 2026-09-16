@@ -3,7 +3,11 @@ import { render, screen, cleanup } from "@testing-library/react";
 import { act } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { LanguageProvider } from "../../context/LanguageContext";
-import { LEGAL_LAST_UPDATED, legalDocuments } from "../../i18n/legal";
+import {
+  LEGAL_LAST_UPDATED,
+  LEGAL_POLICY_VERSION,
+  legalDocuments,
+} from "../../i18n/legal";
 import TermsOfService from "./TermsOfService";
 import PrivacyPolicy from "./PrivacyPolicy";
 import SubprocessorDisclosure from "./SubprocessorDisclosure";
@@ -174,6 +178,7 @@ describe("English and Kiswahili stay structurally parallel", () => {
         en.sections.map((s) => s.id),
       );
       expect(sw.intro.length).toBe(en.intro.length);
+      expect(sw.intro.map((b) => b.type)).toEqual(en.intro.map((b) => b.type));
       en.sections.forEach((section, index) => {
         const other = sw.sections[index];
         expect(other.blocks.map((b) => b.type)).toEqual(
@@ -253,6 +258,270 @@ function sectionText(doc, id) {
   return [section.heading, ...section.blocks.map((b) => b.text)].join("\n");
 }
 
+describe("2026-09-14 developer legal publication", () => {
+  it("versions registration and the displayed policy set together", () => {
+    expect(LEGAL_POLICY_VERSION).toBe("2026-09-14");
+    expect(LEGAL_LAST_UPDATED).toBe("14-SEP-2026");
+  });
+
+  for (const language of ["en", "sw"]) {
+    const privacy = legalDocuments.privacy[language];
+    const terms = legalDocuments.terms[language];
+    const providers = legalDocuments.subprocessors[language];
+    const en = language === "en";
+    it(`${language} distinguishes the developer offering without promising isolation`, () => {
+      const intro = privacy.intro.map((b) => b.text).join("\n");
+      expect(intro).toMatch(en ? /functionally separate/ : /utendaji tofauti/);
+      expect(intro).toMatch(
+        en
+          ? /same UwenzAi account and Sparks balance/
+          : /akaunti ileile ya UwenzAi na salio lilelile la Sparks/,
+      );
+      expect(intro).toMatch(
+        en
+          ? /does not automatically include companion/
+          : /halijumuishi kiotomatiki mazungumzo na wenzi/,
+      );
+      expect(intro).toMatch(
+        en
+          ? /name does not mean.*internal development\/test/
+          : /Jina hilo halimaanishi.*ndani ya maendeleo/,
+      );
+      const independence = terms.sections
+        .find((s) => s.id === "11")
+        .blocks.find((b) => b.text?.startsWith("11.6."));
+      expect(independence.text).toMatch(
+        en
+          ? /does not create a separate account.*guarantee of technical isolation/
+          : /haiundi akaunti tofauti.*hakikisho la utengano wa kiufundi/,
+      );
+      expect(independence.text).toMatch(
+        en ? /suspension or deletion/ : /kusimamishwa au kufutwa/,
+      );
+      expect(independence.text).toMatch(/11\.4/);
+    });
+    it(`${language} retains the section 4 bullet structure while making every restriction subject to 11.4`, () => {
+      const blocks = terms.sections.find((s) => s.id === "4").blocks;
+      expect(blocks.map((b) => b.type)).toEqual(["p", "p", "ul", "p"]);
+      expect(blocks[2].items).toHaveLength(2);
+      for (const block of blocks.filter((b) => b.type === "p")) {
+        expect(block.text).toMatch(/11\.4/);
+      }
+      const ip = sectionText(terms, "11");
+      for (const n of ["11.2.", "11.3.", "11.4.", "11.5.", "11.6."])
+        expect(ip).toContain(n);
+      expect(ip).toMatch(
+        en
+          ? /use, reproduce, modify and distribute/
+          : /kutumia, kunakili, kurekebisha na kusambaza/,
+      );
+      expect(ip).toMatch(
+        en ? /configure, manage and test/ : /kusanidi, kusimamia na kujaribu/,
+      );
+      expect(ip).toMatch(
+        en
+          ? /does not override a third party’s restrictions/
+          : /haibatilishi vikwazo vya mtu wa tatu/,
+      );
+    });
+    it(`${language} adds optional history without expanding training permissions or waiving statutory rights`, () => {
+      expect(sectionText(terms, "8")).toMatch(/8\.10\./);
+      expect(sectionText(terms, "8")).toMatch(/8\.11\./);
+      expect(sectionText(terms, "8")).toMatch(
+        en
+          ? /Nothing in this clause limits your statutory data-protection rights/
+          : /Hakuna sehemu ya kifungu hiki inayopunguza haki zako za kisheria/,
+      );
+      expect(sectionText(privacy, "5")).toMatch(
+        en
+          ? /stored only when you enable/
+          : /historia huhifadhiwa tu unapowasha/,
+      );
+      expect(sectionText(privacy, "5")).toMatch(
+        en ? /performance of our contract/ : /kutekeleza mkataba wetu/,
+      );
+      expect(sectionText(privacy, "5")).toMatch(
+        en
+          ? /not to use private content to train/
+          : /kutotumia maudhui ya faragha kufundisha/,
+      );
+    });
+    it(`${language} distinguishes request data, metadata, selected providers and key storage`, () => {
+      expect(sectionText(privacy, "4")).toMatch(
+        en ? /verification hash/ : /alama ya hashi/,
+      );
+      expect(sectionText(privacy, "4")).toMatch(
+        en ? /operation identifiers/ : /vitambulisho vya shughuli/,
+      );
+      expect(sectionText(privacy, "6")).toMatch(
+        en
+          ? /not sent to every listed provider/
+          : /hayatumwi kwa kila mtoa huduma/,
+      );
+      expect(sectionText(privacy, "6")).toMatch(
+        en
+          ? /not a promise of zero retention/
+          : /si ahadi kwamba mtoa huduma huyo hatabaki/,
+      );
+      expect(sectionText(privacy, "9")).toMatch(
+        en
+          ? /not end-to-end encrypted/
+          : /si usimbaji fiche wa mwisho hadi mwisho/,
+      );
+      expect(sectionText(privacy, "9")).toMatch(
+        en
+          ? /not covered by this content-encryption layer/
+          : /havifunikwi na safu hii/,
+      );
+      expect(sectionText(privacy, "9")).toMatch(
+        en ? /rather than the full secret/ : /badala ya siri nzima/,
+      );
+    });
+    it(`${language} states capacity limits, no age expiry and pair-scoped deletion`, () => {
+      const retention = sectionText(privacy, "14");
+      for (const limit of ["60", "8,192", "32,768", "20"])
+        expect(retention).toContain(limit);
+      expect(retention).toMatch(
+        en
+          ? /no automatic expiry after a fixed number of days/
+          : /hakuna ufutaji wa kiotomatiki baada ya idadi maalum ya siku/,
+      );
+      expect(retention).toMatch(
+        en
+          ? /does not itself delete history you saved earlier/
+          : /hakufuti chenyewe historia uliyohifadhi awali/,
+      );
+      expect(retention).toMatch(
+        en
+          ? /does not clear every other saved conversation/
+          : /hakifuti mazungumzo mengine yote yaliyohifadhiwa/,
+      );
+      expect(retention).toMatch(
+        en
+          ? /Ordinary external API requests do not create playground history/
+          : /Maombi ya kawaida ya API ya nje hayaundi historia/,
+      );
+      expect(sectionText(privacy, "15")).toMatch(
+        en
+          ? /revoking a key alone does not delete saved history/
+          : /kubatilisha ufunguo pekee hakufuti historia/,
+      );
+    });
+    it(`${language} excludes companion replies but includes retained playground replies and usage charges in exports`, () => {
+      const rights = sectionText(privacy, "16");
+      expect(rights).toMatch(
+        en
+          ? /does not include companion-chat AI replies/
+          : /Haijumuishi majibu ya AI katika mazungumzo na wenzi wa AI/,
+      );
+      expect(rights).toMatch(
+        en
+          ? /Saved playground replies and gateway usage charges are included/
+          : /Majibu yaliyohifadhiwa katika eneo la majaribio na gharama za matumizi ya lango zinajumuishwa/,
+      );
+      expect(rights).not.toMatch(
+        en ? /does not include AI replies/ : /Haijumuishi majibu ya AI, data/,
+      );
+      expect(rights).toMatch(
+        en ? /gateway consent records/ : /Rekodi zako za ridhaa ya lango/,
+      );
+      expect(rights).toMatch(
+        en
+          ? /not deleted history, unsaved messages/
+          : /si historia iliyofutwa, ujumbe ambao haukuhifadhiwa/,
+      );
+      expect(rights).toMatch(
+        en
+          ? /unavailable rather than presenting it as empty/
+          : /hayapatikani badala ya kuyaonyesha kana kwamba hayana ujumbe/,
+      );
+      expect(rights).toMatch(
+        en ? /does not protect that copy/ : /haulindi nakala hiyo/,
+      );
+      expect(rights).toMatch(
+        en
+          ? /excludes API secrets.*verification hashes.*provider credentials.*server encryption keys/
+          : /haijumuishi siri za API.*alama za hashi.*watoa huduma.*funguo za usimbaji fiche za seva/,
+      );
+    });
+    it(`${language} lists all six configurable gateway providers without a metadata-only storage promise`, () => {
+      const gateway = sectionText(providers, "8");
+      for (const name of [
+        "Cortecs",
+        "Mistral AI",
+        "Fikra",
+        "Inceptron",
+        "AKI.IO",
+        "OVHcloud",
+      ])
+        expect(gateway).toContain(name);
+      expect(gateway).toMatch(
+        en
+          ? /only when configured and offered/
+          : /tu ikiwa amesanidiwa na amewekwa/,
+      );
+      expect(gateway).toMatch(
+        en
+          ? /separately stores the retained conversation/
+          : /huhifadhi kando mazungumzo yanayobakizwa/,
+      );
+      expect(gateway).not.toMatch(
+        en
+          ? /Only metadata|sent to Cortecs/
+          : /Metadata tu|hutumwa kwa Cortecs/,
+      );
+      expect(gateway).toMatch(
+        en ? /sections 9, 14 and 15/ : /vifungu vya 9, 14 na 15/,
+      );
+      expect(gateway).toMatch(en ? /section 20/ : /kifungu cha 20/);
+      expect(sectionText(privacy, "20")).toMatch(
+        en ? /changes/i : /mabadiliko/i,
+      );
+    });
+    it(`${language} makes processing locations conditional without deleting transfer safeguards`, () => {
+      const transfers = sectionText(privacy, "11");
+      expect(transfers).toMatch(
+        en
+          ? /locations depend on the provider and the configured service/
+          : /Maeneo ya kuchakata data hutegemea mtoa huduma na huduma iliyosanidiwa/,
+      );
+      expect(transfers).not.toMatch(
+        en
+          ? /these providers operate outside Kenya/
+          : /watoa huduma hawa wanafanya kazi nje ya Kenya/,
+      );
+      expect(flatten(providers)).not.toMatch(
+        en
+          ? /All of these providers operate outside Kenya/
+          : /Watoa huduma hawa wote wanafanya kazi nje ya Kenya/,
+      );
+      expect(transfers).toMatch(
+        en
+          ? /appropriate contractual safeguards/
+          : /ulinzi unaofaa wa kimkataba/,
+      );
+    });
+    it(`${language} adds no SLA while preserving statutory rights and billing remedies`, () => {
+      const sla = sectionText(terms, "16");
+      expect(sla).toContain("16.4.");
+      expect(sla).toContain("16.5.");
+      expect(sla).toMatch(
+        en ? /separate written SLA/ : /SLA tofauti ya maandishi/,
+      );
+      expect(sla).toMatch(
+        en
+          ? /no SLA service credits are promised/
+          : /hakuna salio la fidia ya huduma chini ya SLA linaloahidiwa/,
+      );
+      expect(sla).toMatch(
+        en
+          ? /does not remove any billing correction, refund or remedy required by applicable law/
+          : /hakiondoi marekebisho ya malipo, urejeshaji wa fedha au suluhisho linalotakiwa na sheria/,
+      );
+    });
+  }
+});
+
 // Section numbers are maintained by hand and the documents cite them in their own
 // prose, so inserting a clause without renumbering would produce two sections
 // with the same number and leave the citations pointing at the wrong clause.
@@ -269,7 +538,7 @@ describe("section numbering and cross-references", () => {
   }
 
   // Only the Terms cite their own sections. The provider disclosure's "section 10"
-  // and "section 19" point into the Terms, not at its own seven sections.
+  // and "section 19" point into the Terms, not at its own nine sections.
   for (const language of ["en", "sw"]) {
     const citation =
       language === "en" ? /section (\d+)/gi : /kifungu cha (\d+)/gi;
@@ -291,6 +560,26 @@ describe("section numbering and cross-references", () => {
       /Changes to the Service and Terms/i,
     );
   });
+  it.each(["en", "sw"])(
+    "keeps every %s Terms clause cross-reference resolvable",
+    (language) => {
+      const doc = legalDocuments.terms[language];
+      const clauses = doc.sections.flatMap((s) =>
+        s.blocks
+          .filter((b) => b.type === "p")
+          .map((b) => b.text.match(/^(\d+\.\d+)\./)?.[1])
+          .filter(Boolean),
+      );
+      const refs = [
+        ...flatten(doc).matchAll(
+          language === "en" ? /section (\d+\.\d+)/g : /kifungu cha (\d+\.\d+)/g,
+        ),
+      ].map((m) => m[1]);
+      expect(refs).toContain("11.4");
+      expect(refs).toContain("11.5");
+      for (const ref of refs) expect(clauses).toContain(ref);
+    },
+  );
 });
 
 // Owner-approved boilerplate. Two things carry the legal weight and are easy to
@@ -488,7 +777,8 @@ describe("no unsupported claims", () => {
   const forbidden = [
     {
       pattern: /end-to-end encrypt/i,
-      allowIfNegated: /not end-to-end encryption|si usimbaji fiche kutoka/i,
+      allowIfNegated:
+        /not end-to-end encrypt(?:ion|ed)|si usimbaji fiche kutoka/i,
       label: "end-to-end encryption",
     },
     { pattern: /only you and admins/i, label: "closed access list" },

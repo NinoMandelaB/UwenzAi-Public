@@ -4,6 +4,7 @@ from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 
 from capp.models import CustomUser
 from capp.models import UserBYOKConfig
+from capp.models import AgentAPIKey, AgentUsageLog, AgentModelPrice
 
 
 @admin.register(CustomUser)
@@ -280,3 +281,118 @@ class UserBYOKConfigAdmin(admin.ModelAdmin):
             return "••••••••" + raw[-4:]
         except Exception:
             return "(decryption error)"
+
+
+# ---------------------------------------------------------------------------
+# Agent Gateway admin registrations
+# ---------------------------------------------------------------------------
+
+
+@admin.register(AgentAPIKey)
+class AgentAPIKeyAdmin(admin.ModelAdmin):
+    """Read-only admin for Agent API keys — except the monthly Spark budget.
+
+    Everything stays read-only (keys are created only via the developer API,
+    so no key material can ever originate here). The one editable field is
+    monthly_spark_budget: support can cap a suspected-leaked key without
+    waiting for the owner. Clearing the field restores an unlimited budget.
+    """
+
+    list_display = (
+        "label",
+        "key_hint",
+        "user",
+        "is_active",
+        "monthly_spark_budget",
+        "created_at",
+        "last_used_at",
+        "expires_at",
+    )
+    list_filter = ("is_active",)
+    search_fields = ("label", "key_hint", "user__username")
+    readonly_fields = (
+        "key_hash",
+        "key_hint",
+        "user",
+        "label",
+        "is_active",
+        "created_at",
+        "last_used_at",
+        "expires_at",
+    )
+    fields = (
+        "key_hash",
+        "key_hint",
+        "user",
+        "label",
+        "is_active",
+        "monthly_spark_budget",
+        "created_at",
+        "last_used_at",
+        "expires_at",
+    )
+    ordering = ("-created_at",)
+
+    def has_add_permission(self, request):
+        return False
+
+
+@admin.register(AgentUsageLog)
+class AgentUsageLogAdmin(admin.ModelAdmin):
+    """Read-only admin for Agent Gateway usage logs."""
+
+    list_display = (
+        "created_at",
+        "user",
+        "provider",
+        "model",
+        "input_tokens",
+        "output_tokens",
+        "sparks_charged",
+        "status",
+        "latency_ms",
+    )
+    list_filter = ("status", "provider")
+    search_fields = ("model", "user__username", "key_hint")
+    readonly_fields = (
+        "created_at",
+        "user",
+        "key",
+        "key_hint",
+        "provider",
+        "model",
+        "input_tokens",
+        "output_tokens",
+        "cost_native",
+        "cost_currency",
+        "fx_rate",
+        "sparks_charged",
+        "status",
+        "latency_ms",
+        "client_operation_id",
+    )
+    ordering = ("-created_at",)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(AgentModelPrice)
+class AgentModelPriceAdmin(admin.ModelAdmin):
+    """Admin for the cost catalog. Prices editable without deploy."""
+
+    list_display = (
+        "provider",
+        "model",
+        "currency",
+        "input_price_per_1m",
+        "output_price_per_1m",
+        "is_active",
+        "updated_at",
+    )
+    list_filter = ("provider", "currency", "is_active")
+    search_fields = ("provider", "model")
+    ordering = ("provider", "model")

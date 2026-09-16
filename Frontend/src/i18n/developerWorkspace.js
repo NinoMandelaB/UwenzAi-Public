@@ -1,0 +1,402 @@
+// Keep the workspace copy together so both languages cover every state.
+export const developerWorkspace = {
+  en: {
+    completedReplay:
+      "This request already completed. Its original charge and token usage are shown below, with no additional charge for this retry. The original reply is unavailable here; sending again is a new paid request.",
+    refundedFailed:
+      "The request failed and the server confirmed its reservation was refunded. You may explicitly start a new paid attempt.",
+    newPaidAttempt: "New paid attempt",
+    refundPending:
+      "The server has not confirmed a refund. Do not start a new paid attempt. Retry this unchanged request to check the same operation, refresh usage, or contact support.",
+    scrollColumns: "Swipe or scroll horizontally to see all columns.",
+    capability_text: "Text",
+    capability_chat: "Chat",
+    capability_tools: "Tools",
+    capability_function_calling: "Function calling",
+    capability_vision: "Vision",
+    capability_reasoning: "Reasoning",
+    capability_json: "JSON output",
+    title: "UwenzAi-Dev",
+    eyebrow: "DEVELOPER WORKSPACE",
+    subtitle:
+      "Build with AI, pay in Sparks. Choose a model and connect your app.",
+    experimental: "Experimental",
+    experimentalNote:
+      "API features and prices may change. Availability and latency are not guaranteed.",
+    loading: "Loading your workspace…",
+    authenticating: "Restoring your session…",
+    login: "Log in to use the developer workspace.",
+    retry: "Try again",
+    cancel: "Cancel",
+    close: "Close",
+    notSpecified: "Not specified",
+    unavailable: "Unavailable",
+    available: "Available",
+    emptyModels: "No models are available right now. Try again later.",
+    model: "Model",
+    provider: "Inference provider",
+    allModels: "All models",
+    allProviders: "All providers",
+    "providerKind.inference": "Inference",
+    "providerKind.gateway": "Gateway",
+    reset: "Reset filters",
+    selectHint:
+      "Choose a model and provider to see the price and start building. Either selector filters the other.",
+    pricing: "Price per 1M tokens",
+    input: "Input",
+    output: "Output",
+    priceNote:
+      "Includes the {markup}% markup. Displayed prices are rounded; billing uses server rates and rounds Sparks per request. 1 Spark = KES {value}.",
+    perMillion: "Per 1M tokens",
+    context: "Context window",
+    maxOutput: "Maximum output",
+    capabilities: "Capabilities",
+    description: "About this model",
+    tokens: "tokens",
+    pricingFailed: "Model pricing could not be loaded.",
+    setup: "Connect",
+    chat: "Playground",
+    usage: "Usage",
+    connection: "Connection settings",
+    connectionHint: "OpenAI-compatible. Use the selected provider explicitly.",
+    baseUrl: "Base URL",
+    copy: "Copy",
+    copied: "Copied to clipboard.",
+    copyFailed: "Could not copy. Select and copy the text manually.",
+    copyConfig: "Copy configuration",
+    python: "Python",
+    curl: "cURL",
+    envHint:
+      "Set UWENZAI_KEY securely in your environment. Never put a secret in client-side code or commit it to a repository.",
+    examplePrompt: "Hello!",
+    pairRequired: "Select an available model and provider first.",
+    consentTitle: "Review the developer terms",
+    consentBody:
+      "Please review the updated Terms of Use, Privacy Policy and Service Provider Disclosure below, including optional saved history, account exports, selected providers, the commercial API exception, the shared account and Sparks balance, and no developer API SLA. By confirming, I accept these terms and acknowledge the described processing. I will not use this service for anything illegal under Kenyan law, the laws of my current country, or international law.",
+    consentVersion: "Documents shown: {version}.",
+    termsOfUse: "Terms of Use",
+    privacyPolicy: "Privacy Policy",
+    providerDisclosure: "Service Provider Disclosure",
+    consentVersionMismatch:
+      "The server requires a different notice version. Refresh this page and review the current documents before confirming. Nothing has been accepted automatically; keys and chat stay locked.",
+    consentCost:
+      "Requests consume Sparks and are charged by token usage. Prices convert provider rates to KES and include the displayed markup.",
+    consentAccept: "I confirm and accept",
+    consentChecking: "Checking your consent…",
+    consentSaving: "Saving your consent…",
+    consentFailed:
+      "We could not verify or save your consent. Keys and chat stay locked until confirmation succeeds.",
+    consentLocked:
+      "Confirm the terms above to manage keys and use the playground.",
+    keys: "API keys",
+    newKey: "Create key",
+    keyLabel: "Key label",
+    keyPlaceholder: "e.g. My development app",
+    keyLabelRequired: "Give your key a label.",
+    keyEmpty: "Create a key to connect your app and try the playground.",
+    keySelect: "Playground key",
+    selectKey: "Select an active key",
+    unnamedKey: "Unnamed key",
+    active: "Active",
+    revoked: "Revoked",
+    expired: "Expired",
+    created: "Created",
+    lastUsed: "Last used",
+    budget: "Monthly Spark budget",
+    revoke: "Revoke",
+    revokeConfirm:
+      "Revoke this key? Connected apps will lose access. This cannot be undone.",
+    creating: "Creating…",
+    revoking: "Revoking…",
+    keyWarning:
+      "Copy this key now and keep it secure. It is shown only once; the playground uses its ID, not the secret.",
+    fullKey: "New API key",
+    reveal: "Show key",
+    hide: "Hide key",
+    dismissKey: "I have saved my key",
+    copyKey: "Copy key",
+    copyHint: "Copy key hint",
+    keyFailed: "Keys could not be loaded. Try again before sending.",
+    createFailed: "The key could not be created.",
+    revokeFailed: "The key could not be revoked.",
+    keyCreated: "Your key is ready.",
+    keyRevoked: "The key was revoked.",
+    playgroundTitle: "Try your model",
+    playgroundHint: "A small, text-only playground using your Spark balance.",
+    emptyChat: "What will you build?",
+    emptyChatHint:
+      "Send a short prompt to test this model and provider before connecting your app.",
+    prompt: "Your message",
+    promptPlaceholder: "Ask a question or test a prompt…",
+    send: "Send message",
+    sending: "Generating…",
+    stop: "Stop waiting",
+    stopped:
+      "Stopped waiting. A request already received by the server may still be billed. Retry the unchanged prompt to reuse its operation ID.",
+    billNotice:
+      "Each request is billed in Sparks from your balance, including this playground.",
+    textOnly: "Text only · Attachments are not supported",
+    maxTokens: "Max response tokens",
+    estimate:
+      "Estimated input: ~{count} / {limit} tokens. Approximate only; the server validates the token budget. Billed usage comes from the provider.",
+    promptTooLong:
+      "This prompt is too long. Shorten it before sending; nothing has been sent.",
+    historyTooLong:
+      "This conversation exceeds the request limit. Delete history or turn history off before sending. Your new prompt has not been shortened.",
+    sendFailed:
+      "The request failed. Your prompt is kept; retrying the same request reuses its operation ID.",
+    timeout:
+      "The request timed out. It may have reached the server; retry the same request rather than submitting a duplicate.",
+    insufficient:
+      "Not enough Sparks, or this key's budget has been reached. Top up or choose another active key.",
+    unauthorized:
+      "Your session or key is no longer authorized. Sign in again or choose an active key.",
+    invalidResponse:
+      "The server returned an invalid response. Please try again.",
+    rateLimited: "Too many requests. Please wait a moment before trying again.",
+    user: "You",
+    assistant: "Assistant",
+    history: "Save chat history",
+    historyNotice:
+      "Saved history is encrypted, not end-to-end encrypted, and is sent to the selected provider when included in a request. Up to 60 messages are retained, subject to smaller token and size limits. There is no automatic expiry by age. You can delete saved history for this model/provider. See the Privacy Policy.",
+    historyOff:
+      "Off by default. Only your new message is sent; recent messages stay on screen until you change model or leave.",
+    historyOn:
+      "On. This pair's history is encrypted on the server and included in requests. Turning this off deletes the saved conversation.",
+    historyLoading: "Loading saved history…",
+    historyFailed:
+      "Saved history could not be loaded. Retry, or turn history off to delete it and start fresh.",
+    deleteHistory: "Delete history",
+    deleting: "Deleting history…",
+    deleteFailed:
+      "History could not be deleted. Sending is blocked until deletion succeeds. Try again.",
+    deleted: "Saved history and the on-screen conversation were deleted.",
+    pendingHistory:
+      "Wait for this request to finish before changing or deleting history.",
+    historySaveWarning:
+      "The reply succeeded and was billed, but history was not saved. The reply remains on screen; do not resend just to save it.",
+    usageTitle: "Token & Spark usage",
+    lastRequest: "Last request",
+    month: "This month",
+    allTime: "All time",
+    calls: "Calls",
+    sparks: "Sparks",
+    allPairs: "All model / provider pairs",
+    noUsage:
+      "No usage for this period yet. Your first completed request will appear here.",
+    noLastRequest: "Send a message to see its measured usage here.",
+    usageFailed:
+      "Usage could not be refreshed. The figures below may be out of date.",
+    refresh: "Refresh usage",
+    total: "Total",
+    usageMeter: "Last request input and output tokens",
+    billed: "Billed",
+    details: "Model details",
+    requestLimit: "Up to {count} messages per request with history on.",
+  },
+  sw: {
+    completedReplay:
+      "Ombi hili tayari lilikamilika. Malipo na tokeni zake za awali zimeonyeshwa hapa chini, bila malipo ya ziada kwa jaribio hili. Jibu la awali halipatikani hapa; kutuma tena ni ombi jipya linalotozwa.",
+    refundedFailed:
+      "Ombi limeshindwa na seva imethibitisha kuwa Sparks zilizotengwa zimerudishwa. Unaweza kuchagua kuanza jaribio jipya linalotozwa.",
+    newPaidAttempt: "Jaribio jipya linalotozwa",
+    refundPending:
+      "Seva haijathibitisha kurejeshwa kwa Sparks. Usianze jaribio jipya linalotozwa. Jaribu tena ombi hili bila kulibadilisha ili kukagua ombi lilelile, sasisha matumizi, au wasiliana na usaidizi.",
+    scrollColumns: "Telezesha au sogeza jedwali kando ili kuona safu zote.",
+    capability_text: "Maandishi",
+    capability_chat: "Mazungumzo",
+    capability_tools: "Zana",
+    capability_function_calling: "Miito ya vitendaji",
+    capability_vision: "Utambuzi wa picha",
+    capability_reasoning: "Ufikiri",
+    capability_json: "Majibu ya JSON",
+    title: "UwenzAi-Dev",
+    eyebrow: "ENEO LA WASANIDI",
+    subtitle:
+      "Jenga kwa AI, lipa kwa Sparks. Chagua modeli na uunganishe programu yako.",
+    experimental: "Ya majaribio",
+    experimentalNote:
+      "Vipengele vya API na bei vinaweza kubadilika. Upatikanaji na kasi ya majibu havijahakikishwa.",
+    loading: "Inapakia eneo lako la kazi…",
+    authenticating: "Inarejesha kipindi chako…",
+    login: "Ingia ili kutumia eneo la wasanidi.",
+    retry: "Jaribu tena",
+    cancel: "Ghairi",
+    close: "Funga",
+    notSpecified: "Haijabainishwa",
+    unavailable: "Haipatikani",
+    available: "Inapatikana",
+    emptyModels: "Hakuna modeli zinazopatikana kwa sasa. Jaribu tena baadaye.",
+    model: "Modeli",
+    provider: "Mtoa huduma wa modeli",
+    allModels: "Modeli zote",
+    allProviders: "Watoa huduma wote",
+    "providerKind.inference": "Inference",
+    "providerKind.gateway": "Lango",
+    reset: "Weka upya vichujio",
+    selectHint:
+      "Chagua modeli na mtoa huduma ili kuona bei na kuanza. Kila chaguo huchuja jingine.",
+    pricing: "Bei kwa tokeni milioni 1",
+    input: "Ingizo",
+    output: "Jibu",
+    priceNote:
+      "Inajumuisha nyongeza ya {markup}%. Bei zimezungushwa; malipo hutumia viwango vya seva na kuzungusha Sparks kwa kila ombi. Spark 1 = KES {value}.",
+    perMillion: "Kwa tokeni 1M",
+    context: "Kikomo cha muktadha",
+    maxOutput: "Kikomo cha jibu",
+    capabilities: "Uwezo",
+    description: "Kuhusu modeli hii",
+    tokens: "tokeni",
+    pricingFailed: "Bei za modeli hazikuweza kupakiwa.",
+    setup: "Unganisha",
+    chat: "Majaribio",
+    usage: "Matumizi",
+    connection: "Mipangilio ya muunganisho",
+    connectionHint: "Inaoana na OpenAI. Bainisha mtoa huduma uliyemchagua.",
+    baseUrl: "URL ya msingi",
+    copy: "Nakili",
+    copied: "Imenakiliwa.",
+    copyFailed: "Haikuweza kunakiliwa. Chagua maandishi na uyanakili mwenyewe.",
+    copyConfig: "Nakili mipangilio",
+    python: "Python",
+    curl: "cURL",
+    envHint:
+      "Weka UWENZAI_KEY kwa usalama katika mazingira yako. Usiweke siri kwenye msimbo wa kivinjari au hazina ya msimbo.",
+    examplePrompt: "Habari!",
+    pairRequired: "Chagua modeli na mtoa huduma anayepatikana kwanza.",
+    consentTitle: "Pitia masharti ya wasanidi",
+    consentBody:
+      "Tafadhali pitia Masharti ya Matumizi, Sera ya Faragha na Taarifa ya Watoa Huduma zilizosasishwa hapa chini, ikiwemo historia ya hiari iliyohifadhiwa, upakuaji wa data ya akaunti, watoa huduma waliochaguliwa, ruhusa ya kipekee ya API ya kibiashara, akaunti na salio la Sparks vya pamoja, na kutokuwepo kwa SLA ya API ya wasanidi. Kwa kuthibitisha, ninakubali masharti haya na kutambua uchakataji ulioelezwa. Sitatumia huduma hii kwa jambo lolote lililo kinyume cha sheria za Kenya, nchi niliyopo, au sheria za kimataifa.",
+    consentVersion: "Nyaraka zinazoonyeshwa: {version}.",
+    termsOfUse: "Masharti ya Matumizi",
+    privacyPolicy: "Sera ya Faragha",
+    providerDisclosure: "Taarifa ya Watoa Huduma",
+    consentVersionMismatch:
+      "Seva inahitaji toleo tofauti la taarifa. Pakia upya ukurasa huu na upitie nyaraka za sasa kabla ya kuthibitisha. Hakuna kilichokubaliwa kiotomatiki; funguo na mazungumzo vinabaki vimefungwa.",
+    consentCost:
+      "Maombi hutumia Sparks na hutozwa kulingana na matumizi ya tokeni. Bei hubadilisha viwango vya mtoa huduma kuwa KES na kujumuisha nyongeza iliyoonyeshwa.",
+    consentAccept: "Nathibitisha na kukubali",
+    consentChecking: "Inakagua idhini yako…",
+    consentSaving: "Inahifadhi idhini yako…",
+    consentFailed:
+      "Hatukuweza kuthibitisha au kuhifadhi idhini yako. Funguo na mazungumzo vitabaki vimefungwa hadi uthibitisho ufaulu.",
+    consentLocked:
+      "Kubali masharti hapo juu ili kudhibiti funguo na kutumia eneo la majaribio.",
+    keys: "Funguo za API",
+    newKey: "Unda ufunguo",
+    keyLabel: "Jina la ufunguo",
+    keyPlaceholder: "mf. Programu yangu ya majaribio",
+    keyLabelRequired: "Weka jina la ufunguo wako.",
+    keyEmpty:
+      "Unda ufunguo ili kuunganisha programu yako na kujaribu mazungumzo.",
+    keySelect: "Ufunguo wa majaribio",
+    selectKey: "Chagua ufunguo unaotumika",
+    unnamedKey: "Ufunguo usio na jina",
+    active: "Unatumika",
+    revoked: "Umebatilishwa",
+    expired: "Umeisha muda",
+    created: "Uliundwa",
+    lastUsed: "Ulitumika mwisho",
+    budget: "Bajeti ya Sparks kwa mwezi",
+    revoke: "Batilisha",
+    revokeConfirm:
+      "Ubatilishe ufunguo huu? Programu zilizounganishwa watapoteza ufikiaji. Hatua hii haiwezi kutenduliwa.",
+    creating: "Inaunda…",
+    revoking: "Inabatilisha…",
+    keyWarning:
+      "Nakili ufunguo huu sasa na uuhifadhi salama. Unaonyeshwa mara moja tu; majaribio hutumia kitambulisho chake, si siri.",
+    fullKey: "Ufunguo mpya wa API",
+    reveal: "Onyesha ufunguo",
+    hide: "Ficha ufunguo",
+    dismissKey: "Nimehifadhi ufunguo wangu",
+    copyKey: "Nakili ufunguo",
+    copyHint: "Nakili kidokezo cha ufunguo",
+    keyFailed: "Funguo hazikuweza kupakiwa. Jaribu tena kabla ya kutuma.",
+    createFailed: "Ufunguo haukuweza kuundwa.",
+    revokeFailed: "Ufunguo haukuweza kubatilishwa.",
+    keyCreated: "Ufunguo wako uko tayari.",
+    keyRevoked: "Ufunguo umebatilishwa.",
+    playgroundTitle: "Jaribu modeli yako",
+    playgroundHint:
+      "Eneo dogo la majaribio ya maandishi linalotumia salio lako la Sparks.",
+    emptyChat: "Utaunda nini?",
+    emptyChatHint:
+      "Tuma ujumbe mfupi kujaribu modeli na mtoa huduma huyu kabla ya kuunganisha programu yako.",
+    prompt: "Ujumbe wako",
+    promptPlaceholder: "Uliza swali au jaribu maelekezo…",
+    send: "Tuma ujumbe",
+    sending: "Inatayarisha jibu…",
+    stop: "Acha kusubiri",
+    stopped:
+      "Umeacha kusubiri. Ombi ambalo seva imepokea bado linaweza kutozwa. Jaribu tena ujumbe uleule ili kutumia kitambulisho kilekile cha ombi.",
+    billNotice:
+      "Kila ombi hutozwa Sparks kutoka kwenye salio lako, ikiwemo majaribio haya.",
+    textOnly: "Maandishi pekee · Viambatisho havitumiki",
+    maxTokens: "Kikomo cha tokeni za jibu",
+    estimate:
+      "Makadirio ya ingizo: ~{count} / {limit} tokeni. Haya ni makadirio tu; seva hukagua bajeti ya tokeni. Matumizi yanayotozwa hutoka kwa mtoa huduma.",
+    promptTooLong:
+      "Ujumbe huu ni mrefu mno. Ufupishe kabla ya kutuma; hakuna kilichotumwa.",
+    historyTooLong:
+      "Mazungumzo haya yamezidi kikomo cha ombi. Futa historia au uzime historia kabla ya kutuma. Ujumbe wako mpya haujafupishwa.",
+    sendFailed:
+      "Ombi limeshindwa. Ujumbe wako umehifadhiwa hapa; kujaribu tena ombi lilelile hutumia kitambulisho chake cha awali.",
+    timeout:
+      "Ombi limechukua muda mrefu sana. Huenda limefika kwenye seva; jaribu tena ombi lilelile badala ya kutuma jingine.",
+    insufficient:
+      "Sparks hazitoshi, au bajeti ya ufunguo huu imefikiwa. Ongeza salio au chagua ufunguo mwingine unaotumika.",
+    unauthorized:
+      "Kipindi chako au ufunguo wako hauna ruhusa tena. Ingia tena au chagua ufunguo unaotumika.",
+    invalidResponse:
+      "Seva imerudisha jibu lisilo sahihi. Tafadhali jaribu tena.",
+    rateLimited: "Maombi ni mengi sana. Subiri kidogo kabla ya kujaribu tena.",
+    user: "Wewe",
+    assistant: "Msaidizi",
+    history: "Hifadhi historia ya mazungumzo",
+    historyNotice:
+      "Historia iliyohifadhiwa husimbwa kwa njia fiche, lakini si kwa usimbaji fiche wa mwisho hadi mwisho, na hutumwa kwa mtoa huduma uliyemchagua inapojumuishwa katika ombi. Hadi ujumbe 60 hubakizwa, kwa kuzingatia vikomo vidogo zaidi vya tokeni na ukubwa wa data. Hakuna ufutaji wa kiotomatiki kulingana na umri wa historia. Unaweza kufuta historia iliyohifadhiwa kwa modeli na mtoa huduma huyu. Angalia Sera ya Faragha.",
+    historyOff:
+      "Imezimwa kwa chaguomsingi. Ujumbe mpya pekee hutumwa; ujumbe wa karibuni huonekana hapa hadi ubadilishe modeli au uondoke.",
+    historyOn:
+      "Imewashwa. Historia ya modeli na mtoa huduma huyu husimbwa kwa usalama kwenye seva na kujumuishwa katika maombi. Kuizima hufuta mazungumzo yaliyohifadhiwa.",
+    historyLoading: "Inapakia historia iliyohifadhiwa…",
+    historyFailed:
+      "Historia iliyohifadhiwa haikuweza kupakiwa. Jaribu tena, au izime ili kuifuta na kuanza upya.",
+    deleteHistory: "Futa historia",
+    deleting: "Inafuta historia…",
+    deleteFailed:
+      "Historia haikuweza kufutwa. Kutuma kumezuiwa hadi ufutaji ufaulu. Jaribu tena.",
+    deleted: "Historia iliyohifadhiwa na mazungumzo ya skrini yamefutwa.",
+    pendingHistory:
+      "Subiri ombi hili likamilike kabla ya kubadilisha au kufuta historia.",
+    historySaveWarning:
+      "Jibu limefanikiwa na limetozwa, lakini historia haikuhifadhiwa. Jibu linabaki kwenye skrini; usilitume tena kwa lengo la kulihifadhi tu.",
+    usageTitle: "Matumizi ya tokeni na Sparks",
+    lastRequest: "Ombi la mwisho",
+    month: "Mwezi huu",
+    allTime: "Muda wote",
+    calls: "Maombi",
+    sparks: "Sparks",
+    allPairs: "Modeli na watoa huduma wote",
+    noUsage:
+      "Hakuna matumizi kwa kipindi hiki bado. Ombi lako la kwanza lililokamilika litaonekana hapa.",
+    noLastRequest: "Tuma ujumbe ili kuona matumizi yake yaliyopimwa hapa.",
+    usageFailed:
+      "Matumizi hayakuweza kusasishwa. Takwimu hapa chini huenda zimepitwa na wakati.",
+    refresh: "Sasisha matumizi",
+    total: "Jumla",
+    usageMeter: "Tokeni za ingizo na jibu za ombi la mwisho",
+    billed: "Zilizotozwa",
+    details: "Maelezo ya modeli",
+    requestLimit: "Hadi ujumbe {count} kwa kila ombi historia ikiwa imewashwa.",
+  },
+};
+
+export function workspaceText(language) {
+  const strings = developerWorkspace[language] || developerWorkspace.en;
+  return (key, vars = {}) =>
+    Object.entries(vars).reduce(
+      (text, [name, value]) => text.replaceAll(`{${name}}`, String(value)),
+      strings[key] || developerWorkspace.en[key] || key,
+    );
+}

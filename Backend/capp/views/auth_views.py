@@ -5,6 +5,7 @@ import json
 from django.conf import settings
 from django.http import JsonResponse
 from django.views.decorators.csrf import ensure_csrf_cookie
+from django.views.decorators.cache import never_cache
 from capp.authentication import OptionalAccountJWTAuthentication
 from capp.csrf import csrf_protect_api, csrf_protect_for_guests
 from django.middleware.csrf import get_token
@@ -154,6 +155,7 @@ def api_confirm_email_change(request):
         return Response({"status": "fail", "data": "server_error"}, status=500)
 
 
+@never_cache
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def api_export_user_data(request):
@@ -172,7 +174,7 @@ def api_export_user_data(request):
         return response
 
     except Exception:
-        logger.exception("Unexpected error in api_export_user_data")
+        logger.error("Unexpected error in api_export_user_data")
         return Response({"status": "fail", "data": "server_error"}, status=500)
 
 

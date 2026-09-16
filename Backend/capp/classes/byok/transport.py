@@ -227,3 +227,37 @@ def provider_http_client(api_url):
         follow_redirects=False,
         timeout=httpx.Timeout(60.0, connect=10.0),
     )
+
+
+# ── UwenzAi Agent Gateway detection ───────────────────────────────────────────
+
+
+def uwenzai_gateway_origins():
+    """Origins (scheme, host, port) that belong to UwenzAi's own Agent Gateway.
+
+    Derived from the canonical production base URL, the advertised
+    ``AGENT_BASE_URL`` (which may point at a dev deployment), and the optional
+    ``BYOK_EXTRA_GATEWAY_ORIGINS`` setting for additional operator-managed
+    deployments. Origins, not full URLs: any path on those hosts counts.
+    """
+    candidates = [
+        "https://agent-api.uwenzai.com/api/v1",
+        getattr(settings, "AGENT_BASE_URL", "") or "",
+    ]
+    candidates.extend(getattr(settings, "BYOK_EXTRA_GATEWAY_ORIGINS", ()) or ())
+    origins = set()
+    for value in candidates:
+        if isinstance(value, str) and value:
+            try:
+                origins.add(origin(value))
+            except ProviderURLRejected:
+                continue
+    return origins
+
+
+def is_uwenzai_gateway_url(value) -> bool:
+    """True when a BYOK base URL points at UwenzAi's own Agent Gateway."""
+    try:
+        return origin(value) in uwenzai_gateway_origins()
+    except ProviderURLRejected:
+        return False
