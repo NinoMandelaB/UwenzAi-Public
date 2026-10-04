@@ -30,29 +30,30 @@ _MODELS_CACHE_KEY = "agent_gateway_cortecs_models"
 _MODELS_CACHE_TTL = 1800  # 30 minutes
 
 
-# Last-resort fallback for tests only (never the source of truth in production)
+# Last-resort fallback for tests only (never the source of truth in production).
+# The prices below are illustrative placeholders, not real provider prices.
 DEFAULT_CORTECS_MODELS = [
     {
         "id": "deepseek-v4-flash",
         "name": "DeepSeek V4 Flash",
-        "input_price_per_1m": Decimal("0.22"),
-        "output_price_per_1m": Decimal("0.66"),
+        "input_price_per_1m": Decimal("1.00"),
+        "output_price_per_1m": Decimal("2.00"),
         "max_context": 131072,
         "description": "Fast, cost-effective model with strong reasoning",
     },
     {
         "id": "kimi-k3",
         "name": "Kimi K3",
-        "input_price_per_1m": Decimal("3.00"),
-        "output_price_per_1m": Decimal("15.00"),
+        "input_price_per_1m": Decimal("2.00"),
+        "output_price_per_1m": Decimal("4.00"),
         "max_context": 131072,
         "description": "Advanced reasoning model",
     },
     {
         "id": "glm-5",
         "name": "GLM-5",
-        "input_price_per_1m": Decimal("1.00"),
-        "output_price_per_1m": Decimal("3.20"),
+        "input_price_per_1m": Decimal("1.50"),
+        "output_price_per_1m": Decimal("3.00"),
         "max_context": 131072,
         "description": "General-purpose model with strong performance",
     },
@@ -363,11 +364,27 @@ class CortecsAgentProvider:
             choices = data.get("choices", [])
             text = ""
             finish_reason = None
+            tool_calls = None
             if choices:
                 first_choice = choices[0]
                 message = first_choice.get("message", {})
                 text = message.get("content", "")
                 finish_reason = first_choice.get("finish_reason")
+                # Relay structured tool calls verbatim, synthesizing an id when
+                # the upstream omits one — some gateways return id-less calls,
+                # and a client that receives finish_reason=tool_calls without
+                # any calls stalls its agent loop forever.
+                upstream_tool_calls = message.get("tool_calls")
+                if isinstance(upstream_tool_calls, list) and upstream_tool_calls:
+                    relayed = []
+                    for i, call in enumerate(upstream_tool_calls):
+                        if not isinstance(call, dict):
+                            continue
+                        call = dict(call)
+                        if not call.get("id"):
+                            call["id"] = "call_{}".format(i)
+                        relayed.append(call)
+                    tool_calls = relayed or None
 
             return ProviderResult(
                 text=text,
@@ -375,6 +392,7 @@ class CortecsAgentProvider:
                 status="success",
                 finish_reason=finish_reason,
                 model=model,
+                tool_calls=tool_calls,
             )
         except httpx.HTTPStatusError as e:
             status_code = e.response.status_code

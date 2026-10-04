@@ -320,21 +320,84 @@ class BodyLimitTests(SimpleTestCase):
         app.assert_not_called()
         self.assertEqual(send.call_args_list[-2].args[0]["status"], 413)
 
-    async def test_message_media_type_spoof_and_oversized_length_headers_are_rejected(self):
-        for headers, payload in (
-            ([(b"content-type", b"multipart/form-data; boundary=test")], b"x" * 101),
-            ([(b"content-length", b"1" * 5000)], b""),
-        ):
-            with override_settings(JSON_REQUEST_MAX_BYTES=100):
-                receive = mock.AsyncMock(return_value={"type": "http.request", "body": payload})
-                send, app = mock.AsyncMock(), mock.AsyncMock()
-                await BoundedHTTPBody(app)(
-                    {"type": "http", "path": f"/api/v1/conversations/{uuid.uuid4()}/messages/", "headers": headers},
-                    receive,
-                    send,
-                )
-                app.assert_not_called()
-                self.assertEqual(send.call_args_list[-2].args[0]["status"], 413)
+    async def test_message_multipart_budget_and_oversize_rejection(self):
+        """The message send route accepts multipart (photos) in a photo-scoped
+        budget — never the generic 100 MB upload budget, never the JSON budget.
+        Oversize is rejected with the app envelope so the frontend can show
+        the localized photo_too_large error."""
+        path = f"/api/v1/conversations/{uuid.uuid4()}/messages/"
+        send, app = mock.AsyncMock(), mock.AsyncMock()
+
+        # In-budget multipart passes through to the app.
+        receive = mock.AsyncMock(return_value={"type": "http.request", "body": b"x" * 101, "more_body": False})
+        await BoundedHTTPBody(app)(
+            {
+                "type": "http",
+                "path": path,
+                "headers": [(b"content-type", b"multipart/form-data; boundary=test")],
+            },
+            receive,
+            send,
+        )
+        app.assert_called_once()
+
+        # Over-budget multipart is rejected with 413 + photo_too_large envelope.
+        app.reset_mock()
+        with override_settings(MESSAGE_MULTIPART_MAX_BYTES=100):
+            receive = mock.AsyncMock(
+                side_effect=[
+                    {"type": "http.request", "body": b"x" * 60, "more_body": True},
+                    {"type": "http.request", "body": b"x" * 50, "more_body": False},
+                ]
+            )
+            await BoundedHTTPBody(app)(
+                {
+                    "type": "http",
+                    "path": path,
+                    "headers": [(b"content-type", b"multipart/form-data; boundary=test")],
+                },
+                receive,
+                send,
+            )
+            app.assert_not_called()
+            self.assertEqual(send.call_args_list[-2].args[0]["status"], 413)
+            body = json.loads(send.call_args_list[-1].args[0]["body"])
+            # The envelope carries the allowed size so the client can show a
+            # precise "maximum X MB" message.
+            self.assertEqual(body["data"], "photo_too_large")
+            self.assertIn("max_mb", body["details"])
+            self.assertIn("max_bytes", body["details"])
+
+    async def test_message_route_json_still_json_bounded_and_length_headers_rejected(self):
+        # Non-multipart on the message route keeps the (tiny) JSON budget.
+        with override_settings(JSON_REQUEST_MAX_BYTES=100):
+            receive = mock.AsyncMock(return_value={"type": "http.request", "body": b"x" * 101})
+            send, app = mock.AsyncMock(), mock.AsyncMock()
+            await BoundedHTTPBody(app)(
+                {
+                    "type": "http",
+                    "path": f"/api/v1/conversations/{uuid.uuid4()}/messages/",
+                    "headers": [(b"content-type", b"application/json")],
+                },
+                receive,
+                send,
+            )
+            app.assert_not_called()
+            self.assertEqual(send.call_args_list[-2].args[0]["status"], 413)
+
+        # Absurd Content-Length headers are rejected without reading the body.
+        receive, send, app = mock.AsyncMock(), mock.AsyncMock(), mock.AsyncMock()
+        await BoundedHTTPBody(app)(
+            {
+                "type": "http",
+                "path": f"/api/v1/conversations/{uuid.uuid4()}/messages/",
+                "headers": [(b"content-length", b"1" * 5000)],
+            },
+            receive,
+            send,
+        )
+        receive.assert_not_called()
+        app.assert_not_called()
 
 
 def dns_answer(address):

@@ -10,8 +10,9 @@ from rest_framework.response import Response
 from capp.classes.billing import idempotency
 from capp.classes.billing.idempotency import InvalidIdempotencyKey
 from capp.classes.guest.guest_identity_service import GuestIdentityService
+from capp.classes.moderation.safety_ledger import locked_copy_for
 from capp.csrf import csrf_protect_for_guests
-from capp.models import Character, Personality
+from capp.models import Character, CustomUser, Personality
 from capp.permissions import IsAdminOrSuperuser
 from capp.classes.characters.character_service import CharacterService
 from capp.classes.characters.character_flag_service import CharacterFlagService
@@ -279,6 +280,18 @@ def api_generate_gallery_image(request, character_id):
                 status=404,
             )
 
+        # Cross-session safety lock: a safety-locked account must not spend
+        # Sparks on gallery generation either (audit F2, 2026-10-04).
+        if request.user.account_status == CustomUser.AccountStatus.SAFETY_LOCKED:
+            return Response(
+                {
+                    "status": "fail",
+                    "data": "account_safety_locked",
+                    "message": locked_copy_for(getattr(request.user, "preferred_language", None)),
+                },
+                status=403,
+            )
+
         try:
             prompt = _image_text(request.data, "prompt")
             caption = _image_text(
@@ -345,6 +358,18 @@ def api_generate_avatar(request, character_id):
             return Response(
                 {"status": "fail", "data": "character_not_found"},
                 status=404,
+            )
+
+        # Cross-session safety lock: a safety-locked account must not spend
+        # Sparks on avatar generation either (audit F2, 2026-10-04).
+        if request.user.account_status == CustomUser.AccountStatus.SAFETY_LOCKED:
+            return Response(
+                {
+                    "status": "fail",
+                    "data": "account_safety_locked",
+                    "message": locked_copy_for(getattr(request.user, "preferred_language", None)),
+                },
+                status=403,
             )
 
         try:

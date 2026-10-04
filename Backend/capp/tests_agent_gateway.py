@@ -7,7 +7,7 @@ Tests cover:
 2. Key storage security (hash only, never plaintext)
 3. Auth boundary (Bearer token vs session auth)
 4. Endpoint parity (OpenAI-compatible shapes)
-5. Pricing math (12.5% markup, EUR->KES->spark conversion)
+5. Pricing math (configured markup, EUR->KES->spark conversion)
 6. Billing (reservation, settle, refund)
 7. Idempotency
 8. Provider layer
@@ -30,7 +30,7 @@ from rest_framework.test import APIClient
 
 from capp.classes.agent_gateway.auth import generate_api_key, hash_api_key
 from capp.classes.agent_gateway.key_service import AgentKeyService
-from capp.classes.agent_gateway.pricing_service import AgentPricingService
+from capp.classes.agent_gateway.pricing_service import AgentPricingService, get_markup_percent
 from capp.classes.agent_gateway.proxy_service import AgentProxyService
 from capp.classes.agent_gateway.providers.registry import (
     get_provider,
@@ -275,16 +275,30 @@ class AgentKeyStorageSecurityTests(TestCase):
 
 
 class AgentPricingServiceTests(TestCase):
-    """Test pricing calculations."""
+    """Test pricing calculations against fictional catalog prices and markup."""
 
     def setUp(self):
         # FX rates are cached; clear so each test resolves them deterministically
         cache.clear()
+        # The public source ships no price defaults: pin illustrative catalog rows
+        # (EUR per 1M tokens). The values are fixtures, not real provider prices.
+        for model, price_in, price_out in (
+            ("deepseek-v4-flash", "1.00", "2.00"),
+            ("kimi-k3", "2.00", "4.00"),
+            ("glm-5", "1.50", "3.00"),
+        ):
+            AgentModelPrice.objects.create(
+                provider="cortecs",
+                model=model,
+                currency="EUR",
+                input_price_per_1m=Decimal(price_in),
+                output_price_per_1m=Decimal(price_out),
+                is_active=True,
+            )
 
     def test_calculate_cost_deepseek_v4_flash(self):
-        """Test pricing for deepseek-v4-flash (0.22/0.66 per 1M in EUR)."""
-        with override_settings(AGENT_FX_EUR_KES=145, AGENT_MARKUP_PERCENT=12.5):
-            # deepseek-v4-flash: input=0.22, output=0.66 EUR per 1M tokens
+        """Test pricing for a catalog row (1.00/2.00 per 1M in EUR)."""
+        with override_settings(AGENT_FX_EUR_KES=145, AGENT_MARKUP_PERCENT=10):
             cost_info = AgentPricingService.calculate_cost(
                 provider="cortecs",
                 model="deepseek-v4-flash",
@@ -292,12 +306,12 @@ class AgentPricingServiceTests(TestCase):
                 output_tokens=0,
             )
 
-            # Input cost: 1M * 0.22 / 1M = 0.22 EUR (native, pre-markup)
-            self.assertAlmostEqual(float(cost_info["cost_native"]), 0.22, places=6)
+            # Input cost: 1M * 1.00 / 1M = 1.00 EUR (native, pre-markup)
+            self.assertAlmostEqual(float(cost_info["cost_native"]), 1.00, places=6)
             self.assertEqual(cost_info["cost_currency"], "EUR")
 
-            # With 12.5% markup: 0.22 * 1.125 = 0.2475
-            self.assertAlmostEqual(float(cost_info["marked_up_cost"]), 0.22 * 1.125, places=6)
+            # With a 10% markup: 1.00 * 1.10 = 1.10
+            self.assertAlmostEqual(float(cost_info["marked_up_cost"]), 1.00 * 1.10, places=6)
 
             # Test with both input and output
             cost_info = AgentPricingService.calculate_cost(
@@ -307,15 +321,15 @@ class AgentPricingServiceTests(TestCase):
                 output_tokens=100,
             )
 
-            # Input: 1000 * 0.22 / 1_000_000 = 0.00022
-            # Output: 100 * 0.66 / 1_000_000 = 0.000066
-            # Total: 0.000286
-            expected_eur = 0.000286
+            # Input: 1000 * 1.00 / 1_000_000 = 0.001
+            # Output: 100 * 2.00 / 1_000_000 = 0.0002
+            # Total: 0.0012
+            expected_eur = 0.0012
             self.assertAlmostEqual(float(cost_info["cost_native"]), expected_eur, places=6)
 
     def test_calculate_cost_kimi_k3(self):
-        """Test pricing for kimi-k3 (3.00/15.00 per 1M in EUR)."""
-        with override_settings(AGENT_FX_EUR_KES=145, AGENT_MARKUP_PERCENT=12.5):
+        """Test pricing for a second catalog row (2.00/4.00 per 1M in EUR)."""
+        with override_settings(AGENT_FX_EUR_KES=145, AGENT_MARKUP_PERCENT=10):
             cost_info = AgentPricingService.calculate_cost(
                 provider="cortecs",
                 model="kimi-k3",
@@ -323,15 +337,15 @@ class AgentPricingServiceTests(TestCase):
                 output_tokens=100,
             )
 
-            # Input: 1000 * 3.00 / 1_000_000 = 0.003
-            # Output: 100 * 15.00 / 1_000_000 = 0.0015
-            # Total: 0.0045
-            expected_eur = 0.0045
+            # Input: 1000 * 2.00 / 1_000_000 = 0.002
+            # Output: 100 * 4.00 / 1_000_000 = 0.0004
+            # Total: 0.0024
+            expected_eur = 0.0024
             self.assertAlmostEqual(float(cost_info["cost_native"]), expected_eur, places=6)
 
     def test_calculate_cost_glm_5(self):
-        """Test pricing for glm-5 (1.00/3.20 per 1M in EUR)."""
-        with override_settings(AGENT_FX_EUR_KES=145, AGENT_MARKUP_PERCENT=12.5):
+        """Test pricing for a third catalog row (1.50/3.00 per 1M in EUR)."""
+        with override_settings(AGENT_FX_EUR_KES=145, AGENT_MARKUP_PERCENT=10):
             cost_info = AgentPricingService.calculate_cost(
                 provider="cortecs",
                 model="glm-5",
@@ -339,16 +353,15 @@ class AgentPricingServiceTests(TestCase):
                 output_tokens=5_000,
             )
 
-            # Input: 10000 * 1.00 / 1_000_000 = 0.01
-            # Output: 5000 * 3.20 / 1_000_000 = 0.016
-            # Total: 0.026
-            expected_eur = 0.026
+            # Input: 10000 * 1.50 / 1_000_000 = 0.015
+            # Output: 5000 * 3.00 / 1_000_000 = 0.015
+            # Total: 0.03
+            expected_eur = 0.03
             self.assertAlmostEqual(float(cost_info["cost_native"]), expected_eur, places=6)
 
-    def test_markup_is_12_5_percent(self):
-        """Verify 12.5% markup is applied correctly."""
-        # Override settings for this test
-        with override_settings(AGENT_MARKUP_PERCENT=12.5, AGENT_FX_EUR_KES=145):
+    def test_configured_markup_is_applied(self):
+        """Verify the configured markup is applied correctly."""
+        with override_settings(AGENT_MARKUP_PERCENT=10, AGENT_FX_EUR_KES=145):
             cost_info = AgentPricingService.calculate_cost(
                 provider="cortecs",
                 model="deepseek-v4-flash",
@@ -356,20 +369,31 @@ class AgentPricingServiceTests(TestCase):
                 output_tokens=0,
             )
 
-            # 0.22 * 1.125 = 0.2475
+            # 1.00 * 1.10 = 1.10
             self.assertAlmostEqual(
                 float(cost_info["marked_up_cost"]),
-                0.22 * 1.125,
+                1.00 * 1.10,
                 places=6,
             )
-            self.assertEqual(cost_info["markup_percent"], 12.5)
+            self.assertEqual(cost_info["markup_percent"], 10)
+
+    def test_unset_markup_means_no_markup(self):
+        """The public source has no commercial default: an unset markup is zero."""
+        with override_settings(AGENT_MARKUP_PERCENT=0, AGENT_FX_EUR_KES=145):
+            cost_info = AgentPricingService.calculate_cost(
+                provider="cortecs",
+                model="deepseek-v4-flash",
+                input_tokens=1_000_000,
+                output_tokens=0,
+            )
+            self.assertAlmostEqual(float(cost_info["marked_up_cost"]), 1.00, places=6)
 
     def test_spark_conversion_uses_constant(self):
         """Verify spark conversion uses SPARK_BASE_VALUE_KES."""
         # SPARK_BASE_VALUE_KES = 0.1 (1 spark = 0.1 KES)
         # So sparks = ceil(charge_kes / 0.1)
 
-        with override_settings(AGENT_FX_EUR_KES=145, AGENT_MARKUP_PERCENT=12.5):
+        with override_settings(AGENT_FX_EUR_KES=145, AGENT_MARKUP_PERCENT=10):
             cost_info = AgentPricingService.calculate_cost(
                 provider="cortecs",
                 model="deepseek-v4-flash",
@@ -377,12 +401,12 @@ class AgentPricingServiceTests(TestCase):
                 output_tokens=0,
             )
 
-            # cost_eur = 0.22
-            # marked_up = 0.22 * 1.125 = 0.2475
-            # charge_kes = 0.2475 * 145 = 35.8875
-            # sparks = ceil(35.8875 / 0.1) = ceil(358.875) = 359
+            # cost_eur = 1.00
+            # marked_up = 1.00 * 1.10 = 1.10
+            # charge_kes = 1.10 * 145 = 159.5
+            # sparks = ceil(159.5 / 0.1) = 1595
 
-            self.assertEqual(cost_info["sparks"], 359)
+            self.assertEqual(cost_info["sparks"], 1595)
 
 
 # ============================================================================
@@ -419,8 +443,8 @@ class AgentProviderTests(TestCase):
             provider="cortecs",
             model="deepseek-v4-flash",
             currency="EUR",
-            input_price_per_1m=Decimal("0.22"),
-            output_price_per_1m=Decimal("0.66"),
+            input_price_per_1m=Decimal("1.00"),
+            output_price_per_1m=Decimal("2.00"),
             is_active=True,
         )
         reset_registry()
@@ -441,6 +465,178 @@ class AgentProviderTests(TestCase):
         # Each model should have id
         for m in models:
             self.assertTrue(hasattr(m, "id"))
+
+    @override_settings(TENSORX_UWENZAI_AGENT_API_KEY="dummy")
+    def test_cortecs_relays_tool_calls_and_synthesizes_missing_ids(self):
+        """Cortecs has its own chat_completion override (#261 missed it): its
+        tool_calls were dropped entirely, leaving finish_reason=tool_calls
+        with no calls — coding agents stalled forever. The relay must carry
+        the calls and synthesize an id when the upstream omits one."""
+        from capp.classes.agent_gateway.providers.cortecs import CortecsAgentProvider
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            class R:
+                def raise_for_status(self):
+                    pass
+
+                def json(self):
+                    return {
+                        "id": "cortecs-1",
+                        "object": "chat.completion",
+                        "model": json["model"],
+                        "choices": [
+                            {
+                                "index": 0,
+                                "message": {
+                                    "role": "assistant",
+                                    "content": "I'll check that.",
+                                    "tool_calls": [
+                                        {
+                                            "type": "function",
+                                            "function": {
+                                                "name": "get_weather",
+                                                "arguments": '{"city": "Nairobi"}',
+                                            },
+                                        }
+                                    ],
+                                },
+                                "finish_reason": "tool_calls",
+                            }
+                        ],
+                        "usage": {"prompt_tokens": 12, "completion_tokens": 9},
+                    }
+
+            return R()
+
+        with mock.patch.object(CortecsAgentProvider, "_get_headers", return_value={}):
+            with override_settings(CORTECS_UWENZAI_AGENT_API_KEY="dummy"):
+                with mock.patch("capp.classes.agent_gateway.providers.cortecs.httpx.post", side_effect=fake_post):
+                    provider = CortecsAgentProvider()
+                    result = provider.chat_completion(
+                        model="deepseek-v4.1-flash",
+                        messages=[{"role": "user", "content": "weather?"}],
+                        params={"max_tokens": 64},
+                    )
+        self.assertEqual(result.status, "success")
+        self.assertEqual(result.finish_reason, "tool_calls")
+        self.assertEqual(len(result.tool_calls), 1)
+        # The upstream omitted "id" — the relay must synthesize one so the
+        # client can match tool results to calls.
+        self.assertTrue(result.tool_calls[0]["id"])
+        self.assertEqual(result.tool_calls[0]["function"]["name"], "get_weather")
+        # And the OpenAI-shaped response re-emits them on the message.
+        message = result.to_openai_response("deepseek-v4.1-flash")["choices"][0]["message"]
+        self.assertEqual(message["tool_calls"][0]["id"], result.tool_calls[0]["id"])
+
+    def test_cortecs_upstream_ids_are_preserved(self):
+        from capp.classes.agent_gateway.providers.cortecs import CortecsAgentProvider
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            class R:
+                def raise_for_status(self):
+                    pass
+
+                def json(self):
+                    return {
+                        "choices": [
+                            {
+                                "index": 0,
+                                "message": {
+                                    "role": "assistant",
+                                    "content": None,
+                                    "tool_calls": [
+                                        {
+                                            "id": "call_abc",
+                                            "type": "function",
+                                            "function": {"name": "read_file", "arguments": "{}"},
+                                        }
+                                    ],
+                                },
+                                "finish_reason": "tool_calls",
+                            }
+                        ],
+                        "usage": {"prompt_tokens": 5, "completion_tokens": 5},
+                    }
+
+            return R()
+
+        with mock.patch.object(CortecsAgentProvider, "_get_headers", return_value={}):
+            with override_settings(CORTECS_UWENZAI_AGENT_API_KEY="dummy"):
+                with mock.patch("capp.classes.agent_gateway.providers.cortecs.httpx.post", side_effect=fake_post):
+                    provider = CortecsAgentProvider()
+                    result = provider.chat_completion(
+                        model="deepseek-v4.1-flash",
+                        messages=[{"role": "user", "content": "read"}],
+                        params={"max_tokens": 64},
+                    )
+        self.assertEqual(result.tool_calls[0]["id"], "call_abc")
+
+    def test_openai_base_relays_tool_calls_and_synthesizes_missing_ids(self):
+        """Same guarantee for the shared OpenAI-compatible path."""
+        from capp.classes.agent_gateway.providers.fikra import FikraAgentProvider
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            class R:
+                def raise_for_status(self):
+                    pass
+
+                def json(self):
+                    return {
+                        "choices": [
+                            {
+                                "index": 0,
+                                "message": {
+                                    "role": "assistant",
+                                    "content": "",
+                                    "tool_calls": [{"type": "function", "function": {"name": "ls", "arguments": "{}"}}],
+                                },
+                                "finish_reason": "tool_calls",
+                            }
+                        ],
+                        "usage": {"prompt_tokens": 5, "completion_tokens": 5},
+                    }
+
+            return R()
+
+        with mock.patch.object(FikraAgentProvider, "_get_headers", return_value={}):
+            with override_settings(FIKRA_UWENZAI_AGENT_API_KEY="dummy"):
+                with mock.patch("capp.classes.agent_gateway.providers.openai_base.httpx.post", side_effect=fake_post):
+                    provider = FikraAgentProvider()
+                    result = provider.chat_completion(
+                        model="fikra-pro-20b",
+                        messages=[{"role": "user", "content": "ls"}],
+                        params={"max_tokens": 64},
+                    )
+        self.assertEqual(result.finish_reason, "tool_calls")
+        self.assertTrue(result.tool_calls[0]["id"])
+
+    @override_settings(TENSORX_UWENZAI_AGENT_API_KEY="dummy", TENSORX_UWENZAI_AGENT_MARKUP_PERCENT=5.0)
+    def test_tensorx_provider_in_registry(self):
+        """TensorX provider should be registered with its EU endpoint and resolve its markup."""
+        self.assertIn("tensorx", PROVIDERS)
+        provider = get_provider(provider_name="tensorx")
+        self.assertIsNotNone(provider)
+        self.assertEqual(provider.name, "tensorx")
+        self.assertEqual(provider._base_url, "https://api.tensorx.ai/v1")
+        self.assertTrue(provider.is_configured())
+        self.assertEqual(get_markup_percent("tensorx"), 5.0)
+
+    @override_settings(TENSORX_UWENZAI_AGENT_API_KEY="")
+    def test_tensorx_not_configured(self):
+        """Without a dedicated key the TensorX provider is unavailable."""
+        provider = get_provider(provider_name="tensorx")
+        if provider:
+            self.assertFalse(provider.is_configured())
+
+    @override_settings(
+        TENSORX_UWENZAI_AGENT_API_KEY="dummy",
+        TENSORX_UWENZAI_AGENT_MODEL_PRICES={"vendor/model-a": ["1.00", "2.00"]},
+    )
+    def test_tensorx_price_map_fills_unpriced_models(self):
+        """TensorX /v1/models has no prices; the settings map must supply them."""
+        provider = get_provider(provider_name="tensorx")
+        self.assertIsNotNone(provider)
+        self.assertEqual(provider._model_prices.get("vendor/model-a"), ("1.00", "2.00"))
 
     @mock.patch.dict("os.environ", {"CORTECS_UWENZAI_AGENT_API_KEY": ""})
     @override_settings(CORTECS_UWENZAI_AGENT_API_KEY="")
@@ -471,8 +667,8 @@ class AgentGatewayBillingTests(TestCase):
             provider="cortecs",
             model="deepseek-v4-flash",
             currency="EUR",
-            input_price_per_1m=Decimal("0.22"),
-            output_price_per_1m=Decimal("0.66"),
+            input_price_per_1m=Decimal("1.00"),
+            output_price_per_1m=Decimal("2.00"),
             is_active=True,
         )
         self.user = _make_user_with_sparks(sparks=1000)
@@ -482,7 +678,7 @@ class AgentGatewayBillingTests(TestCase):
         reset_registry()
 
     @mock.patch.dict("os.environ", {"CORTECS_UWENZAI_AGENT_API_KEY": "dummy"})
-    @override_settings(CORTECS_UWENZAI_AGENT_API_KEY="dummy", AGENT_FX_EUR_KES=145, AGENT_MARKUP_PERCENT=12.5)
+    @override_settings(CORTECS_UWENZAI_AGENT_API_KEY="dummy", AGENT_FX_EUR_KES=145, AGENT_MARKUP_PERCENT=10)
     @mock.patch("capp.classes.agent_gateway.providers.cortecs.CortecsAgentProvider.chat_completion")
     def test_execute_request_reserves_sparks(self, mock_chat_completion):
         """Test that execute_request reserves sparks."""
@@ -513,7 +709,7 @@ class AgentGatewayBillingTests(TestCase):
         self.assertEqual(reservation.status, BillingReservation.Status.SETTLED)
 
     @mock.patch.dict("os.environ", {"CORTECS_UWENZAI_AGENT_API_KEY": "dummy"})
-    @override_settings(CORTECS_UWENZAI_AGENT_API_KEY="dummy", AGENT_FX_EUR_KES=145, AGENT_MARKUP_PERCENT=12.5)
+    @override_settings(CORTECS_UWENZAI_AGENT_API_KEY="dummy", AGENT_FX_EUR_KES=145, AGENT_MARKUP_PERCENT=10)
     @mock.patch("capp.classes.agent_gateway.providers.cortecs.CortecsAgentProvider.chat_completion")
     def test_execute_request_refunds_on_error(self, mock_chat_completion):
         """Test that sparks are refunded when provider fails."""
@@ -540,64 +736,175 @@ class AgentGatewayBillingTests(TestCase):
         reservation = reservations.first()
         self.assertEqual(reservation.status, BillingReservation.Status.REFUNDED)
 
-    @mock.patch.dict("os.environ", {"CORTECS_UWENZAI_AGENT_API_KEY": "dummy"})
-    @override_settings(CORTECS_UWENZAI_AGENT_API_KEY="dummy", AGENT_FX_EUR_KES=145, AGENT_MARKUP_PERCENT=12.5)
-    def test_insufficient_sparks_returns_error(self):
-        """Test that insufficient sparks returns proper error."""
-        # Create a user with no sparks (distinct identity from setUp's user)
-        broke_user = _make_user_with_sparks(sparks=0, username="broke", email="broke@example.com")
-        _, broke_key = AgentKeyService.create_key(broke_user, label="Broke Key")
-
-        messages = [{"role": "user", "content": "Hello"}]
-
-        result = AgentProxyService.execute_request(
-            key=broke_key,
-            model="deepseek-v4-flash",
-            messages=messages,
-            params={"max_tokens": 256},
-        )
-
-        self.assertIn("error", result)
-        self.assertEqual(result["error"]["status"], "insufficient_sparks")
-
-    @mock.patch.dict("os.environ", {"CORTECS_UWENZAI_AGENT_API_KEY": "dummy"})
-    @override_settings(CORTECS_UWENZAI_AGENT_API_KEY="dummy", AGENT_FX_EUR_KES=145, AGENT_MARKUP_PERCENT=12.5)
-    @mock.patch("capp.classes.agent_gateway.providers.cortecs.CortecsAgentProvider.chat_completion")
-    def test_usage_log_created_on_success(self, mock_chat_completion):
-        """Test that usage log is created on successful request."""
-        from capp.classes.agent_gateway.providers.base import ProviderResult
-
-        mock_chat_completion.return_value = ProviderResult(
-            text="test",
-            usage={"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
-            status="success",
-            model="deepseek-v4-flash",
-        )
-
-        messages = [{"role": "user", "content": "Hello"}]
-
-        AgentProxyService.execute_request(
-            key=self.key_record,
-            model="deepseek-v4-flash",
-            messages=messages,
-            params={"max_tokens": 256},
-        )
-
-        # Check usage log was created
-        logs = AgentUsageLog.objects.filter(user=self.user)
-        self.assertTrue(logs.exists())
-
-        log = logs.first()
-        self.assertEqual(log.provider, "cortecs")
-        self.assertEqual(log.model, "deepseek-v4-flash")
-        self.assertEqual(log.input_tokens, 10)
-        self.assertEqual(log.output_tokens, 20)
-        self.assertEqual(log.status, AgentUsageLog.Status.SUCCESS)
-
 
 # ============================================================================
 # 7. Idempotency Tests
 # ============================================================================
+
+
+class AgentRequestValidationTests(TestCase):
+    """Direct param-normalization tests for the shared validation layer."""
+
+    def setUp(self):
+        cache.clear()
+        AgentModelPrice.objects.create(
+            provider="cortecs",
+            model="deepseek-v4-flash",
+            currency="EUR",
+            input_price_per_1m=Decimal("1.00"),
+            output_price_per_1m=Decimal("2.00"),
+            is_active=True,
+        )
+        provider = mock.MagicMock()
+        provider.name = "cortecs"
+        provider.is_configured.return_value = True
+        self.provider_patcher = mock.patch.object(AgentProxyService, "get_provider_for_model", return_value=provider)
+        self.provider_patcher.start()
+        self.addCleanup(self.provider_patcher.stop)
+
+    def _params(self, **over):
+        base = {
+            "max_tokens": 64,
+            "temperature": 0.2,
+            "top_p": None,
+            "stream": False,
+            "stop": None,
+            "presence_penalty": None,
+            "frequency_penalty": None,
+            "user": None,
+        }
+        base.update(over)
+        return base
+
+    def _messages(self):
+        return [{"role": "user", "content": "Hello"}]
+
+    def test_stream_options_stripped_and_default_max_tokens_1024(self):
+        params = AgentProxyService.validate_request(
+            model="deepseek-v4-flash",
+            messages=self._messages(),
+            params=self._params(max_tokens=None, stream=True, stream_options={"include_usage": True}),
+            provider_name="cortecs",
+        )
+        # Stripped before the provider call: the upstream request is never
+        # streamed, and a leftover stream_options would 400 upstream.
+        self.assertNotIn("stream_options", params["params"])
+        # Omitted max_tokens defaults to 1024 (was 256 — truncated agent replies).
+        self.assertEqual(params["params"]["max_tokens"], 1024)
+
+    def test_stream_options_only_supports_include_usage_boolean(self):
+        for bad in ({"include_usage": "yes"}, {"other": 1}, ["include_usage"]):
+            with self.assertRaises(ValueError):
+                AgentProxyService.validate_request(
+                    model="deepseek-v4-flash",
+                    messages=self._messages(),
+                    params=self._params(stream=True, stream_options=bad),
+                    provider_name="cortecs",
+                )
+
+    def test_unknown_params_still_rejected(self):
+        with self.assertRaises(ValueError):
+            AgentProxyService.validate_request(
+                model="deepseek-v4-flash",
+                messages=self._messages(),
+                params=self._params(response_format={"type": "json_object"}),
+                provider_name="cortecs",
+            )
+
+    # ---- Tool calling ----
+
+    def _tool(self):
+        return {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get current weather",
+                "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+            },
+        }
+
+    def test_tools_and_tool_choice_pass_validation(self):
+        validated = AgentProxyService.validate_request(
+            model="deepseek-v4-flash",
+            messages=self._messages(),
+            params=self._params(tools=[self._tool()], tool_choice="auto"),
+            provider_name="cortecs",
+        )
+        self.assertEqual(validated["params"]["tools"], [self._tool()])
+        self.assertEqual(validated["params"]["tool_choice"], "auto")
+
+    def test_tool_messages_and_assistant_replay_pass_validation(self):
+        messages = [
+            {"role": "user", "content": "Weather in Nairobi?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"city": "Nairobi"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "22 degrees, sunny"},
+        ]
+        validated = AgentProxyService.validate_request(
+            model="deepseek-v4-flash",
+            messages=messages,
+            params=self._params(tools=[self._tool()]),
+            provider_name="cortecs",
+        )
+        self.assertEqual(len(validated["messages"]), 3)
+
+    def test_tool_message_without_tool_call_id_rejected(self):
+        messages = [
+            {"role": "user", "content": "Weather?"},
+            {"role": "tool", "content": "22 degrees"},
+        ]
+        with self.assertRaises(ValueError):
+            AgentProxyService.validate_request(
+                model="deepseek-v4-flash",
+                messages=messages,
+                params=self._params(),
+                provider_name="cortecs",
+            )
+
+    def test_malformed_tools_rejected(self):
+        for bad in (
+            ["not-an-object"],
+            [{"type": "not_function"}],
+            [{"type": "function", "function": {}}],
+            [{"type": "function", "function": {"name": ""}}],
+            [],
+        ):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    AgentProxyService.validate_request(
+                        model="deepseek-v4-flash",
+                        messages=self._messages(),
+                        params=self._params(tools=bad),
+                        provider_name="cortecs",
+                    )
+
+    def test_malformed_tool_choice_rejected(self):
+        for bad in ("sometimes", {"type": "function"}, 5, {"type": "function", "function": {"name": ""}}):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    AgentProxyService.validate_request(
+                        model="deepseek-v4-flash",
+                        messages=self._messages(),
+                        params=self._params(tools=[self._tool()], tool_choice=bad),
+                        provider_name="cortecs",
+                    )
+
+    def test_required_sparks_estimate_counts_tools_tokens(self):
+        messages = self._messages()
+        without_tools = AgentProxyService.calculate_required_sparks("deepseek-v4-flash", messages, 64, "cortecs")
+        with_tools = AgentProxyService.calculate_required_sparks(
+            "deepseek-v4-flash", messages, 64, "cortecs", tools=[self._tool()]
+        )
+        self.assertGreaterEqual(with_tools, without_tools)
 
 
 class AgentGatewayIdempotencyTests(TestCase):
@@ -610,8 +917,8 @@ class AgentGatewayIdempotencyTests(TestCase):
             provider="cortecs",
             model="deepseek-v4-flash",
             currency="EUR",
-            input_price_per_1m=Decimal("0.22"),
-            output_price_per_1m=Decimal("0.66"),
+            input_price_per_1m=Decimal("1.00"),
+            output_price_per_1m=Decimal("2.00"),
             is_active=True,
         )
         self.user = _make_user_with_sparks(sparks=1000)
@@ -621,7 +928,7 @@ class AgentGatewayIdempotencyTests(TestCase):
         reset_registry()
 
     @mock.patch.dict("os.environ", {"CORTECS_UWENZAI_AGENT_API_KEY": "dummy"})
-    @override_settings(CORTECS_UWENZAI_AGENT_API_KEY="dummy", AGENT_FX_EUR_KES=145, AGENT_MARKUP_PERCENT=12.5)
+    @override_settings(CORTECS_UWENZAI_AGENT_API_KEY="dummy", AGENT_FX_EUR_KES=145, AGENT_MARKUP_PERCENT=10)
     @mock.patch("capp.classes.agent_gateway.providers.cortecs.CortecsAgentProvider.chat_completion")
     def test_identical_request_detected(self, mock_chat_completion):
         """Test that identical requests are detected and not double-billed."""
@@ -804,8 +1111,8 @@ class AgentPricingEndpointTests(TestCase):
             provider="cortecs",
             model="deepseek-v4-flash",
             currency="EUR",
-            input_price_per_1m=Decimal("0.22"),
-            output_price_per_1m=Decimal("0.66"),
+            input_price_per_1m=Decimal("1.00"),
+            output_price_per_1m=Decimal("2.00"),
             is_active=True,
         )
         AgentModelPrice.objects.create(
@@ -825,7 +1132,7 @@ class AgentPricingEndpointTests(TestCase):
         response = self.client.get("/api/v1/agent/pricing/")
         self.assertEqual(response.status_code, 401)
 
-    @override_settings(AGENT_FX_EUR_KES=145, AGENT_MARKUP_PERCENT=12.5)
+    @override_settings(AGENT_FX_EUR_KES=145, AGENT_MARKUP_PERCENT=10)
     def test_pricing_returns_models_with_spark_prices(self):
         """The catalog lists active models with native prices and spark costs."""
         self.client.force_login(self.user)
@@ -841,17 +1148,17 @@ class AgentPricingEndpointTests(TestCase):
         deepseek = next(m for m in models if m["model"] == "deepseek-v4-flash")
         self.assertEqual(deepseek["provider"], "cortecs")
         self.assertEqual(deepseek["currency"], "EUR")
-        self.assertEqual(deepseek["input_price_per_1m"], "0.22")
-        self.assertEqual(deepseek["output_price_per_1m"], "0.66")
-        # 1M input tokens: 0.22 EUR * 1.125 markup * 145 KES/EUR = 35.8875 KES
-        # -> ceil(358.875 sparks) = 359
-        self.assertEqual(deepseek["sparks_per_1m_input"], 359)
-        # 1M output tokens: 0.66 EUR * 1.125 * 145 = 107.6625 KES
-        # -> ceil(1076.625 sparks) = 1077
-        self.assertEqual(deepseek["sparks_per_1m_output"], 1077)
+        self.assertEqual(deepseek["input_price_per_1m"], "1")
+        self.assertEqual(deepseek["output_price_per_1m"], "2")
+        # 1M input tokens: 1.00 EUR * 1.10 markup * 145 KES/EUR = 159.5 KES
+        # -> 1595 sparks
+        self.assertEqual(deepseek["sparks_per_1m_input"], 1595)
+        # 1M output tokens: 2.00 EUR * 1.10 * 145 = 319 KES
+        # -> 3190 sparks
+        self.assertEqual(deepseek["sparks_per_1m_output"], 3190)
 
         data = response.data["data"]
-        self.assertEqual(data["markup_percent"], 12.5)
+        self.assertEqual(data["markup_percent"], 10)
         self.assertIn("spark_value_kes", data)
 
 
@@ -925,11 +1232,24 @@ class AgentGatewayMigrationTests(TestCase):
 # ============================================================================
 
 
+@override_settings(
+    CACHES={
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        }
+    }
+)
 class AgentAuthFailureLimitTests(TestCase):
     """Cache-backed limiter caps failed key lookups per client address.
 
     DRF runs view throttles only after authentication, so the limiter lives
     in AgentGatewayAuthentication and runs before the DB lookup.
+
+    The failure counter must survive across this class's requests, so the
+    tests run against an in-process LocMemCache instead of the shared CI
+    Redis: with --parallel workers, another test's setUp cache.clear() on
+    the shared backend can wipe the counter mid-test and turn the expected
+    429 into a 401 (seen on CI 2026-10-04).
     """
 
     def setUp(self):
@@ -1011,7 +1331,7 @@ class AgentReservationErrorCleanupTests(TestCase):
         env.start()
         self.addCleanup(env.stop)
         self.settings_override = override_settings(
-            CORTECS_UWENZAI_AGENT_API_KEY="dummy", AGENT_FX_EUR_KES=145, AGENT_MARKUP_PERCENT=12.5
+            CORTECS_UWENZAI_AGENT_API_KEY="dummy", AGENT_FX_EUR_KES=145, AGENT_MARKUP_PERCENT=10
         )
         self.settings_override.enable()
         self.addCleanup(self.settings_override.disable)
@@ -1019,8 +1339,8 @@ class AgentReservationErrorCleanupTests(TestCase):
             provider="cortecs",
             model="deepseek-v4-flash",
             currency="EUR",
-            input_price_per_1m=Decimal("0.22"),
-            output_price_per_1m=Decimal("0.66"),
+            input_price_per_1m=Decimal("1.00"),
+            output_price_per_1m=Decimal("2.00"),
             is_active=True,
         )
         self.user = _make_user_with_sparks(sparks=10000)

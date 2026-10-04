@@ -39,6 +39,11 @@ export const translations = {
       sendFailed: "Your message could not be sent. Please try again.",
       promptRequired: "Please describe the image you want.",
       generatedImageAlt: "Generated image",
+      attachPhoto: "Send a photo",
+      choosePhoto: "Choose photo",
+      takePhoto: "Take photo",
+      removePhoto: "Remove photo",
+      sharedPhotoAlt: "Shared photo",
       loadOlderMessages: "Load older messages",
       loadingOlderMessages: "Loading older messages…",
       loadOlderFailed: "Could not load older messages.",
@@ -632,6 +637,8 @@ export const translations = {
       confirmPurchase: "Confirm Purchase",
       purchaseSparkConfirmation:
         "You are about to purchase {sparks} sparks for {price}.",
+      vatIncluded: "incl. {vat}% VAT",
+      approxConverted: "Approximate converted price — you are charged in KES",
       upgradeSubscriptionConfirmation:
         "You are about to upgrade your subscription to {planName}.",
       replaceSubscriptionNotice:
@@ -815,6 +822,44 @@ export const translations = {
       promptUsed: "Prompt Used for Generation",
     },
 
+    imageSetup: {
+      title: "Set Up Character Images",
+      subtitle: "Add an avatar and optional gallery images for {name}.",
+      avatar: "Avatar",
+      avatarRequired: "Required for your character.",
+      generateAvatar: "Generate Avatar Image",
+      regenerateAvatar: "Regenerate Avatar Image",
+      generating: "Generating…",
+      autoGenerating:
+        "Creating your character's avatar — the first one is included for free.",
+      autoGenerateFailed:
+        "We couldn't create the avatar automatically. Please try again.",
+      firstAvatarFree: "The first avatar is included for free.",
+      regenerationCost: "Regenerating costs {cost} sparks.",
+      noAvatarYet: "No avatar yet",
+      upload: "Upload",
+      gallery: "Gallery",
+      galleryOptional: "Optional additional images.",
+      noGalleryImages: "No gallery images yet.",
+      addImage: "Add Image",
+      cancel: "Cancel",
+      extraDetailsTitle: "Add extra details (optional)",
+      extraDetailsHint:
+        "Describe specific clothing, background, pose, or anything else.",
+      extraDetailsPlaceholder:
+        "e.g. wearing a red dress, standing in a sunflower field",
+      promptUsedTitle: "Prompt Used for Generation",
+      close: "Close",
+      skipForNow: "Skip for now",
+      completing: "Completing...",
+      completeSetup: "Complete Setup",
+      setupCompleteTitle: "Setup Complete",
+      adminSuccessMessage: "Character is now live and visible!",
+      userSuccessMessage: "Character submitted for approval!",
+      avatarRequiredError: "Please add an avatar before completing setup.",
+      characterNotFound: "Character not found.",
+    },
+
     admin: {
       occupationsTitle: "Manage Occupations",
       occupationsSubtitle:
@@ -861,6 +906,8 @@ export const translations = {
       sparks: "Sparks",
       basePrice: "Base Price",
       discount: "Discount",
+      vatPercent: "VAT in %",
+      inclVat: "incl. VAT",
       finalPrice: "Final Price",
       active: "Active",
       slugPlaceholder: "e.g. tokens_500",
@@ -868,6 +915,7 @@ export const translations = {
       sparkAmountPlaceholder: "e.g. 500",
       basePricePlaceholder: "e.g. 50.00",
       discountPlaceholder: "e.g. 2.5",
+      vatPercentPlaceholder: "e.g. 16",
       finalPricePlaceholder: "Auto‑calculated",
       saving: "Saving...",
       save: "Save",
@@ -1173,8 +1221,35 @@ export const translations = {
       guest_session_required:
         "Your guest session has expired. Please refresh the page to keep chatting.",
       conversation_not_found: "This conversation is no longer available.",
+      photo_uploads_disabled:
+        "Photo sending is not available right now. Please try again later.",
+      photo_requires_account:
+        "Create a free account to send photos to your companion.",
+      photo_invalid_image:
+        "That file could not be read as an image. Please choose a JPEG, PNG, or WebP photo.",
+      photo_empty:
+        "The selected photo is empty. Please choose a different photo.",
+      photo_unsupported_format:
+        "That image format isn't supported. Please send a JPEG, PNG, or WebP photo.",
+      photo_dimensions:
+        "That photo is too large. Maximum is {max} megapixels. Please send a smaller photo.",
+      photo_too_large:
+        "That photo is too large. Maximum size is {max} MB. Please send a smaller photo.",
+      photo_moderation_blocked:
+        "That image can't be sent because it appears to contain prohibited content.",
+      photo_moderation_unavailable:
+        "We couldn't check that photo, so it wasn't sent. Your sparks were not taken — please try again shortly.",
+      photo_not_supported_by_model:
+        "The current AI model can't see photos yet. Please try again later or switch models.",
+      photo_processing_failed:
+        "Something went wrong preparing that photo. Please try again.",
+      photo_unavailable: "That photo is no longer available.",
       conversation_closed:
         "This conversation is closed because the character is no longer available.",
+      message_safety_blocked:
+        "We blocked this message because it appears to request or describe content that is not allowed on UwenzAi. Repeated violations will lock your account until our team reviews it.",
+      account_safety_locked:
+        "Your account has been locked for repeated or serious safety violations. You can still sign in and contact support to appeal.",
       message_content_required: "Please type a message first.",
       rate_limited:
         "You're sending messages too quickly. Please wait a moment.",
@@ -1381,6 +1456,11 @@ export const translations = {
       sendFailed: "Ujumbe wako haukutumwa. Tafadhali jaribu tena.",
       promptRequired: "Tafadhali eleza picha unayotaka.",
       generatedImageAlt: "Picha iliyotengenezwa",
+      attachPhoto: "Tuma picha",
+      choosePhoto: "Chagua picha",
+      takePhoto: "Piga picha",
+      removePhoto: "Ondoa picha",
+      sharedPhotoAlt: "Picha iliyoshirikiwa",
       loadOlderMessages: "Pakia jumbe za zamani",
       loadingOlderMessages: "Inapakia jumbe za zamani…",
       loadOlderFailed: "Imeshindwa kupakia jumbe za zamani.",
@@ -1977,6 +2057,8 @@ export const translations = {
       confirmPurchase: "Thibitisha Ununuzi",
       purchaseSparkConfirmation:
         "Unakaribia kununua cheche {sparks} kwa {price}.",
+      vatIncluded: "pamoja na VAT ya {vat}%",
+      approxConverted: "Bei iliyobadilishwa kwa makadirio — unalipwa kwa KES",
       upgradeSubscriptionConfirmation:
         "Unakaribia kuboresha usajili wako hadi {planName}.",
       replaceSubscriptionNotice:
@@ -2153,6 +2235,46 @@ export const translations = {
       promptUsed: "Maagizo Yaliyotumika Kutengeneza",
     },
 
+    imageSetup: {
+      title: "Panga Picha za Mhusika",
+      subtitle:
+        "Ongeza picha ya mhusika na picha za ziada kwa ajili ya {name}.",
+      avatar: "Picha ya Mhusika",
+      avatarRequired: "Inahitajika kwa mhusika wako.",
+      generateAvatar: "Zalisha Picha ya Mhusika",
+      regenerateAvatar: "Zalisha Upya Picha ya Mhusika",
+      generating: "Inazalishwa…",
+      autoGenerating:
+        "Tunazalisha picha ya mhusika wako — picha ya kwanza ni bure.",
+      autoGenerateFailed:
+        "Hatukuweza kuzalisha picha kiotomatiki. Tafadhali jaribu tena.",
+      firstAvatarFree: "Picha ya kwanza ni bure.",
+      regenerationCost: "Kuzalisha upya kunagharimu sparks {cost}.",
+      noAvatarYet: "Hakuna picha bado",
+      upload: "Pakia",
+      gallery: "Galeria",
+      galleryOptional: "Picha za ziada, si lazima.",
+      noGalleryImages: "Hakuna picha za ziada bado.",
+      addImage: "Ongeza Picha",
+      cancel: "Ghairi",
+      extraDetailsTitle: "Ongeza maelezo ya ziada (hiari)",
+      extraDetailsHint:
+        "Eleza mavazi, mandhari, mkao, au kitu chochote kingine.",
+      extraDetailsPlaceholder:
+        "k.m. amevaa gauni nyekundu, anasimama kwenye shamba la alizeti",
+      promptUsedTitle: "Maagizo Yaliyotumika Kutengeneza",
+      close: "Funga",
+      skipForNow: "Ruka kwa sasa",
+      completing: "Inakamilisha...",
+      completeSetup: "Kamilisha Usanidi",
+      setupCompleteTitle: "Usanidi Umekamilika",
+      adminSuccessMessage: "Mhusika sasa yako mtandaoni na anaonekana!",
+      userSuccessMessage: "Mhusika amewasilishwa kwa uhakiki!",
+      avatarRequiredError:
+        "Tafadhali ongeza picha ya mhusika kabla ya kumaliza usanidi.",
+      characterNotFound: "Mhusika hapatikani.",
+    },
+
     admin: {
       occupationsTitle: "Simamia Kazi",
       occupationsSubtitle:
@@ -2197,6 +2319,8 @@ export const translations = {
       sparks: "Cheche",
       basePrice: "Bei ya Msingi",
       discount: "Punguzo",
+      vatPercent: "VAT kwa %",
+      inclVat: "pamoja na VAT",
       finalPrice: "Bei ya Mwisho",
       active: "Inatumika",
       slugPlaceholder: "mf. tokens_500",
@@ -2204,6 +2328,7 @@ export const translations = {
       sparkAmountPlaceholder: "mf. 500",
       basePricePlaceholder: "mf. 50.00",
       discountPlaceholder: "mf. 2.5",
+      vatPercentPlaceholder: "mf. 16",
       finalPricePlaceholder: "Inahesabiwa kiotomatiki",
       saving: "Inahifadhi...",
       save: "Hifadhi",
@@ -2504,8 +2629,35 @@ export const translations = {
       guest_session_required:
         "Kipindi chako cha mgeni kimeisha. Tafadhali onyesha upya ukurasa ili uendelee kuzungumza.",
       conversation_not_found: "Mazungumzo haya hayapatikani tena.",
+      photo_uploads_disabled:
+        "Kutuma picha hakupatikana kwa sasa. Tafadhali jaribu tena baadaye.",
+      photo_requires_account:
+        "Tengeneza akaunti ya bure ili kutuma picha kwa mwenzi wako.",
+      photo_invalid_image:
+        "Faili hilo haliwezi kusomwa kama picha. Tafadhali chagua picha ya JPEG, PNG, au WebP.",
+      photo_empty:
+        "Picha uliyochagua ni tupu. Tafadhali chagua picha nyingine.",
+      photo_unsupported_format:
+        "Muundo wa picha hiyo haupatikani. Tafadhali tuma picha ya JPEG, PNG, au WebP.",
+      photo_dimensions:
+        "Picha hiyo ni kubwa mno. Kiwango cha juu ni megapikseli {max}. Tafadhali tuma picha ndogo zaidi.",
+      photo_too_large:
+        "Picha hiyo ni kubwa mno. Kiwango cha juu ni MB {max}. Tafadhali tuma picha ndogo zaidi.",
+      photo_moderation_blocked:
+        "Picha hiyo haiwezi kutumwa kwa sababu inaonekana kuwa na maudhui yaliyokatazwa.",
+      photo_moderation_unavailable:
+        "Hatuwezi kukagua picha hiyo, kwa hivyo haikutumwa. Sparks zako hazikuchukuliwa — tafadhali jaribu tena hivi karibuni.",
+      photo_not_supported_by_model:
+        "Mfano wa AI wa sasa hawezi kuona picha bado. Tafadhali jaribu tena baadaye au badilisha mfano.",
+      photo_processing_failed:
+        "Kuna hitilafu katika kuandaa picha hiyo. Tafadhali jaribu tena.",
+      photo_unavailable: "Picha hiyo haipatikani tena.",
       conversation_closed:
         "Mazungumzo haya yamefungwa kwa sababu mhusika hapatikani tena.",
+      message_safety_blocked:
+        "Tulizuia ujumbe huu kwa sababu unaonekana kuomba au kuelezea maudhui yasiyoruhusiwa kwenye UwenzAi. Ukiendelea, akaunti yako itafungwa hadi timu yetu iipitie.",
+      account_safety_locked:
+        "Akaunti yako imefungwa kwa sababu ya kuvunja sheria za usalama mara kwa mara au kwa njia kali. Bado unaweza kuingia na kuwasiliana na usaidizi kwa rufaa.",
       message_content_required: "Tafadhali andika ujumbe kwanza.",
       rate_limited: "Unatuma ujumbe haraka mno. Tafadhali subiri kidogo.",
       guest_daily_limit_reached:

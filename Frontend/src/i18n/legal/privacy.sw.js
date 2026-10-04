@@ -39,7 +39,7 @@ export const privacySw = {
             "Mazungumzo yako yanabaki ya faragha kwa akaunti yako. Hayachapishwi, hayaonyeshwi kwa watumiaji wengine, na hayauzwi.",
             "Maandishi ya ujumbe, muhtasari wa mazungumzo na kumbukumbu husimbwa kwa njia fiche kwenye hifadhidata yetu kwa kutumia vitufe vinavyohifadhiwa na seva zetu. Hii si usimbaji fiche kutoka mwanzo hadi mwisho — mifumo yetu inaweza kufungua maudhui haya, na wafanyakazi wachache waliopewa idhini wanaweza kuyafikia inapohitajika.",
             "Ili kuzalisha majibu na picha, ni lazima tutume vidokezo vyako — na, kwa vipengele vingine vya picha, picha ya rejeleo — kwa watoa huduma wa AI wanaowezesha vipengele hivyo.",
-            "Picha huhifadhiwa kwenye ndoo ya faragha yenye udhibiti wa ufikiaji ambayo mtoa huduma wetu wa uwekaji mtandaoni anaisimba kwa njia fiche ilipohifadhiwa. Hatuweki tabaka letu la pekee la usimbaji fiche kwa kila picha.",
+            "Picha unazotuma kwenye mazungumzo husimbwa kwa vitufe vyetu mwenyewe kabla ya kuhifadhiwa, juu ya usimbaji fiche wa mtoa huduma wa hifadhi unapohifadhiwa. Picha zilizozalishwa na za nyumba ya picha hutegemea usimbaji fiche wa mtoa huduma wa hifadhi pekee.",
             "Unaweza kupakua data yako na kufuta akaunti yako kutoka ndani ya programu. Kufuta akaunti kunaondoa wasifu wako, mazungumzo na maudhui ya faragha; wahusika wa umma uliowaunda wanabaki kwenye Huduma bila jina lako.",
             "Hatutumii mazungumzo yako ya faragha kufundisha modeli za AI, na hatuendeshi matangazo wala vifuatiliaji vya uchanganuzi vya watu wa tatu.",
           ],
@@ -122,6 +122,10 @@ export const privacySw = {
         },
         {
           type: "p",
+          text: "Rekodi za usalama. Uchunguzi wetu wa kiotomatiki wa usalama unapogundua ukiukaji unaowezekana kwenye ujumbe au ombi la picha, au kupata wasiwasi wa usalama, tunahifadhi rekodi ya usalama yenye aina ya kanuni tu, kiwango cha hatari, hatua iliyochukuliwa (kwa mfano kurekodiwa tu, onyo au kuzuiwa), na muda na mazungumzo yaliyohusiana. Kwa chaguo-msingi, uchunguzi wa ujumbe wako wa mazungumzo hurekodi tu: ukiukaji unaowezekana hurekodiwa, lakini ujumbe wako haujazuiwa wala akaunti yako haiwekewi vikwazo kiotomatiki. Rekodi zinazotengenezwa kwa njia hii hazihesabiwi kamwe kwenye utekelezaji wowote wa kiotomatiki baadaye. Wasimamizi wetu wanaweza kukagua rekodi za usalama, na msimamizi ndiye anayeamua kama hatua yoyote ichukuliwe dhidi ya akaunti. Maombi ya picha yanayolingana na mada iliyokatazwa bado hukataliwa kiotomatiki. Rekodi za usalama hazina kamwe maandishi ya ujumbe wako, wala alama za kidijitali za maudhui yake, wala kiungo na ujumbe huo. Pia tunahifadhi alama isiyoweza kurudishwa ya ujumbe, inayotumika tu kuepuka kuhesabu ujumbe mmoja mara mbili. Mwenzi wako wa AI akikataa ombi lako yenyewe, tunahesabu kukataa huko kama rekodi ya ushauri ya usalama: inahifadhi aina, muda na alama isiyoweza kurudishwa ya jibu, na si chochote kingine. Kukataa kwa modeli kuchangia kamwe utekelezaji na hakufungi akaunti kwa kiotomatiki; kama yanakusanyika vya kutosha, mfumo unaweza kupendekeza kwa wasimamizi wetu wafikirie kuzuia akaunti yako, na wasimamizi ndio hutoa uamuzi. Rekodi za kukataa hazifutwi unapofuta kumbukumbu za mhusika au ujumbe au mazungumzo — msimamizi tu anaweza kuzikagua au kuziweka upya, na kila kuweka upya kunarekodiwa kwenye ukaguzi wetu wa ndani. Unapofuta akaunti yako, rekodi zako za kukataa pia hufutwa pamoja nayo. Maneno ya kujidhuru yanachukuliwa kama jambo la msaada, si ukiukaji: yanarekodiwa ili tukupatie msaada bora, na hayachangiwi kamwe kwa hatua za utekelezaji.",
+        },
+        {
+          type: "p",
           text: "Vitufe vyako vya API (hiari). Ikiwa unatumia Leta Kitufe Chako Mwenyewe, tunahifadhi kitufe cha API unachotoa kwa njia fiche. Kidokezo cha mfumo unachotoa mwenyewe huhifadhiwa bila kusimbwa kwa makusudi ili kiweze kupitiwa kwa madhumuni ya udhibiti wa maudhui — tafadhali usiweke manenosiri au siri nyingine ndani yake.",
         },
       ],
@@ -157,7 +161,7 @@ export const privacySw = {
       blocks: [
         {
           type: "p",
-          text: "UwenzAi haiendeshi modeli zake za AI. Ili kutoa jibu tunatuma muktadha wa mazungumzo unaohusika — ambao unajumuisha ujumbe wako, maelezo ya mhusika, na kumbukumbu na muhtasari unaohusika — kwa mtoa huduma wa AI wa nje kupitia muunganisho uliosimbwa kwa njia fiche. Uchakataji huu hauwezi kuepukwa ikiwa unataka Huduma ifanye kazi.",
+          text: "UwenzAi haiendeshi modeli zake za AI. Ili kutoa jibu tunatuma muktadha wa mazungumzo unaohusika — ambao unajumuisha ujumbe wako, maelezo ya mhusika, na kumbukumbu na muhtasari unaohusika — kwa mtoa huduma wa AI wa nje kupitia muunganisho uliosimbwa kwa njia fiche. Ikiwa ujumbe wako una picha na modeli inayotumika inaweza kuona picha, picha hutumwa kwa mtoa huduma huyo kama sehemu ya ombi hilo hili ili mwandani wako aweze kuijibu. Uchakataji huu hauwezi kuepukwa ikiwa unataka Huduma ifanye kazi.",
         },
         {
           type: "ul",
@@ -165,7 +169,7 @@ export const privacySw = {
             "Cortecs ni mtoa huduma wetu mkuu wa AI: huzalisha majibu ya mazungumzo, na pia huunda uwakilishi wa kihesabu unaowezesha kumbukumbu ya mhusika.",
             "Mistral AI ni mtoa huduma wa akiba kwa majibu ya mazungumzo na kwa uwakilishi wa kihesabu, hutumika Cortecs inaposhindwa au haijasanidiwa. Pia tunatuma maandishi kwa Mistral AI moja kwa moja kwa kazi zinazoendeshwa nyuma: kuchambua kumbukumbu, kuandika muhtasari wa mazungumzo, kutunga maelezo ya tabia ya mhusika, na kupima hisia za mazungumzo.",
             "Cortecs ni jukwaa la uendeshaji linaloendesha miundo huria ya wengine kwa maagizo yetu, wakati Mistral AI hutengeneza na kuendesha miundo yake yenyewe. Mtoa huduma tunayemtaja ni kampuni inayopokea data; muundo mahususi anaoendesha ni uamuzi wa usanidi na unaweza kubadilika.",
-            "Ikiwa unatumia Leta Kitufe Chako Mwenyewe, majibu yako ya mazungumzo huzalishwa badala yake na mahali pa kufikia pa mtu wa tatu uliposanidi. Masharti ya faragha ya mtoa huduma huyo ndiyo yanayoongoza anachofanya na maudhui yako, na hatuna udhibiti wowote juu ya muda wanaobakiza data wala uwezo wa kuiona. Uwakilishi wa kihesabu na kazi zinazoendeshwa nyuma zilizotajwa hapo juu huendelea kutumia watoa huduma tuliowataja hapa.",
+            "Ikiwa unatumia Leta Kitufe Chako Mwenyewe, majibu yako ya mazungumzo — pamoja na picha unazotuma, modeli uliyosanidi inapoweza kuona picha — huzalishwa badala yake na mahali pa kufikia pa mtu wa tatu uliposanidi. Masharti ya faragha ya mtoa huduma huyo ndiyo yanayoongoza anachofanya na maudhui yako, na hatuna udhibiti wowote juu ya muda wanaobakiza data wala uwezo wa kuiona. Uwakilishi wa kihesabu na kazi zinazoendeshwa nyuma zilizotajwa hapo juu huendelea kutumia watoa huduma tuliowataja hapa. Picha zilizotumwa kwa Leta Kitufe Chako Mwenyewe bado huchambuliwa na sisi kabla ya kuhifadhiwa, kama ilivyoelezwa katika sehemu ya 8.",
             "Kanuni zetu za maudhui yaliyopigwa marufuku na utozaji wetu wa bili vinaendelea kutumika unapotumia kitufe chako mwenyewe.",
           ],
         },
@@ -203,8 +207,12 @@ export const privacySw = {
     },
     {
       id: "8",
-      heading: "8. Picha: uzalishaji, picha za rejeleo, hifadhi na ufikiaji",
+      heading: "8. Picha: uzalishaji, picha unazotuma, hifadhi na ufikiaji",
       blocks: [
+        {
+          type: "p",
+          text: "Picha unazotuma kwenye mazungumzo. Kabla ya picha unayotuma kuhifadhiwa, uchambuzi wa kiotomatiki wa usalama wa watoto unaendeshwa kwenye seva zetu: nakala ya picha yenye ukubwa uliopunguzwa, bila maelezo ya kina, hutumwa kwa mtoa huduma wetu wa sasa wa uchambuzi wa usalama (Mistral AI) ili kuipima kulingana na sera yetu ya usalama wa watoto. Kwa uchambuzi huu picha pekee ndiyo inayotumwa — si maandishi ya ujumbe wako wala maelezo unayoongeza kwenye picha. Picha ambazo uchambuzi unazikataa, na picha ambazo haziwezi kuchambuliwa kabisa, zinakataliwa na hazihifadhiwi kabisa. Uchambuzi huu ulikuwepo ili kuzuia uchi wa watoto na maudhui ya kingono yanayohusisha watoto; si kichujio cha jumla cha maudhui, na maudhui ya watu wazima hayachujwi.",
+        },
         {
           type: "p",
           text: "Uzalishaji wa picha. Unapoomba picha tunatuma maandishi ya kidokezo yaliyozalishwa — yaliyoundwa kutoka sifa za mhusika na maagizo unayoongeza — kwa fal.ai, anayeendesha modeli ya picha tunayotumia. Ikiwa fal.ai hapatikani, Stability AI anaweza kutumika badala yake. Hatutumi jina lako, barua pepe wala kitambulisho cha akaunti pamoja na maombi haya.",
@@ -219,7 +227,7 @@ export const privacySw = {
         },
         {
           type: "p",
-          text: "Hifadhi. Picha zilizopakiwa na zilizozalishwa huhifadhiwa kwenye ndoo ya Railway inayooana na S3. Ndoo hiyo imesanidiwa kuwa ya faragha: vitu havina ruhusa ya kusomwa na umma, na kila kiungo tunachotoa ni URL iliyotiwa sahihi yenye kikomo cha muda, inayodumu takribani saa moja kwa chaguo-msingi. Railway inasimba data iliyohifadhiwa kwa njia fiche ilipohifadhiwa kwenye tabaka la hifadhi. Hatuongezi tabaka la pekee la usimbaji fiche kwa kila picha au katika kiwango cha programu juu ya hilo, kwa hivyo hatudai kwamba picha zako zimesimbwa kwa njia fiche mmoja mmoja na sisi.",
+          text: "Hifadhi. Picha unazotuma kwenye mazungumzo husimbwa kwa usimbaji fiche wetu wenyewe katika kiwango cha programu — kila picha kwa kitufe chake — kabla ya kuandikwa kwenye ndoo ya Railway inayooana na S3, juu ya usimbaji fiche wa tabaka la hifadhi. Picha za rejeleo zilizopakiwa na picha zilizozalishwa hutegemea usimbaji fiche wa mtoa huduma wa hifadhi pekee. Ndoo hiyo imesanidiwa kuwa ya faragha: vitu havina ruhusa ya kusomwa na umma, na kila kiungo tunachotoa ni URL iliyotiwa sahihi yenye kikomo cha muda. Kwa hivyo, ingawa hatudai kusimba picha zilizozalishwa na za nyumba ya picha mmoja mmoja, picha za mazungumzo zinasimbwa mmoja mmoja na sisi.",
         },
         {
           type: "p",
@@ -233,7 +241,7 @@ export const privacySw = {
       blocks: [
         {
           type: "p",
-          text: "Tunaweka usimbaji fiche katika kiwango cha programu kwa maandishi nyeti zaidi kwenye hifadhidata yetu. Yaliyomo ya ujumbe, muhtasari wa mazungumzo na kumbukumbu husimbwa kabla ya kuandikwa, kama vilevile anwani za barua pepe zilizohifadhiwa, nambari za simu na kitufe chochote cha Leta Kitufe Chako Mwenyewe.",
+          text: "Tunaweka usimbaji fiche katika kiwango cha programu kwa maandishi nyeti zaidi kwenye hifadhidata yetu. Yaliyomo ya ujumbe, muhtasari wa mazungumzo na kumbukumbu husimbwa kabla ya kuandikwa, kama vilevile anwani za barua pepe zilizohifadhiwa, nambari za simu, kitufe chochote cha Leta Kitufe Chako Mwenyewe, na faili za picha unazotuma kwenye mazungumzo. Vikomo vile vile vinatumika: vitufe vinahifadhiwa na seva zetu, na hii si usimbaji fiche kutoka mwanzo hadi mwisho.",
         },
         {
           type: "p",
@@ -248,7 +256,7 @@ export const privacySw = {
         },
         {
           type: "p",
-          text: "Taarifa nyingine hazisimbwi katika kiwango cha programu, ikijumuisha sifa za wahusika, muda na hali ya ujumbe, rekodi za tokeni na gharama, na kidokezo chochote cha mfumo unachotoa mwenyewe.",
+          text: "Taarifa nyingine hazisimbwi katika kiwango cha programu, ikijumuisha sifa za wahusika, muda na hali ya ujumbe, rekodi za tokeni na gharama, faili za picha zilizozalishwa na za nyumba ya picha, na kidokezo chochote cha mfumo unachotoa mwenyewe.",
         },
         {
           type: "p",
@@ -269,6 +277,7 @@ export const privacySw = {
           items: [
             "Wewe. Mazungumzo yako, wahusika wa faragha na picha za faragha zinaonekana kwako kwenye akaunti yako, na hazionyeshwi kwa watumiaji wengine.",
             "Wafanyakazi wa UwenzAi waliopewa idhini. Wasimamizi wanaweza kufikia rekodi za akaunti na, inapohitajika, maudhui ya mtumiaji — kwa mfano kuchunguza ripoti, kushughulikia tiketi ya usaidizi, kukabiliana na tukio la usalama, au kufuata wajibu wa kisheria. Ufikiaji ni kwa wafanyakazi wanaouhitaji kwa madhumuni hayo pekee.",
+            "Rekodi za usalama, kwa muhtasari tu. Wasimamizi wanaokagua suala la usalama wanaona aina, kiwango na idadi ya matukio ya usalama yaliyorekodiwa — kamwe maandishi ya ujumbe zilizochochea hayo. Isipokuwa ni ujumbe unaoripoti wewe mwenyewe: unaporipoti ujumbe, timu yetu ya usaidizi hupokea maandishi ya ujumbe huo na sababu yako ili iweze kuukagua.",
             "Watoa huduma wetu. Watoa huduma wa miundombinu, AI na malipo walioorodheshwa kwenye taarifa yetu ya watoa huduma huchakata data inayohitajika kutoa kipengele ulichotumia, chini ya mkataba na kwa maagizo yetu.",
             "Watumiaji wengine, pale unapochagua tu. Ikiwa unachapisha mhusika au unaweka picha ya nyumba ya picha kuwa ya umma, inakuwa inaonekana kwa wengine. Mazungumzo yako hayafanywi ya umma na sisi kamwe.",
             "Mamlaka, pale sheria inapohitaji. Tunaweza kufichua taarifa ikiwa tunalazimika kisheria, au kulinda haki zetu, watumiaji wetu au umma.",
@@ -350,6 +359,7 @@ export const privacySw = {
             "Kodi za uthibitishaji na urejeshaji wa nenosiri zinaisha haraka, kwa kawaida ndani ya dakika kadhaa, na hukataliwa baada ya hapo.",
             "Rekodi za manunuzi, bili na ridhaa huhifadhiwa kwa muda wote tunapozihitaji kutimiza wajibu wa uhasibu, kodi na kisheria, na kujilinda dhidi ya mizozo.",
             "Tiketi za usaidizi na ripoti za maudhui huhifadhiwa wakati ziko wazi na kwa kipindi cha kuridhisha baada ya hapo, ili matatizo yanayojirudia yaweze kushughulikiwa.",
+            "Rekodi za usalama huhifadhiwa kwa muda tunaohitaji kugundua ukiukaji unaorudiwa katika vikao vyako vingi, kukagua maamuzi ya utekelezaji, na kutimiza wajibu wa kisheria. Rekodi za zamani huacha kuhesabiwa kwa utekelezaji wa kiotomatiki baada ya dirisha maalum (kwa sasa siku 180).",
           ],
         },
         {
@@ -402,6 +412,7 @@ export const privacySw = {
             "Nakala zinaweza kuendelea kuwepo kwa kipindi kifupi kwenye nakala rudufu za hifadhidata zilizosimbwa kwa njia fiche na kwenye kumbukumbu za utendaji kabla ya kuisha kwa mwendo wa kawaida.",
             "Maudhui yaliyokwisha tumwa kwa mtoa huduma wa AI kuzalisha jibu au picha yanadhibitiwa na muda wa kubakiza wa mtoa huduma huyo. Tunaomba kubakizwa kidogo zaidi pale mtoa huduma anaruhusu, lakini hatuwezi kufuta data kwenye mifumo yao kwa niaba yako.",
             "Tunaweza kubakiza rekodi kidogo pale tunapozihitaji kufuata sheria, kuzuia udanganyifu au matumizi mabaya, au kusuluhisha mzozo.",
+            "Rekodi za usalama — aina ya kanuni, kiwango cha hatari na metadata ya matokeo, kamwe maandishi ya ujumbe wako — zinaweza kubakizwa pale tunapohitaji kuweka Huduma salama, kuzuia matumizi mabaya yanayojirudia, na kufuata wajibu wa kisheria, ikijumuisha wajibu wa kuripoti yanayohusiana na usalama wa watoto.",
           ],
         },
         {
@@ -453,7 +464,7 @@ export const privacySw = {
           items: [
             "Mawasiliano kati ya kifaa chako na seva zetu yamesimbwa kwa njia fiche yanapopita.",
             "Sehemu nyeti za hifadhidata, na vitambulisho vilivyoelezwa hapo juu, vimesimbwa kwa njia fiche katika kiwango cha programu.",
-            "Picha huhifadhiwa kwenye ndoo ya faragha, inayofikiwa tu kupitia viungo vilivyotiwa sahihi vya muda mfupi, na zimesimbwa kwa njia fiche zilipohifadhiwa na mtoa huduma wetu wa uwekaji mtandaoni.",
+            "Picha huhifadhiwa kwenye ndoo ya faragha, inayofikiwa tu kupitia viungo vilivyotiwa sahihi vya muda mfupi, na zimesimbwa kwa njia fiche zilipohifadhiwa na mtoa huduma wetu wa uwekaji mtandaoni; picha unazotuma kwenye mazungumzo zinaongezewa usimbaji fiche wa vitufe vyetu mwenyewe kabla ya kufikia ndoo.",
             "Manenosiri huhifadhiwa kama michanganyiko yenye chumvi (salted hashes), kamwe hayahifadhiwi kwa namna inayoweza kusomwa.",
             "Tunatumia kuki za kipindi za HttpOnly, ulinzi wa CSRF, kupunguza kasi ya maombi, kufunga akaunti baada ya majaribio ya kuingia yaliyoshindwa mara kwa mara, na ulinzi dhidi ya roboti kwenye fomu nyeti.",
             "Ufikiaji wa kiutawala ni kwa wafanyakazi wanaouhitaji pekee.",

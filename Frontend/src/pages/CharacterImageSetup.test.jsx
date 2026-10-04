@@ -1,0 +1,165 @@
+// src/pages/CharacterImageSetup.test.jsx
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import CharacterImageSetup from "./CharacterImageSetup";
+import { translations } from "../i18n/translations";
+
+const t = (key, vars = {}) => {
+  let value = key
+    .split(".")
+    .reduce((acc, part) => acc?.[part], translations.en);
+  if (typeof value !== "string") return key;
+  Object.entries(vars).forEach(([k, v]) => {
+    value = value.replace(`{${k}}`, v);
+  });
+  return value;
+};
+vi.mock("../context/LanguageContext", () => ({
+  useLanguage: () => ({ t, language: "en" }),
+}));
+
+vi.mock("../context/ThemeContext", () => ({
+  useTheme: () => ({ isDark: true }),
+}));
+
+vi.mock("../context/AuthContext", () => ({
+  useAuth: () => ({ user: { user_id: "u1" }, isAdmin: false }),
+}));
+
+const getCharacterById = vi.fn();
+const generateAvatar = vi.fn();
+const listGalleryImages = vi.fn();
+const generateGalleryImage = vi.fn();
+const uploadGalleryImage = vi.fn();
+const deleteGalleryImage = vi.fn();
+const updateCharacter = vi.fn();
+const completeCharacterSetup = vi.fn();
+
+vi.mock("../services/characterService", () => ({
+  getCharacterById: (...args) => getCharacterById(...args),
+  generateAvatar: (...args) => generateAvatar(...args),
+  listGalleryImages: (...args) => listGalleryImages(...args),
+  generateGalleryImage: (...args) => generateGalleryImage(...args),
+  uploadGalleryImage: (...args) => uploadGalleryImage(...args),
+  deleteGalleryImage: (...args) => deleteGalleryImage(...args),
+  updateCharacter: (...args) => updateCharacter(...args),
+  completeCharacterSetup: (...args) => completeCharacterSetup(...args),
+}));
+
+vi.mock("../services/billingService", () => ({
+  getPricing: vi.fn().mockResolvedValue({
+    data: { image_generation_cost: 350 },
+  }),
+}));
+
+function draftCharacter(overrides = {}) {
+  return {
+    data: {
+      character: {
+        character_id: "char-1",
+        name: "Amina",
+        visual_style: "realistic",
+        avatar_url: null,
+        // The serializer emits the lowercase model value ("draft"), not "DRAFT".
+        review_status: "draft",
+        avatar_source: "ai_generated",
+        ...overrides,
+      },
+    },
+  };
+}
+
+function renderPage() {
+  return render(
+    <MemoryRouter initialEntries={["/characters/char-1/setup"]}>
+      <Routes>
+        <Route
+          path="/characters/:characterId/setup"
+          element={<CharacterImageSetup />}
+        />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  listGalleryImages.mockResolvedValue({ data: { images: [] } });
+});
+
+afterEach(cleanup);
+
+describe("CharacterImageSetup automatic avatar generation", () => {
+  it("generates the first avatar automatically for a DRAFT character without one", async () => {
+    getCharacterById.mockResolvedValue(draftCharacter());
+    generateAvatar.mockResolvedValue({ data: { prompt_used: "x" } });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(generateAvatar).toHaveBeenCalledWith(
+        "char-1",
+        expect.objectContaining({ extra_prompt: "" }),
+      );
+    });
+    expect(generateAvatar).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not auto-generate when the character already has an avatar", async () => {
+    getCharacterById.mockResolvedValue(
+      draftCharacter({ avatar_url: "https://example.com/a.webp" }),
+    );
+
+    renderPage();
+
+    // Wait for the page to settle, then assert no generation was requested.
+    await waitFor(() => {
+      expect(screen.getByText("Regenerate Avatar Image")).toBeTruthy();
+    });
+    expect(generateAvatar).not.toHaveBeenCalled();
+  });
+
+  it("does not auto-generate for a character outside DRAFT review status", async () => {
+    getCharacterById.mockResolvedValue(
+      draftCharacter({ review_status: "pending" }),
+    );
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("Generate Avatar Image")).toBeTruthy();
+    });
+    expect(generateAvatar).not.toHaveBeenCalled();
+  });
+
+  it("shows the regenerate label only once an avatar exists", async () => {
+    getCharacterById.mockResolvedValue(
+      draftCharacter({ avatar_url: "https://example.com/a.webp" }),
+    );
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("Regenerate Avatar Image")).toBeTruthy();
+    });
+  });
+
+  it("shows the auto-generation failure message when the automatic attempt fails", async () => {
+    getCharacterById.mockResolvedValue(draftCharacter());
+    // An error with no usable message falls back to the auto-failure text.
+    generateAvatar.mockRejectedValue(new Error(""));
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          "We couldn't create the avatar automatically. Please try again.",
+        ),
+      ).toBeTruthy();
+    });
+    // The manual button remains available for a retry.
+    expect(screen.getByText("Generate Avatar Image")).toBeTruthy();
+  });
+});

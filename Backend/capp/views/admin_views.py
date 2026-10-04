@@ -3,10 +3,10 @@
 Read/write API surface for the separate uwenzAi-Admin panel.
 
 Everything here is protected by IsAdminOrSuperuser (is_staff or is_superuser).
-No new database tables are introduced — every endpoint reads/writes fields
-that already exist on CustomUser, Conversation, SparkTransaction,
-UserBYOKConfig and Character. See PR description for the field-by-field
-mapping.
+The user, character, Sparks and BYOK endpoints read/write fields that already
+existed; the safety-ledger endpoints expose the SafetyEvent table added by the
+cross-session safety feature (category/severity metadata only — never message
+text, see capp/models.py::SafetyEvent).
 """
 
 import logging
@@ -14,6 +14,7 @@ import uuid
 
 from datetime import timedelta
 
+from django.conf import settings
 from django.db import transaction as db_transaction
 from django.db.models import Count, Q
 from django.db.models.functions import TruncDate
@@ -29,11 +30,14 @@ from capp.classes.billing.balances import (
     lock_spark_pool,
 )
 from capp.classes.billing.charge_service import _push_spark_pool_balance
+from capp.classes.moderation.safety_ledger import ATTENTION_EVENT_THRESHOLD, SafetyLedgerService, ledger_mode
+from capp.classes.support.support_service import SupportService
 from capp.models import (
     AdminActionLog,
     Character,
     Conversation,
     CustomUser,
+    SafetyEvent,
     SparkPool,
     SparkTransaction,
     UserBYOKConfig,
@@ -119,12 +123,22 @@ def admin_list_users(request):
         end = start + page_size
         users = qs[start:end]
 
-        data = [_serialize_user_summary(u) for u in users]
+        users = list(users)
+        # At-a-glance safety flag (counts and a level only, never message
+        # content) so an admin sees which accounts need a look without opening
+        # every profile. Detail stays on the per-user safety page.
+        attention = SafetyLedgerService.attention_summaries([u.user_id for u in users])
+        data = []
+        for u in users:
+            item = _serialize_user_summary(u)
+            item["safety"] = attention[u.user_id]
+            data.append(item)
         return Response(
             {
                 "status": "success",
                 "data": {
                     "users": data,
+                    "safety_attention_threshold": ATTENTION_EVENT_THRESHOLD,
                     "page": page,
                     "page_size": page_size,
                     "total": total,
@@ -227,6 +241,7 @@ def admin_update_user_status(request, user_id):
             CustomUser.AccountStatus.SUSPENDED,
             CustomUser.AccountStatus.BANNED,
             CustomUser.AccountStatus.DEACTIVATED,
+            CustomUser.AccountStatus.SAFETY_LOCKED,
         }
 
         if new_status in restrictive_statuses and not reason:
@@ -237,7 +252,11 @@ def admin_update_user_status(request, user_id):
 
         old_status = user.account_status
         user.account_status = new_status
-        user.is_active = new_status not in restrictive_statuses
+        # safety_locked deliberately keeps is_active=True: the user must
+        # still be able to sign in, read their status and appeal through
+        # support. Generation actions are refused per-send instead.
+        login_blocked_statuses = restrictive_statuses - {CustomUser.AccountStatus.SAFETY_LOCKED}
+        user.is_active = new_status not in login_blocked_statuses
         user.ban_reason = reason if new_status in restrictive_statuses else ""
         user.save(update_fields=["account_status", "is_active", "ban_reason", "updated_at"])
 
@@ -1255,4 +1274,397 @@ def admin_audit_log(request):
         )
     except Exception:
         logger.exception("Error in admin_audit_log")
+        return Response({"status": "fail", "data": "server_error"}, status=500)
+
+
+# =====================================================================
+# Cross-session safety ledger (see capp/classes/moderation/safety_ledger.py)
+# =====================================================================
+# Privacy boundary: these endpoints expose category/severity metadata ONLY.
+# Message text is never stored in SafetyEvent and can never appear in these
+# responses; the user's own words stay visible only to the user.
+
+
+def _serialize_safety_event(event: SafetyEvent) -> dict:
+    # conversation_id is deliberately NOT exposed: it is a correlation
+    # handle an admin could use to pull the conversation through other
+    # endpoints. The review surface is category/severity metadata only.
+    return {
+        "event_id": str(event.event_id),
+        "category": event.category,
+        "severity": event.severity,
+        "action": event.action,
+        "is_care": event.is_care,
+        "was_aggravated": event.was_aggravated,
+        "confidence": event.confidence,
+        "classifier_version": event.classifier_version,
+        "created_at": event.created_at,
+        "is_reversed": event.is_reversed,
+        "reversed_at": event.reversed_at,
+        "reversal_reason": event.reversal_reason,
+    }
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, IsAdminOrSuperuser])
+def admin_user_safety(request, user_id):
+    """
+    GET /api/v1/admin/users/<user_id>/safety/
+
+    Safety-ledger summary plus a paginated event list for one user. Shows the
+    aggregate state an admin needs to review an account (score, categories,
+    lock state) and each recorded event's metadata — never any message text.
+    """
+    try:
+        user = CustomUser.objects.filter(user_id=user_id).first()
+        if not user:
+            return Response({"status": "fail", "data": "user_not_found"}, status=404)
+
+        page, page_size = _paginate(request)
+        events = SafetyEvent.objects.filter(user_id=user.pk)
+        total = events.count()
+        start = (page - 1) * page_size
+        end = start + page_size
+        page_events = [_serialize_safety_event(event) for event in events[start:end]]
+
+        category_counts = dict(
+            SafetyEvent.objects.filter(user_id=user.pk, is_reversed=False)
+            .values_list("category")
+            .annotate(n=Count("pk"))
+        )
+
+        # Advisory model-refusal surface: refusals the companion model produced
+        # itself (see capp/classes/moderation/model_refusal.py). They never
+        # score and never lock; at the configured threshold the system only
+        # SUGGESTS that an administrator consider blocking the account — and
+        # stays silent when the account is already restricted, so the panel
+        # never nudges an admin toward an action that is already taken.
+        model_refusal_count = SafetyLedgerService.model_refusal_count(user.pk)
+
+        summary = {
+            "account_status": user.account_status,
+            "is_safety_locked": user.account_status == CustomUser.AccountStatus.SAFETY_LOCKED,
+            "lock_reason": (user.ban_reason if user.account_status == CustomUser.AccountStatus.SAFETY_LOCKED else None),
+            "active_score": SafetyLedgerService.active_score(user.pk),
+            "lock_threshold": settings.SAFETY_LOCK_SCORE_THRESHOLD,
+            "decay_days": settings.SAFETY_EVENT_DECAY_DAYS,
+            "ledger_mode": ledger_mode(),
+            "category_counts": category_counts,
+            "care_event_count": SafetyEvent.objects.filter(user_id=user.pk, is_care=True).count(),
+            # Blocked child-safety photo uploads (audit F4): the screening
+            # refusal count, next to the other signals. Metadata only.
+            "photo_block_count": SafetyEvent.objects.filter(
+                user_id=user.pk, category=SafetyEvent.Category.PHOTO_CHILD_SAFETY.value
+            ).count(),
+            "shadowed_event_count": SafetyEvent.objects.filter(
+                user_id=user.pk, action=SafetyEvent.Action.SHADOWED
+            ).count(),
+            "model_refusal_count": model_refusal_count,
+            "model_refusal_suggest_threshold": settings.SAFETY_MODEL_REFUSAL_SUGGEST_THRESHOLD,
+            "suggest_block": (
+                model_refusal_count >= settings.SAFETY_MODEL_REFUSAL_SUGGEST_THRESHOLD
+                and user.account_status == CustomUser.AccountStatus.ACTIVE
+            ),
+            "reversed_event_count": SafetyEvent.objects.filter(user_id=user.pk, is_reversed=True).count(),
+            "total_events": total,
+            # Whether the account currently warrants priority attention (the
+            # same "priority" definition as the Users list flag): at least
+            # one unreversed, non-advisory care or critical/high event. Gates
+            # the direct-outreach option on the User detail page.
+            "has_priority_events": SafetyLedgerService.has_priority_events(user.pk),
+        }
+
+        return Response(
+            {
+                "status": "success",
+                "data": {
+                    "summary": summary,
+                    "events": page_events,
+                    "page": page,
+                    "page_size": page_size,
+                    "total": total,
+                    "total_pages": (total + page_size - 1) // page_size if page_size else 0,
+                },
+            },
+            status=200,
+        )
+    except Exception:
+        logger.exception("Error in admin_user_safety")
+        return Response({"status": "fail", "data": "server_error"}, status=500)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, IsAdminOrSuperuser])
+def admin_message_user(request, user_id):
+    """
+    POST /api/v1/admin/users/<user_id>/message/
+
+    Direct admin outreach: open a support ticket on behalf of the user with
+    the admin's message as the first entry (see
+    SupportService.create_admin_outreach_ticket). The user sees it in their
+    Support inbox and can reply there; admins continue the thread from the
+    normal ticket surfaces.
+
+    Body: {"message": str (required), "title": str (optional, defaults to
+    "Message from the UwenzAi team")}
+
+    The endpoint itself is deliberately not gated on the user's safety state:
+    administrators are trusted and every outreach ticket is attributable to
+    its sender. The admin panel only OFFERS the option for high-priority
+    safety situations (has_priority_events); keeping the API permissive
+    means other admin workflows can use it without a product change.
+    """
+    try:
+        user = CustomUser.objects.filter(user_id=user_id).first()
+        if not user or user.is_deleted:
+            return Response({"status": "fail", "data": "user_not_found"}, status=404)
+
+        data = request.data if not isinstance(request.data, str) else {}
+        message = str(data.get("message", "")).strip()
+        title = str(data.get("title", "")).strip()
+
+        result = SupportService.create_admin_outreach_ticket(
+            request.user,
+            user,
+            message,
+            title=title or None,
+        )
+        if result["status"] != "success":
+            code = result.get("data")
+            status = 404 if code == "user_not_found" else 400
+            return Response(result, status=status)
+        return Response(result, status=201)
+    except Exception:
+        logger.exception("Error in admin_message_user")
+        return Response({"status": "fail", "data": "server_error"}, status=500)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, IsAdminOrSuperuser])
+def admin_reverse_safety_event(request, user_id, event_id):
+    """
+    POST /api/v1/admin/users/<user_id>/safety/events/<event_id>/reverse/
+    Body: { "reason": "..." }
+
+    Soft-reverse one safety event (false positive) and recompute the account
+    state. If the account is safety-locked and this reversal drops the score
+    below the lock threshold with no unreversed critical events left, the
+    account unlocks automatically. Locks held by a remaining critical event
+    need the explicit unlock endpoint.
+    """
+    try:
+        user = CustomUser.objects.filter(user_id=user_id).first()
+        if not user:
+            return Response({"status": "fail", "data": "user_not_found"}, status=404)
+
+        reason = (request.data.get("reason") or "").strip()
+        if not reason:
+            return Response({"status": "fail", "data": "reason_required"}, status=400)
+
+        event = SafetyEvent.objects.filter(event_id=event_id, user_id=user.pk).first()
+        if not event:
+            return Response({"status": "fail", "data": "event_not_found"}, status=404)
+
+        result = SafetyLedgerService.reverse_event(event=event, admin_user=request.user, reason=reason)
+        return Response(
+            {
+                "status": "success",
+                "data": {
+                    "event": _serialize_safety_event(result["event"]),
+                    "unlocked": result["unlocked"],
+                    "already_reversed": result["already_reversed"],
+                },
+            },
+            status=200,
+        )
+    except Exception:
+        logger.exception("Error in admin_reverse_safety_event")
+        return Response({"status": "fail", "data": "server_error"}, status=500)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, IsAdminOrSuperuser])
+def admin_unlock_safety(request, user_id):
+    """
+    POST /api/v1/admin/users/<user_id>/safety/unlock/
+    Body: { "reason": "..." }
+
+    Explicitly unlock a safety-locked account after review. Requires a
+    reason (audit trail) and is refused for accounts that are not currently
+    safety-locked — other statuses are managed through the normal status
+    change endpoint.
+    """
+    try:
+        user = CustomUser.objects.filter(user_id=user_id).first()
+        if not user:
+            return Response({"status": "fail", "data": "user_not_found"}, status=404)
+
+        reason = (request.data.get("reason") or "").strip()
+        if not reason:
+            return Response({"status": "fail", "data": "reason_required"}, status=400)
+
+        if user.account_status != CustomUser.AccountStatus.SAFETY_LOCKED:
+            return Response({"status": "fail", "data": "account_not_safety_locked"}, status=409)
+
+        updated = SafetyLedgerService.unlock_account(user=user, admin_user=request.user, reason=reason)
+        return Response({"status": "success", "data": _serialize_user_summary(updated)}, status=200)
+    except Exception:
+        logger.exception("Error in admin_unlock_safety")
+        return Response({"status": "fail", "data": "server_error"}, status=500)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, IsAdminOrSuperuser])
+def admin_reset_model_refusals(request, user_id):
+    """
+    POST /api/v1/admin/users/<user_id>/safety/model-refusals/reset/
+    Body: { "reason": "..." }
+
+    Soft-reverse every unreversed advisory model-refusal flag for one
+    account, dropping the effective count (and any block suggestion) back to
+    zero. Refusal flags can NEVER be removed by the user — not by clearing
+    memory, deleting messages or conversations, or erasing the account —
+    so this admin action (or the per-event reversal endpoint for selective
+    review) is the only way the count changes. The reset is audit-logged to
+    AdminActionLog with the affected count and the admin's reason.
+    """
+    try:
+        user = CustomUser.objects.filter(user_id=user_id).first()
+        if not user:
+            return Response({"status": "fail", "data": "user_not_found"}, status=404)
+
+        reason = (request.data.get("reason") or "").strip()
+        if not reason:
+            return Response({"status": "fail", "data": "reason_required"}, status=400)
+
+        result = SafetyLedgerService.reset_model_refusals(user=user, admin_user=request.user, reason=reason)
+        return Response(
+            {
+                "status": "success",
+                "data": {
+                    "reversed_count": result["reversed_count"],
+                    "model_refusal_count": result["remaining_count"],
+                    "suggest_block": (
+                        result["remaining_count"] >= settings.SAFETY_MODEL_REFUSAL_SUGGEST_THRESHOLD
+                        and result["user"].account_status == CustomUser.AccountStatus.ACTIVE
+                    ),
+                },
+            },
+            status=200,
+        )
+    except Exception:
+        logger.exception("Error in admin_reset_model_refusals")
+        return Response({"status": "fail", "data": "server_error"}, status=500)
+
+
+_SHADOW_OVERVIEW_SORTS = ("score", "count", "recent")
+_SHADOW_OVERVIEW_EXCLUDED_CATEGORIES = (
+    SafetyEvent.Category.SELF_HARM.value,
+    SafetyEvent.Category.MODEL_REFUSAL.value,
+)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, IsAdminOrSuperuser])
+def admin_shadow_overview(request):
+    """
+    GET /api/v1/admin/safety/shadow-overview/
+    Query: days (1-365, default 30), category, min_severity, account_status,
+           sort (score | count | recent), page, page_size
+
+    One list of every account the classifier flagged while the ledger ran in
+    shadow mode (recorded, never enforced), so an administrator can decide
+    who needs a closer look without opening each user. The decision itself
+    stays manual: block, suspend or lock through the existing user status
+    controls.
+
+    Metadata only, by design: counts, categories, severities and timestamps.
+    No message text, fingerprint or conversation id is ever returned.
+    Self-harm care events (support context, not violations) and advisory
+    model refusals are excluded from the counts.
+    """
+    try:
+        try:
+            days = int(request.query_params.get("days", 30))
+        except (TypeError, ValueError):
+            days = 30
+        days = min(max(days, 1), 365)
+
+        category = (request.query_params.get("category") or "").strip()
+        valid_categories = [c for c in SafetyEvent.Category.values if c not in _SHADOW_OVERVIEW_EXCLUDED_CATEGORIES]
+        if category and category not in valid_categories:
+            return Response({"status": "fail", "data": "invalid_category"}, status=400)
+
+        min_severity = (request.query_params.get("min_severity") or "").strip()
+        if min_severity and min_severity not in SafetyEvent.Severity.values:
+            return Response({"status": "fail", "data": "invalid_severity"}, status=400)
+
+        account_status = (request.query_params.get("account_status") or "").strip()
+        if account_status and account_status not in CustomUser.AccountStatus.values:
+            return Response({"status": "fail", "data": "invalid_account_status"}, status=400)
+
+        sort = (request.query_params.get("sort") or "score").strip()
+        if sort not in _SHADOW_OVERVIEW_SORTS:
+            return Response({"status": "fail", "data": "invalid_sort"}, status=400)
+
+        page, page_size = _paginate(request)
+        result = SafetyLedgerService.shadow_overview(
+            days=days,
+            category=category or None,
+            min_severity=min_severity or None,
+            account_status=account_status or None,
+            sort=sort,
+            offset=(page - 1) * page_size,
+            limit=page_size,
+        )
+
+        users_by_id = {
+            u.user_id: u for u in CustomUser.objects.filter(user_id__in=[r["user_id"] for r in result["rows"]])
+        }
+        users = []
+        for row in result["rows"]:
+            user = users_by_id.get(row["user_id"])
+            if user is None:
+                continue
+            users.append(
+                {
+                    "user_id": str(user.user_id),
+                    "username": user.username,
+                    "display_name": user.get_display_name(),
+                    "account_status": user.account_status,
+                    "shadowed_event_count": row["event_count"],
+                    "shadow_score": row["shadow_score"],
+                    "exceeds_threshold": row["exceeds_threshold"],
+                    "critical_count": row["critical_count"],
+                    "high_count": row["high_count"],
+                    "categories": row["categories"],
+                    "first_event_at": row["first_event_at"],
+                    "last_event_at": row["last_event_at"],
+                    "model_refusal_count": row["model_refusal_count"],
+                    # A prompt to look, never a prompt to block: silent for
+                    # accounts that are already restricted.
+                    "suggest_review": (
+                        (row["critical_count"] > 0 or row["exceeds_threshold"])
+                        and user.account_status == CustomUser.AccountStatus.ACTIVE
+                    ),
+                }
+            )
+
+        total = result["total"]
+        return Response(
+            {
+                "status": "success",
+                "data": {
+                    "summary": {**result["summary"], "ledger_mode": ledger_mode()},
+                    "users": users,
+                    "page": page,
+                    "page_size": page_size,
+                    "total": total,
+                    "total_pages": (total + page_size - 1) // page_size if page_size else 0,
+                },
+            },
+            status=200,
+        )
+    except Exception:
+        logger.exception("Error in admin_shadow_overview")
         return Response({"status": "fail", "data": "server_error"}, status=500)

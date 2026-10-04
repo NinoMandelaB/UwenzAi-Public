@@ -17,7 +17,7 @@ from rest_framework.exceptions import AuthenticationFailed, Throttled
 from rest_framework.throttling import BaseThrottle
 
 from capp.models import AgentAPIKey, CustomUser
-from capp.authentication import account_can_authenticate
+from capp.authentication import account_can_generate
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +130,7 @@ class AgentGatewayAuthentication(BaseAuthentication):
                 code="invalid_api_key",
             )
 
-        if not account_can_authenticate(key_record.user):
+        if not account_can_generate(key_record.user):
             raise AuthenticationFailed("Account is unavailable.", code="user_inactive")
 
         # Check if key is active

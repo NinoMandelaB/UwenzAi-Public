@@ -65,9 +65,9 @@ const model = (name, provider, extra = {}) => ({
 });
 const pricing = {
   models: [
-    model("alpha", "provider-a", { markup_percent: 12.5 }),
-    model("alpha", "provider-b", { markup_percent: 8 }),
-    model("beta", "provider-b", { markup_percent: 8 }),
+    model("alpha", "provider-a", { markup_percent: 11.5 }),
+    model("alpha", "provider-b", { markup_percent: 6 }),
+    model("beta", "provider-b", { markup_percent: 6 }),
     model("gamma", "provider-c", { markup_percent: 10 }),
     model("offline", "provider-c", {
       available: false,
@@ -80,7 +80,7 @@ const pricing = {
     "provider-c": { country: "Kenya", kind: "inference" },
   },
   base_url: "https://gateway.example.test/api/v1/agent",
-  markup_percent: 12.5,
+  markup_percent: 11.5,
   spark_value_kes: 0.1,
   playground_limits: DEFAULT_LIMITS,
 };
@@ -396,6 +396,22 @@ describe("linked models, pricing and configuration", () => {
       ).toHaveLength(1);
     }
   });
+  it("links the API documentation site from the connection panel", async () => {
+    const view = await ready();
+    const link = screen.getByRole("link", { name: tx("docsLink") });
+    expect(link.getAttribute("href")).toBe(
+      "https://uwenzai.com/uwenzai-dev/docs/",
+    );
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+    state.language = "sw";
+    view.rerender(<UwenzAiDev />);
+    expect(
+      screen
+        .getByRole("link", { name: workspaceText("sw")("docsLink") })
+        .getAttribute("href"),
+    ).toBe("https://uwenzai.com/uwenzai-dev/docs/");
+  });
   it("filters providers by model and models by provider with explicit resets", async () => {
     await ready();
     expect(
@@ -450,7 +466,7 @@ describe("linked models, pricing and configuration", () => {
     expect(screen.getByTestId("output-kes-price").textContent.trim()).toBe(
       "KES 61.25",
     );
-    expect(screen.getByText(/Includes the 12.5% markup/)).toBeTruthy();
+    expect(screen.getByText(/Includes the 11.5% markup/)).toBeTruthy();
     expect(screen.getAllByText(tx("notSpecified")).length).toBeGreaterThan(0);
     expect(screen.getByText(pricing.base_url)).toBeTruthy();
   });
@@ -472,12 +488,12 @@ describe("linked models, pricing and configuration", () => {
   });
   it("shows the selected model's markup instead of the global default", async () => {
     await ready();
-    expect(screen.getByText(/Includes the 12\.5% markup/)).toBeTruthy();
+    expect(screen.getByText(/Includes the 11\.5% markup/)).toBeTruthy();
     fireEvent.change(screen.getByRole("combobox", { name: tx("provider") }), {
       target: { value: "provider-b" },
     });
-    expect(screen.getByText(/Includes the 8\.0% markup/)).toBeTruthy();
-    expect(screen.queryByText(/12\.5% markup/)).toBeNull();
+    expect(screen.getByText(/Includes the 6\.0% markup/)).toBeTruthy();
+    expect(screen.queryByText(/11\.5% markup/)).toBeNull();
   });
   it("renders pre-metadata pricing without crashing and keeps the global markup", async () => {
     api.getAgentPricing.mockResolvedValue(ok(legacyPricing));
@@ -488,7 +504,7 @@ describe("linked models, pricing and configuration", () => {
     expect(
       within(providerSelect).getByRole("option", { name: "provider-a" }).value,
     ).toBe("provider-a");
-    expect(screen.getByText(/Includes the 12\.5% markup/)).toBeTruthy();
+    expect(screen.getByText(/Includes the 11\.5% markup/)).toBeTruthy();
   });
   it("copies authoritative baseURL, model/provider, and safe OpenAI config", async () => {
     await ready();

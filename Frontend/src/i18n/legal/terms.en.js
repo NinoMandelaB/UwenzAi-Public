@@ -196,12 +196,16 @@ export const termsEn = {
           type: "p",
           text: "6.6. Acceptable Use of Web Search. You may not use the web search or page-opening features to seek, retrieve, or distribute unlawful content, to infringe the rights of others, to circumvent technical or legal access restrictions, or to probe, scan, or attack third-party systems. We may limit, suspend, or disable these features for a user or conversation at any time, including to comply with the acceptable-use requirements of our search provider.",
         },
+        {
+          type: "p",
+          text: "6.7. How these rules are enforced. We apply automated safety screening to messages and image prompts. At present, screening of chat messages is recording-only: when a message appears to breach sections 6.1 or 6.2, we create a safety record, but we do not block the message and we do not restrict your account automatically. Our administrators can review safety records, which show only the category and severity of a possible violation and never the text of your message, and an administrator decides whether to take action on an account, for example a warning, a safety lock, a suspension or a ban. Image requests and photos are screened separately and refused automatically, as described in section 7. A locked account can still sign in to read its status and contact support to appeal, but cannot chat or generate images. Reviewers do not read your message history to make these decisions. What we keep for this purpose is described in the Privacy Policy.",
+        },
       ],
     },
     {
       id: "7",
       heading:
-        "7. Image generation: what is permitted and what is absolutely prohibited",
+        "7. Images: generation, photos you send, and what is absolutely prohibited",
       blocks: [
         {
           type: "p",
@@ -221,15 +225,19 @@ export const termsEn = {
         },
         {
           type: "p",
-          text: "7.3. How this is enforced. Every image request is screened automatically on our servers before it is sent to any image provider and before any sparks are charged. Requests that match a prohibited subject are refused, no sparks are charged for them, and the refusal is recorded. Repeated or deliberate attempts to obtain prohibited content may result in immediate suspension or termination under section 14, and we may report unlawful requests to the authorities.",
+          text: "7.3. Photos you send in chat. The prohibitions in section 7.2 govern what you may ask us to generate. A separate rule governs photos you upload and send to your companion: you must not send a photo that depicts child sexual abuse material, child nudity or a sexualised minor, non-consensual intimate content, or content you have no right to share, and any photo you send must also comply with section 6. Photos you send are screened automatically before they are stored; blocked or unscreenable photos are refused and never stored, and no sparks are charged for them. Ordinary, fully-clothed photos of children — a family picture, for example — are not prohibited by this rule: the screening exists to stop child nudity and child sexual content, not to filter your everyday photos.",
         },
         {
           type: "p",
-          text: "7.4. Limits of automated screening. Our screening is a deterministic filter that works on the words in your request. It is a strong safeguard, not a perfect one: it cannot reliably recognise every paraphrase, euphemism, or prohibited subject implied only by context. The fact that a request was not blocked does not mean it was permitted. You remain responsible for complying with section 7.2, and any attempt to word a request so as to evade screening is itself a breach of these Terms.",
+          text: "7.4. How this is enforced. Every image request is screened automatically on our servers before it is sent to any image provider and before any sparks are charged. Requests that match a prohibited subject are refused, no sparks are charged for them, and the refusal is recorded. Photos you send in chat are screened the same way before they are stored. Repeated or deliberate attempts to obtain prohibited content may result in immediate suspension or termination under section 14, and we may report unlawful requests to the authorities.",
         },
         {
           type: "p",
-          text: "7.5. No guarantee of output. Image generation depends on third-party providers and may fail, time out, or return a result that does not match your request. Refused, failed, or unsatisfactory generations do not by themselves entitle you to a refund, credit, replacement, or compensation, except where required by applicable law. Where a request is refused by our content screening, sparks are not charged.",
+          text: "7.5. Limits of automated screening. Our request screening is a deterministic filter that works on the words in your request; our photo screening is an automated image classifier. Both are strong safeguards, not perfect ones: they cannot reliably recognise every paraphrase, euphemism, prohibited subject implied only by context, or evasive image. The fact that a request or photo was not blocked does not mean it was permitted. You remain responsible for complying with sections 7.2 and 7.3, and any attempt to word a request or alter a photo so as to evade screening is itself a breach of these Terms.",
+        },
+        {
+          type: "p",
+          text: "7.6. No guarantee of output. Image generation depends on third-party providers and may fail, time out, or return a result that does not match your request. Refused, failed, or unsatisfactory generations do not by themselves entitle you to a refund, credit, replacement, or compensation, except where required by applicable law. Where a request is refused by our content screening, sparks are not charged.",
         },
       ],
     },
@@ -502,6 +510,10 @@ export const termsEn = {
         {
           type: "p",
           text: "14.3. Sections that by their nature should survive termination (including but not limited to intellectual property, the licence in section 8 to the extent we still hold content, disclaimers, limitations of liability, indemnity, and governing law) will continue to apply.",
+        },
+        {
+          type: "p",
+          text: "14.4. Safety locks. An administrator may lock your account for repeated or serious violations of section 6, as described in section 6.7. A safety lock is not a termination: it stays in place until an administrator reviews your account, and you may appeal through support.",
         },
       ],
     },

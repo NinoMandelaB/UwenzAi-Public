@@ -11,6 +11,7 @@ import {
   BrainCircuit,
 } from "lucide-react";
 import { API } from "../config/constants";
+import { resolveMediaUrl } from "../utils/mediaUrl";
 import { useChat } from "../hooks/useChat";
 import { useConversation } from "../hooks/useConversation";
 import { useChatScroll } from "../hooks/useChatScroll";
@@ -37,6 +38,7 @@ import {
 import ConfirmDialog from "./ConfirmDialog";
 import CharacterInactiveBanner from "./CharacterInactiveBanner";
 import LoadOlderMessages from "./LoadOlderMessages";
+import PhotoAttachMenu from "./PhotoAttachMenu";
 import { ChatReminderButton } from "./ReminderPanel";
 import { resolveFeaturePreferences } from "../utils/featurePreferences";
 import MemoryButton from "./MemoryPanel";
@@ -46,13 +48,6 @@ import {
   USER_MESSAGE_LIMIT,
   validUserMessage,
 } from "../utils/textLimits";
-
-function resolveMediaUrl(url) {
-  if (!url) return url;
-  if (/^https?:\/\//i.test(url)) return url;
-  const base = API.BASE_URL ? API.BASE_URL.replace(/\/$/, "") : "";
-  return `${base}${url.startsWith("/") ? "" : "/"}${url}`;
-}
 
 /* ---------- Helper Components ---------- */
 const TypingBubble = memo(function TypingBubble({ characterName }) {
@@ -79,6 +74,8 @@ const MessageBubble = memo(function MessageBubble({
   time,
   imageUrl,
   imageAlt = "",
+  sharedPhotoAlt = "Shared photo",
+  attachments = [],
   animate = false,
   onDelete,
   onFlag,
@@ -89,6 +86,11 @@ const MessageBubble = memo(function MessageBubble({
   const isSystem = sender === "system";
   const [showActions, setShowActions] = useState(false);
   const resolvedImage = resolveMediaUrl(imageUrl);
+  const photoAttachments = (attachments || []).filter((a) => a?.url);
+  // Photo-only messages (empty caption) still render their image.
+  const showTextBubble =
+    Boolean(text && text.trim()) ||
+    (!resolvedImage && photoAttachments.length === 0);
 
   return (
     <div
@@ -103,6 +105,27 @@ const MessageBubble = memo(function MessageBubble({
           isUser ? "items-end" : "items-start"
         }`}
       >
+        {photoAttachments.map((attachment, index) => (
+          <a
+            key={attachment.attachment_id || index}
+            href={resolveMediaUrl(attachment.url)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mb-1 overflow-hidden rounded-3xl shadow-sm"
+            style={{
+              border: "1px solid var(--color-border)",
+              borderBottomLeftRadius: isUser ? undefined : "0.5rem",
+              borderBottomRightRadius: isUser ? "0.5rem" : undefined,
+            }}
+          >
+            <img
+              src={resolveMediaUrl(attachment.url)}
+              alt={sharedPhotoAlt}
+              loading="lazy"
+              className="block max-h-80 w-full object-cover"
+            />
+          </a>
+        ))}
         {resolvedImage ? (
           <a
             href={resolvedImage}
@@ -122,7 +145,7 @@ const MessageBubble = memo(function MessageBubble({
               className="block max-h-80 w-full object-cover"
             />
           </a>
-        ) : (
+        ) : showTextBubble ? (
           <div
             className="rounded-3xl px-4 py-3 text-sm leading-6 shadow-sm"
             style={
@@ -164,7 +187,7 @@ const MessageBubble = memo(function MessageBubble({
           >
             {parseLinks(text, navigate, sender)}
           </div>
-        )}
+        ) : null}
         <span className="mt-1 px-1 text-[11px] theme-text-muted">{time}</span>
       </div>
 
@@ -704,6 +727,9 @@ export default function ChatModal() {
     clearMessages,
     deleteMessage: deleteMessageFromHook,
     isCharacterActive,
+    pendingImage,
+    attachImage,
+    clearPendingImage,
     hasMoreHistory,
     isLoadingOlder,
     olderHistoryError,
@@ -860,6 +886,20 @@ export default function ChatModal() {
     [flagMessageId, isAuthenticated, showToast],
   );
 
+  // ── Pending photo preview URL: one object URL per picked file, revoked on
+  // change/unmount so re-renders never leak blob handles. ──
+  const pendingImagePreviewUrl = useMemo(
+    () =>
+      pendingImage instanceof File ? URL.createObjectURL(pendingImage) : null,
+    [pendingImage],
+  );
+  useEffect(
+    () => () => {
+      if (pendingImagePreviewUrl) URL.revokeObjectURL(pendingImagePreviewUrl);
+    },
+    [pendingImagePreviewUrl],
+  );
+
   // ── Memoized messages ──
   const messages = useMemo(
     () =>
@@ -876,6 +916,9 @@ export default function ChatModal() {
             ? localizeSystemMessage(t, msg)
             : msg.content,
         imageUrl: msg.image_url || null,
+        // User-sent photos: history rows and live messages both carry
+        // `attachments` (live sends get them swapped in after the POST).
+        attachments: msg.attachments || [],
         time: msg.created_at
           ? formatTimeFromISO(msg.created_at)
           : new Date().toLocaleTimeString([], {
@@ -955,15 +998,31 @@ export default function ChatModal() {
 
   const handleSend = useCallback(
     async (textToSend = input) => {
-      if (!validUserMessage(textToSend)) return;
+      const hasPendingImage = pendingImage instanceof File;
+      // A photo send is valid with an empty caption, but the caption length
+      // limit applies to photo sends exactly as to text sends.
+      const captionOk = hasPendingImage
+        ? characterCount(textToSend) <= USER_MESSAGE_LIMIT
+        : validUserMessage(textToSend);
+      if (!captionOk) return;
+      if (isSending || !isCharacterActive) return;
       const trimmed = textToSend.trim();
-      if (!trimmed || isSending || !isCharacterActive) return;
+      if (!trimmed && !hasPendingImage) return;
       setInput("");
       if (textareaRef.current) textareaRef.current.style.height = "24px";
-      const ok = await sendToAI(trimmed);
+      const imageToSend = hasPendingImage ? pendingImage : null;
+      if (imageToSend) clearPendingImage();
+      const ok = await sendToAI(trimmed, imageToSend);
       if (ok) setIsWaitingForAI(true);
     },
-    [input, isSending, isCharacterActive, sendToAI],
+    [
+      input,
+      isSending,
+      isCharacterActive,
+      sendToAI,
+      pendingImage,
+      clearPendingImage,
+    ],
   );
 
   // Enter no longer sends the message: on desktop it now inserts a newline so
@@ -1240,6 +1299,8 @@ export default function ChatModal() {
                       time={msg.time}
                       imageUrl={msg.imageUrl}
                       imageAlt={t("chat.generatedImageAlt")}
+                      sharedPhotoAlt={t("chat.sharedPhotoAlt")}
+                      attachments={msg.attachments}
                       animate={msg.id === lastAnimatedMessageId}
                       onDelete={() => handleDeleteMessage(msg.id)}
                       onFlag={
@@ -1262,6 +1323,30 @@ export default function ChatModal() {
         {/* Inactive banner */}
         {showInactiveBanner && <CharacterInactiveBanner />}
 
+        {/* Pending photo preview: shown while a picked photo waits for send. */}
+        {pendingImage instanceof File && (
+          <div className="flex items-center gap-2 border-t border-[var(--color-border)] bg-[var(--color-card)] px-4 py-2">
+            <img
+              src={pendingImagePreviewUrl}
+              alt={t("chat.attachPhoto")}
+              className="h-12 w-12 rounded-lg object-cover"
+              style={{ border: "1px solid var(--color-border)" }}
+            />
+            <span className="flex-1 truncate text-xs theme-text-muted">
+              {pendingImage.name}
+            </span>
+            <button
+              type="button"
+              onClick={clearPendingImage}
+              className="rounded-full p-1 text-gray-400 hover:text-red-400"
+              title={t("chat.removePhoto")}
+              aria-label={t("chat.removePhoto")}
+            >
+              <X size={16} />
+            </button>
+          </div>
+        )}
+
         {/* Footer */}
         <div
           className="p-3 border-t border-[var(--color-border)] bg-[var(--color-card)]"
@@ -1276,6 +1361,22 @@ export default function ChatModal() {
             }}
             className="flex items-end gap-2"
           >
+            {/* Photo sends: only shown when the deployment explicitly
+                enables them (auth/me photo_uploads_enabled, refreshed on
+                login). A missing value hides the button — never a dead
+                feature (F6). */}
+            {isAuthenticated && user?.photo_uploads_enabled === true && (
+              <PhotoAttachMenu
+                disabled={
+                  !isCharacterActive ||
+                  isSending ||
+                  isWaitingForAI ||
+                  connecting ||
+                  hasError
+                }
+                onFileSelected={attachImage}
+              />
+            )}
             {canGenerateImage && (
               <button
                 type="button"
@@ -1331,7 +1432,9 @@ export default function ChatModal() {
             <button
               type="submit"
               disabled={
-                !validUserMessage(input) ||
+                (pendingImage instanceof File
+                  ? characterCount(input) > USER_MESSAGE_LIMIT
+                  : !validUserMessage(input)) ||
                 isSending ||
                 isWaitingForAI ||
                 !isCharacterActive ||

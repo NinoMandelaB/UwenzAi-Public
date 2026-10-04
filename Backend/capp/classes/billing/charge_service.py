@@ -27,6 +27,7 @@ from django.conf import settings
 from django.db import transaction as db_transaction
 from django.utils import timezone
 
+from capp.classes.billing.fx_service import convert_kes
 from capp.classes.billing.balances import (
     credit_locked,
     lock_guest_quota,
@@ -118,12 +119,14 @@ class ChargeService:
             except SparkPackage.DoesNotExist:
                 return {"status": "fail", "data": "package_not_found"}
             amount = Decimal(str(pkg.final_price_kes))
-            # SparkPackage prices are KES by construction (``final_price_kes``).
+            # SparkPackage prices are KES by construction (``final_price_kes``)
+            # and already include VAT (see PackageService pricing formula).
             currency = "KES"
             metadata = {
                 "package_slug": package_slug,
                 "package_type": "spark",
                 "spark_amount": pkg.base_spark_amount,
+                "vat_percent": str(pkg.vat_percent),
             }
         elif package_type == "subscription":
             if not user:
@@ -255,21 +258,35 @@ class ChargeService:
             subscription_plans = SubscriptionPlan.objects.filter(is_active=True).order_by("price")
 
             packages = []
+            # Informational USD/EUR conversions for the purchase UI. Fetched
+            # from a fixed allowlisted provider and cached 24h; when rates
+            # are unavailable the fields are simply omitted — the charged
+            # amount is always the KES price below.
             for cp in spark_packages:
-                packages.append(
-                    {
-                        "type": "spark",
-                        "slug": cp.slug,
-                        "name": cp.name,
-                        "description": cp.description,
-                        "base_spark_amount": cp.base_spark_amount,
-                        "base_price_kes": str(cp.base_price_kes),
-                        "discount_percent": str(cp.discount_percent),
-                        "final_price_kes": str(cp.final_price_kes),
-                        "currency": "KES",
-                        "tokens": 0,  # legacy, kept for frontend compatibility
-                    }
-                )
+                entry = {
+                    "type": "spark",
+                    "slug": cp.slug,
+                    "name": cp.name,
+                    "description": cp.description,
+                    "base_spark_amount": cp.base_spark_amount,
+                    "base_price_kes": str(cp.base_price_kes),
+                    "discount_percent": str(cp.discount_percent),
+                    "vat_percent": str(cp.vat_percent),
+                    "final_price_kes": str(cp.final_price_kes),
+                    "currency": "KES",
+                    "tokens": 0,  # legacy, kept for frontend compatibility
+                }
+                try:
+                    price_usd = convert_kes(cp.final_price_kes, "usd")
+                    price_eur = convert_kes(cp.final_price_kes, "eur")
+                except Exception:
+                    logger.warning("FX conversion failed for %s", cp.slug, exc_info=True)
+                    price_usd = price_eur = None
+                if price_usd is not None:
+                    entry["final_price_usd"] = str(price_usd)
+                if price_eur is not None:
+                    entry["final_price_eur"] = str(price_eur)
+                packages.append(entry)
             for sp in subscription_plans:
                 packages.append(
                     {

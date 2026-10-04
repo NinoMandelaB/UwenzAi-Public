@@ -281,7 +281,9 @@ class MessageHistoryPaginationTests(TestCase):
         for older, newer in zip(messages, messages[1:]):
             Message.objects.filter(pk=newer.pk).update(reply_to=older.pk)
 
-        with self.assertNumQueries(4) as small:
+        # One flat attachments lookup joins the page regardless of size
+        # (photo URLs are signed in-memory), so page cost stays constant.
+        with self.assertNumQueries(5) as small:
             self.assertEqual(self._get(limit=5).status_code, 200)
         with self.assertNumQueries(len(small.captured_queries)):
             self.assertEqual(self._get(limit=100).status_code, 200)

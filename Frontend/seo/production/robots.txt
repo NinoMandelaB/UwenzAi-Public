@@ -1,6 +1,6 @@
 # UwenzAi – robots.txt
 # https://uwenzai.com/robots.txt
-# Last updated: 2026-09-15
+# Last updated: 2026-09-18
 
 # UwenzAi Limited — registered in Kenya, founded 2026
 # For AI assistant context see:    https://uwenzai.com/llms.txt
@@ -29,6 +29,7 @@ Allow: /terms
 Allow: /privacy
 Allow: /responsible-use
 Allow: /uwenzai-dev
+Allow: /uwenzai-dev/docs
 Disallow: /api/
 Disallow: /admin/
 Disallow: /chat/
@@ -58,6 +59,7 @@ Allow: /terms
 Allow: /privacy
 Allow: /responsible-use
 Allow: /uwenzai-dev
+Allow: /uwenzai-dev/docs
 Disallow: /api/
 Disallow: /admin/
 Disallow: /chat/
@@ -97,6 +99,7 @@ Allow: /terms
 Allow: /privacy
 Allow: /responsible-use
 Allow: /uwenzai-dev
+Allow: /uwenzai-dev/docs
 Disallow: /api/
 Disallow: /admin/
 Disallow: /chat/

@@ -104,12 +104,18 @@ class ProactiveChatService:
         # Only live accounts and live characters: banned/suspended users have
         # is_active=False, soft-deleted users have is_deleted=True, and
         # characters are inactive while pending review, rejected, or archived.
-        preferences = ProactiveChatPreference.objects.filter(
-            enabled=True,
-            user__is_active=True,
-            user__is_deleted=False,
-            character__is_active=True,
-        ).select_related("user", "character")
+        # Safety-locked accounts keep is_active=True (the user can still sign
+        # in to appeal) but must not receive generated proactive messages.
+        preferences = (
+            ProactiveChatPreference.objects.filter(
+                enabled=True,
+                user__is_active=True,
+                user__is_deleted=False,
+                character__is_active=True,
+            )
+            .exclude(user__account_status=CustomUser.AccountStatus.SAFETY_LOCKED)
+            .select_related("user", "character")
+        )
         sent_count = 0
 
         for pref in preferences:

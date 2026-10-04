@@ -12,6 +12,7 @@ PROVIDER_DETAILS = {
     "inceptron": {"country": "Sweden (EU)", "kind": "inference"},
     "aki": {"country": "Germany (EU)", "kind": "inference"},
     "ovh": {"country": "France (EU)", "kind": "inference"},
+    "tensorx": {"country": "Ireland (EU)", "kind": "inference"},
 }
 
 

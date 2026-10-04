@@ -4,9 +4,7 @@ Agent Gateway Pricing Service
 Handles pricing calculations for Agent Gateway requests.
 
 Supports multiple providers with different native currencies (EUR, USD).
-Each provider carries its own markup (Cortecs 12.5% = 5% pass-through + 5%
-UwenzAi margin + 2.5% FX safety buffer; other providers default to 8%),
-resolved by get_markup_percent().
+Each provider carries its own markup, resolved by get_markup_percent().
 
 FX rates are resolved in this order:
 1. Django cache (TTL = AGENT_EXCHANGE_RATE_CACHE_TTL, default 3600s)
@@ -37,6 +35,7 @@ _PROVIDER_MARKUP_SETTINGS = {
     "inceptron": "INCEPTRON_UWENZAI_AGENT_MARKUP_PERCENT",
     "aki": "AKI_UWENZAI_AGENT_MARKUP_PERCENT",
     "ovh": "OVH_AI_UWENZAI_AGENT_MARKUP_PERCENT",
+    "tensorx": "TENSORX_UWENZAI_AGENT_MARKUP_PERCENT",
 }
 
 
@@ -53,7 +52,7 @@ def get_markup_percent(provider=None):
         override = getattr(settings, setting_name, None)
         if override is not None:
             return float(override)
-    return float(getattr(settings, "AGENT_MARKUP_PERCENT", 12.5))
+    return float(getattr(settings, "AGENT_MARKUP_PERCENT", 0))
 
 
 def cheapest_provider_for_model(model):
@@ -105,6 +104,12 @@ def _parse_json_path(data, path):
         else:
             return None
     return current
+
+
+# Currencies whose default-rate fallback has been logged once this process;
+# the fallback is reached on every request when no FX API is configured, but
+# the info line only needs to appear once.
+_FX_DEFAULT_LOGGED: set = set()
 
 
 def _get_fx_rate(currency: str) -> Decimal:
@@ -172,7 +177,15 @@ def _get_fx_rate(currency: str) -> Decimal:
     # 3. Fallback to configured default
     setting_name = "AGENT_FX_{}_KES".format(currency_upper)
     default_rate = Decimal(str(getattr(settings, setting_name, None) or _get_default_fx(currency_upper)))
-    logger.info("Agent Gateway: using default %s->KES rate: %s", currency_upper, default_rate)
+    # Cache the fallback too: without this, an unconfigured FX API makes
+    # every priced request re-log the fallback (279 lines in one deploy's
+    # startup logs) and a failing API gets re-attempted on every request.
+    # The cache TTL bounds how long a fallback rate sticks before the live
+    # source is tried again.
+    cache.set(cache_key, str(default_rate), cache_ttl)
+    if currency_upper not in _FX_DEFAULT_LOGGED:
+        _FX_DEFAULT_LOGGED.add(currency_upper)
+        logger.info("Agent Gateway: using default %s->KES rate: %s", currency_upper, default_rate)
     return default_rate
 
 
@@ -224,23 +237,10 @@ class AgentPricingService:
     @staticmethod
     def get_default_price(model):
         """Get default price for a model (fallback when not in database)."""
-        DEFAULT_PRICES = {
-            "deepseek-v4-flash": {
-                "input_price_per_1m": Decimal("0.22"),
-                "output_price_per_1m": Decimal("0.66"),
-                "currency": "EUR",
-            },
-            "kimi-k3": {
-                "input_price_per_1m": Decimal("3.00"),
-                "output_price_per_1m": Decimal("15.00"),
-                "currency": "EUR",
-            },
-            "glm-5": {
-                "input_price_per_1m": Decimal("1.00"),
-                "output_price_per_1m": Decimal("3.20"),
-                "currency": "EUR",
-            },
-        }
+        # No legacy price defaults ship in the public source: the cost catalog
+        # (AgentModelPrice, filled by sync_agent_catalog or the admin) is the
+        # only source of prices.
+        DEFAULT_PRICES = {}
 
         if model in DEFAULT_PRICES:
             return DEFAULT_PRICES[model]
@@ -277,8 +277,7 @@ class AgentPricingService:
             charge_kes = cost * markup_multiplier * FX_rate  (FX depends on provider currency)
             sparks = ceil(charge_kes / SPARK_BASE_VALUE_KES)
 
-        The markup is provider-specific (get_markup_percent()); historically
-        12.5% for Cortecs = 5% pass-through + 5% margin + 2.5% FX safety.
+        The markup is provider-specific (get_markup_percent()).
         FX rate is resolved via _get_fx_rate() (cached, live, or fallback).
         """
         price = AgentPricingService.get_price(provider, model)

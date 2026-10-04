@@ -4,6 +4,7 @@ Agent Gateway Proxy Service
 Handles proxying requests from external agents to the configured providers.
 """
 
+import json
 import hashlib
 import logging
 import uuid
@@ -23,7 +24,7 @@ from capp.models import (
     BillingReservation,
     CustomUser,
 )
-from capp.authentication import account_can_authenticate
+from capp.authentication import account_can_generate
 from capp.classes.agent_gateway.guards import gateway_operation_lock
 from capp.classes.agent_gateway.providers import get_provider, AgentProvider, PROVIDERS
 from capp.classes.agent_gateway.pricing_service import AgentPricingService
@@ -108,19 +109,80 @@ class AgentProxyService:
             raise ValueError("Select a valid provider from the pricing catalog")
         allowed = {
             "max_tokens",
+            "max_completion_tokens",
             "temperature",
             "top_p",
             "stream",
+            "stream_options",
             "stop",
             "presence_penalty",
             "frequency_penalty",
             "user",
+            "tools",
+            "tool_choice",
         }
         if not isinstance(params, dict) or set(params) - allowed:
             raise ValueError("Unsupported parameters; provider endpoint URLs cannot be overridden")
         params = dict(params)
+        # Tool calling: schemas are client-supplied and executed by the client —
+        # the gateway only relays them. Validation bounds size and shape so a
+        # tools payload cannot smuggle endpoint overrides or balloon the
+        # reservation estimate; the token estimate counts the tools JSON so
+        # the reservation covers the extra input tokens upstreams charge for
+        # the schemas (settle_amount is capped at reserved, so an uncounted
+        # tools block would systematically undercharge).
+        tools = params.get("tools")
+        if tools is not None:
+            if not isinstance(tools, list) or not 1 <= len(tools) <= 128:
+                raise ValueError("tools must be a list of 1 to 128 tool definitions")
+            for tool in tools:
+                if not isinstance(tool, dict) or tool.get("type") != "function":
+                    raise ValueError("Each tool must be an object with type 'function'")
+                function = tool.get("function")
+                if (
+                    not isinstance(function, dict)
+                    or not isinstance(function.get("name"), str)
+                    or not 1 <= len(function["name"]) <= 128
+                ):
+                    raise ValueError("Each tool must define a function with a name")
+            if len(json.dumps(tools, ensure_ascii=False)) > 200_000:
+                raise ValueError("The tools payload is too large")
+        tool_choice = params.get("tool_choice")
+        if tool_choice is not None and tool_choice not in ("none", "auto", "required"):
+            if (
+                not isinstance(tool_choice, dict)
+                or tool_choice.get("type") != "function"
+                or not isinstance(tool_choice.get("function"), dict)
+                or not isinstance(tool_choice["function"].get("name"), str)
+                or not tool_choice["function"]["name"]
+            ):
+                raise ValueError("tool_choice must be 'none', 'auto', 'required' or a function object")
+        # stream_options is OpenAI-standard (agents send {"include_usage": true}
+        # with every streaming request). The gateway always includes usage in
+        # the final SSE chunk, so the flag is honored by construction; strip it
+        # before the provider call because the upstream request is never
+        # streamed and a leftover stream_options would 400 upstream.
+        stream_options = params.pop("stream_options", None)
+        if stream_options is not None:
+            if not isinstance(stream_options, dict) or set(stream_options) - {"include_usage"}:
+                raise ValueError("stream_options supports only include_usage")
+            if not isinstance(stream_options.get("include_usage", False), bool):
+                raise ValueError("stream_options.include_usage must be a boolean")
+        # Newer OpenAI SDKs send max_completion_tokens (the two spellings are
+        # mutually exclusive in the OpenAI API). Normalize to max_tokens so
+        # billing/validation below sees exactly one knob; a provider whose
+        # upstream wants the other spelling re-maps it itself.
+        if params.get("max_completion_tokens") is not None:
+            if params.get("max_tokens") is not None:
+                raise ValueError("Provide either max_tokens or max_completion_tokens, not both")
+            params["max_tokens"] = params.pop("max_completion_tokens")
+        else:
+            params.pop("max_completion_tokens", None)
         if params.get("max_tokens") is None:
-            params["max_tokens"] = 256
+            # 1024 matches the playground output cap. The old 256 default
+            # silently truncated replies from clients that omit max_tokens
+            # (finish_reason=length) — 256 tokens is ~10 lines of prose.
+            params["max_tokens"] = 1024
         if type(params["max_tokens"]) is not int or not 1 <= params["max_tokens"] <= 131072:
             raise ValueError("max_tokens must be a positive integer no greater than 131072")
 
@@ -131,8 +193,16 @@ class AgentProxyService:
                 raise ValueError(f"Message {i}: 'role' is required")
             if "content" not in msg:
                 raise ValueError(f"Message {i}: 'content' is required")
-            if msg["role"] not in ("user", "assistant", "system"):
+            if msg["role"] not in ("user", "assistant", "system", "tool"):
                 raise ValueError(f"Message {i}: invalid role '{msg['role']}'")
+            if msg["role"] == "tool":
+                if not isinstance(msg.get("tool_call_id"), str) or not msg["tool_call_id"]:
+                    raise ValueError(f"Message {i}: tool results require a 'tool_call_id'")
+            if msg["role"] == "assistant" and msg.get("content") is None:
+                # The agent loop replays the previous assistant message, which
+                # carries tool_calls and a null content — that shape is valid.
+                if not isinstance(msg.get("tool_calls"), list) or not msg["tool_calls"]:
+                    raise ValueError(f"Message {i}: assistant content cannot be empty without tool_calls")
 
         # Get model (use default if not provided)
         if model is None:
@@ -158,7 +228,9 @@ class AgentProxyService:
                 raise ValueError("max_tokens exceeds this model's output limit; reduce it")
             if (
                 price.max_context
-                and TokenUtils.count_message_tokens(messages, model=model) + params["max_tokens"] > price.max_context
+                and TokenUtils.count_message_tokens(messages, model=model, tools=params.get("tools"))
+                + params["max_tokens"]
+                > price.max_context
             ):
                 raise ValueError("Messages plus requested output exceed this model's context; shorten the conversation")
 
@@ -175,6 +247,7 @@ class AgentProxyService:
         messages: list[dict[str, Any]],
         max_tokens: int | None = None,
         provider_name: str | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> int:
         """
         Estimate the maximum sparks needed for a request.
@@ -194,7 +267,7 @@ class AgentProxyService:
 
         # Model-aware token estimate; count_message_tokens handles string and
         # multi-modal (list) content plus per-message framing overhead
-        input_tokens = TokenUtils.count_message_tokens(messages, model=model)
+        input_tokens = TokenUtils.count_message_tokens(messages, model=model, tools=tools)
 
         # Estimate output tokens
         if max_tokens:
@@ -231,7 +304,7 @@ class AgentProxyService:
             raise ValueError("client_operation_id must be a string of 1 to 300 characters")
         with gateway_operation_lock(key, client_operation_id):
             key = AgentAPIKey.objects.select_related("user").filter(pk=key.pk).first()
-            if key is None or not key.can_be_used() or not account_can_authenticate(key.user):
+            if key is None or not key.can_be_used() or not account_can_generate(key.user):
                 return {
                     "error": {
                         "status": "invalid_api_key",
@@ -290,7 +363,7 @@ class AgentProxyService:
 
         # The complete worst-case reservation must fit the monthly key budget.
         estimated_sparks = AgentProxyService.calculate_required_sparks(
-            model, messages, params["max_tokens"], provider_name
+            model, messages, params["max_tokens"], provider_name, tools=params.get("tools")
         )
         if client_operation_id is None:
             client_operation_id = str(uuid.uuid4())
@@ -366,7 +439,7 @@ class AgentProxyService:
             # Match erasure order; NO KEY UPDATE permits ordinary billing FK key-share locks.
             CustomUser.objects.select_for_update(no_key=True).get(pk=user.pk)
             key = AgentAPIKey.objects.select_for_update(of=("self",)).select_related("user").get(pk=key.pk)
-            if not key.can_be_used() or not account_can_authenticate(key.user):
+            if not key.can_be_used() or not account_can_generate(key.user):
                 return {
                     "error": {
                         "status": "invalid_api_key",
@@ -487,7 +560,28 @@ class AgentProxyService:
 
             if result.status != "success":
                 return AgentProxyService._record_failure(
-                    key, model, provider_name, reservation, client_operation_id, start_time
+                    key,
+                    model,
+                    provider_name,
+                    reservation,
+                    client_operation_id,
+                    start_time,
+                    upstream_status_code=result.upstream_status_code,
+                )
+
+            # A tool_calls finish with no relayed calls is a broken upstream
+            # response: the client would wait forever for calls to execute.
+            # Report it as an upstream error (refunded) instead of stalling
+            # the agent loop.
+            if result.finish_reason == "tool_calls" and not result.tool_calls:
+                return AgentProxyService._record_failure(
+                    key,
+                    model,
+                    provider_name,
+                    reservation,
+                    client_operation_id,
+                    start_time,
+                    failure_kind="tool_calls_dropped",
                 )
 
             input_tokens = result.input_tokens
@@ -500,7 +594,13 @@ class AgentProxyService:
                 or input_tokens + output_tokens == 0
             ):
                 return AgentProxyService._record_failure(
-                    key, model, provider_name, reservation, client_operation_id, start_time
+                    key,
+                    model,
+                    provider_name,
+                    reservation,
+                    client_operation_id,
+                    start_time,
+                    failure_kind="no_token_usage",
                 )
 
             cost_info = AgentPricingService.calculate_cost(
@@ -564,9 +664,15 @@ class AgentProxyService:
 
             return response
 
-        except Exception:
+        except Exception as e:
             return AgentProxyService._record_failure(
-                key, model, provider_name, reservation, client_operation_id, start_time
+                key,
+                model,
+                provider_name,
+                reservation,
+                client_operation_id,
+                start_time,
+                failure_kind="gateway_error:{}".format(type(e).__name__),
             )
 
     @staticmethod
@@ -584,8 +690,17 @@ class AgentProxyService:
         }
 
     @staticmethod
-    def _record_failure(key, model, provider_name, reservation, client_operation_id, start_time):
-        """Persist a confirmed refund or an explicitly uncertain hold, never false zero-charge assurances."""
+    def _record_failure(
+        key,
+        model,
+        provider_name,
+        reservation,
+        client_operation_id,
+        start_time,
+        upstream_status_code=None,
+        failure_kind="upstream_error",
+    ):
+        """Persist a confirmed refund or an explicitly uncertain hold, never false zero-charge claims."""
         with transaction.atomic():
             CustomUser.objects.select_for_update(no_key=True).get(pk=key.user_id)
             AgentAPIKey.objects.select_for_update().get(pk=key.pk)
@@ -611,7 +726,21 @@ class AgentProxyService:
                 latency_ms=int((time.time() - start_time) * 1000),
                 client_operation_id=client_operation_id,
             )
-        logger.error("Agent Gateway: failed operation key=%s refund_confirmed=%s", key.pk, confirmed)
+        # Upstream error text can echo request content, so it is never
+        # returned or logged (privacy rule). The numeric HTTP status, the
+        # failure kind and the model/provider identifiers are content-free
+        # and enough to triage: 400 = bad parameter, 403 = model access
+        # denied, 404 = unknown model.
+        logger.error(
+            "Agent Gateway: failed operation key=%s provider=%s model=%s refund_confirmed=%s "
+            "kind=%s upstream_http_status=%s",
+            key.pk,
+            provider_name,
+            model,
+            confirmed,
+            failure_kind,
+            upstream_status_code if upstream_status_code else "unknown",
+        )
         if not confirmed:
             return AgentProxyService._refund_pending()
         return {

@@ -15,6 +15,7 @@ import {
   validUserMessage,
 } from "../utils/textLimits";
 import { API } from "../config/constants";
+import { resolveMediaUrl } from "../utils/mediaUrl";
 import { localizeImageError } from "../utils/imageErrorMapper";
 import { localizeSystemMessage } from "../utils/systemMessage";
 import { parseLinks } from "../utils/messageLinks";
@@ -25,6 +26,7 @@ import {
   deleteMessage as deleteMessageApi,
 } from "../services/conversationService";
 import ConfirmDialog from "../components/ConfirmDialog";
+import PhotoAttachMenu from "../components/PhotoAttachMenu";
 import LoadOlderMessages from "../components/LoadOlderMessages";
 
 function getCurrentTime() {
@@ -37,13 +39,6 @@ function getCurrentTime() {
 function formatTimeFromISO(isoString) {
   const d = new Date(isoString);
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
-
-function resolveMediaUrl(url) {
-  if (!url) return url;
-  if (/^https?:\/\//i.test(url)) return url;
-  const base = API.BASE_URL ? API.BASE_URL.replace(/\/$/, "") : "";
-  return `${base}${url.startsWith("/") ? "" : "/"}${url}`;
 }
 
 function TypingBubble({ characterName }) {
@@ -70,6 +65,8 @@ function MessageBubble({
   time,
   imageUrl,
   imageAlt = "",
+  sharedPhotoAlt = "Shared photo",
+  attachments = [],
   animate = false,
   onDelete,
   navigate,
@@ -77,6 +74,11 @@ function MessageBubble({
   const isUser = sender === "user";
   const [showDelete, setShowDelete] = useState(false);
   const resolvedImage = resolveMediaUrl(imageUrl);
+  const photoAttachments = (attachments || []).filter((a) => a?.url);
+  // Photo-only messages (empty caption) still render their image.
+  const showTextBubble =
+    Boolean(text && text.trim()) ||
+    (!resolvedImage && photoAttachments.length === 0);
 
   return (
     <div
@@ -89,6 +91,27 @@ function MessageBubble({
       <div
         className={`flex max-w-[82%] flex-col ${isUser ? "items-end" : "items-start"}`}
       >
+        {photoAttachments.map((attachment, index) => (
+          <a
+            key={attachment.attachment_id || index}
+            href={resolveMediaUrl(attachment.url)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mb-1 overflow-hidden rounded-3xl shadow-sm"
+            style={{
+              border: "1px solid var(--color-border)",
+              borderBottomLeftRadius: isUser ? undefined : "0.5rem",
+              borderBottomRightRadius: isUser ? "0.5rem" : undefined,
+            }}
+          >
+            <img
+              src={resolveMediaUrl(attachment.url)}
+              alt={sharedPhotoAlt}
+              loading="lazy"
+              className="block max-h-80 w-full object-cover"
+            />
+          </a>
+        ))}
         {resolvedImage ? (
           <a
             href={resolvedImage}
@@ -108,7 +131,7 @@ function MessageBubble({
               className="block max-h-80 w-full object-cover"
             />
           </a>
-        ) : (
+        ) : showTextBubble ? (
           <div
             className="rounded-3xl px-4 py-3 text-sm leading-6 shadow-sm"
             style={
@@ -134,7 +157,7 @@ function MessageBubble({
           >
             {parseLinks(text, navigate, sender)}
           </div>
-        )}
+        ) : null}
         <span className="mt-1 px-1 text-[11px] theme-text-muted">{time}</span>
       </div>
       {showDelete && (
@@ -395,7 +418,7 @@ export default function ConversationChat() {
   const navigate = useNavigate();
   const { conversationId } = useParams();
   const location = useLocation();
-  const { isAuthenticated, isLoading: isAuthLoading } = useAuth();
+  const { user, isAuthenticated, isLoading: isAuthLoading } = useAuth();
   const { t } = useLanguage();
 
   // ---------- Hooks must be called unconditionally ----------
@@ -416,6 +439,9 @@ export default function ConversationChat() {
     clearMessages,
     deleteMessage,
     isCharacterActive,
+    pendingImage,
+    attachImage,
+    clearPendingImage,
     hasMoreHistory,
     isLoadingOlder,
     olderHistoryError,
@@ -497,6 +523,7 @@ export default function ConversationChat() {
           ? localizeSystemMessage(t, msg)
           : msg.content,
       imageUrl: msg.image_url || null,
+      attachments: msg.attachments || [],
       time: msg.created_at
         ? formatTimeFromISO(msg.created_at)
         : getCurrentTime(),
@@ -575,18 +602,42 @@ export default function ConversationChat() {
     el.style.height = `${Math.min(el.scrollHeight, 112)}px`;
   }
 
+  // Pending photo preview URL: one object URL per picked file, revoked on
+  // change/unmount so re-renders never leak blob handles.
+  const pendingImagePreviewUrl = useMemo(
+    () =>
+      pendingImage instanceof File ? URL.createObjectURL(pendingImage) : null,
+    [pendingImage],
+  );
+  useEffect(
+    () => () => {
+      if (pendingImagePreviewUrl) URL.revokeObjectURL(pendingImagePreviewUrl);
+    },
+    [pendingImagePreviewUrl],
+  );
+
   // Send message handler
   async function handleSend(textToSend = input) {
-    if (!validUserMessage(textToSend)) return;
+    const hasPendingImage = pendingImage instanceof File;
+    // A photo send is valid with an empty caption, but the caption length
+    // limit applies to photo sends exactly as to text sends.
+    const captionOk = hasPendingImage
+      ? characterCount(textToSend) <= USER_MESSAGE_LIMIT
+      : validUserMessage(textToSend);
+    if (!captionOk) return;
+    if (isSending || !isCharacterActive) return;
     const trimmed = textToSend.trim();
-    if (!trimmed || isSending || !isCharacterActive) return;
+    if (!trimmed && !hasPendingImage) return;
 
     setInput("");
     if (textareaRef.current) {
       textareaRef.current.style.height = "24px";
     }
 
-    const ok = await sendToAI(trimmed);
+    const imageToSend = hasPendingImage ? pendingImage : null;
+    if (imageToSend) clearPendingImage();
+
+    const ok = await sendToAI(trimmed, imageToSend);
 
     if (ok) {
       setIsWaitingForAI(true);
@@ -736,6 +787,8 @@ export default function ConversationChat() {
                   time={message.time}
                   imageUrl={message.imageUrl}
                   imageAlt={t("chat.generatedImageAlt")}
+                  sharedPhotoAlt={t("chat.sharedPhotoAlt")}
+                  attachments={message.attachments}
                   animate={false}
                   navigate={navigate}
                   onDelete={() => handleDeleteMessage(message.id)}
@@ -770,7 +823,46 @@ export default function ConversationChat() {
           paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 12px)",
         }}
       >
+        {/* Pending photo preview while a picked photo waits for send. */}
+        {pendingImage instanceof File && (
+          <div
+            className="mb-2 flex items-center gap-2 rounded-2xl border px-3 py-2"
+            style={{
+              borderColor: "var(--color-border)",
+              backgroundColor: "var(--color-soft)",
+            }}
+          >
+            <img
+              src={pendingImagePreviewUrl}
+              alt={t("chat.attachPhoto")}
+              className="h-10 w-10 rounded-lg object-cover"
+            />
+            <span className="flex-1 truncate text-xs theme-text-muted">
+              {pendingImage.name}
+            </span>
+            <button
+              type="button"
+              onClick={clearPendingImage}
+              className="rounded-full p-1 text-gray-400 hover:text-red-400"
+              title={t("chat.removePhoto")}
+              aria-label={t("chat.removePhoto")}
+            >
+              <X size={16} />
+            </button>
+          </div>
+        )}
         <form onSubmit={handleSubmit} className="flex items-end gap-2">
+          {/* Photo sends: only shown when the deployment explicitly enables
+              them (auth/me photo_uploads_enabled, refreshed on login). A
+              missing value hides the button — never a dead feature (F6). */}
+          {isAuthenticated && user?.photo_uploads_enabled === true && (
+            <PhotoAttachMenu
+              disabled={
+                !isCharacterActive || isSending || isWaitingForAI || connecting
+              }
+              onFileSelected={attachImage}
+            />
+          )}
           {canGenerateImage && (
             <button
               type="button"
@@ -829,7 +921,9 @@ export default function ConversationChat() {
           <button
             type="submit"
             disabled={
-              !validUserMessage(input) ||
+              (pendingImage instanceof File
+                ? characterCount(input) > USER_MESSAGE_LIMIT
+                : !validUserMessage(input)) ||
               isSending ||
               isWaitingForAI ||
               !isCharacterActive ||

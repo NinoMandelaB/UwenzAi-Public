@@ -61,6 +61,7 @@ from capp.classes.push.push_service import PushService
 from capp.classes.memory.memory_service import MemoryService
 from capp.classes.search.sanitize import clip
 from capp.constants import BYOK_MESSAGE_PAIR_COST, REMINDER_EXPIRY_GRACE_HOURS
+from capp.authentication import account_can_generate
 from capp.models import (
     BillingReservation,
     CustomUser,
@@ -196,7 +197,7 @@ class ReminderService:
             if reminder is None or reminder.status != Reminder.StatusChoices.PENDING:
                 return False
             now = django_timezone.now()
-            if not reminder.user.is_active or reminder.user.is_deleted:
+            if not account_can_generate(reminder.user):
                 return False
             if reminder.due_at > now:
                 return False
@@ -264,8 +265,7 @@ class ReminderService:
                 or current.status != Reminder.StatusChoices.PENDING
                 or current.revision != attempt.revision
                 or attempt.status != ReminderDeliveryAttempt.Status.ACTIVE
-                or not current.user.is_active
-                or current.user.is_deleted
+                or not account_can_generate(current.user)
             ):
                 cls._queue_refund_locked(attempt)
                 return False
@@ -391,8 +391,7 @@ class ReminderService:
                 and reminder is not None
                 and reminder.status == Reminder.StatusChoices.PENDING
                 and reminder.revision == attempt.revision
-                and reminder.user.is_active
-                and not reminder.user.is_deleted
+                and account_can_generate(reminder.user)
                 and attempt.lease_until > now
                 and not cls._expired(reminder, now)
             ):

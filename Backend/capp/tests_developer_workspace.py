@@ -1,7 +1,9 @@
 """Developer workspace integration tests. Real JWTs, real DB billing, mocked inference only."""
 
+import re
 import uuid
 from datetime import timedelta
+from pathlib import Path
 from decimal import Decimal
 from io import StringIO
 from unittest import mock
@@ -10,7 +12,7 @@ from django.conf import settings
 from django.core.cache import cache
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.test import TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils import timezone
 from redis import Redis
 from redis.exceptions import ConnectionError
@@ -55,7 +57,8 @@ BASE = "/api/v1/agent/"
     MISTRAL_UWENZAI_AGENT_API_KEY="dummy",
     AGENT_FX_EUR_KES=145,
     AGENT_FX_USD_KES=129,
-    AGENT_MARKUP_PERCENT=12.5,
+    AGENT_MARKUP_PERCENT=10,
+    MISTRAL_UWENZAI_AGENT_MARKUP_PERCENT=5.0,
     AGENT_EXCHANGE_RATE_API_URL=None,
 )
 class DeveloperWorkspaceTests(TestCase):
@@ -71,8 +74,8 @@ class DeveloperWorkspaceTests(TestCase):
             provider="cortecs",
             model="shared-model",
             currency="EUR",
-            input_price_per_1m=Decimal("0.22"),
-            output_price_per_1m=Decimal("0.66"),
+            input_price_per_1m=Decimal("1.00"),
+            output_price_per_1m=Decimal("2.00"),
             max_context=16384,
             description="Catalog description",
             capabilities=["text"],
@@ -302,15 +305,15 @@ class DeveloperWorkspaceTests(TestCase):
         response = self.client.get(BASE + "pricing/")
         data = response.data["data"]
         models = {m["provider"]: m for m in data["models"]}
-        self.assertEqual(models["cortecs"]["input_kes_per_1m"], "35.8875")
-        self.assertEqual(models["cortecs"]["output_kes_per_1m"], "107.6625")
+        self.assertEqual(models["cortecs"]["input_kes_per_1m"], "159.5")
+        self.assertEqual(models["cortecs"]["output_kes_per_1m"], "319")
         self.assertEqual(models["cortecs"]["max_context"], 16384)
         self.assertEqual(models["cortecs"]["capabilities"], ["text"])
         self.assertIsNone(models["mistral"]["max_context"])
         self.assertIsNone(models["mistral"]["max_output_tokens"])
         self.assertEqual(models["mistral"]["capabilities"], [])
         self.assertTrue(models["mistral"]["available"])
-        self.assertEqual(data["markup_percent"], 12.5)
+        self.assertEqual(data["markup_percent"], 10)
         self.assertEqual(
             data["playground_limits"], {"max_messages": 60, "max_input_tokens": 8192, "max_output_tokens": 1024}
         )
@@ -320,17 +323,18 @@ class DeveloperWorkspaceTests(TestCase):
     def test_pricing_per_provider_markup_and_provider_details(self):
         data = self.client.get(BASE + "pricing/").data["data"]
         models = {m["provider"]: m for m in data["models"]}
-        self.assertEqual(models["cortecs"]["markup_percent"], 12.5)
-        self.assertEqual(models["mistral"]["markup_percent"], 8.0)
-        # 22 USD * 1.08 markup * 129 KES/USD = 3065.04
-        self.assertEqual(models["mistral"]["input_kes_per_1m"], "3065.04")
-        # 66 USD * 1.08 markup * 129 KES/USD = 9195.12
-        self.assertEqual(models["mistral"]["output_kes_per_1m"], "9195.12")
+        self.assertEqual(models["cortecs"]["markup_percent"], 10.0)
+        self.assertEqual(models["mistral"]["markup_percent"], 5.0)
+        # 22 USD * 1.05 markup * 129 KES/USD = 2979.9
+        self.assertEqual(models["mistral"]["input_kes_per_1m"], "2979.9")
+        # 66 USD * 1.05 markup * 129 KES/USD = 8939.7
+        self.assertEqual(models["mistral"]["output_kes_per_1m"], "8939.7")
         providers = data["providers"]
-        self.assertEqual(set(providers), {"cortecs", "mistral", "fikra", "inceptron", "aki", "ovh"})
+        self.assertEqual(set(providers), {"cortecs", "mistral", "fikra", "inceptron", "aki", "ovh", "tensorx"})
         self.assertEqual(providers["cortecs"], {"country": "Austria (EU)", "kind": "gateway"})
         self.assertEqual(providers["mistral"], {"country": "France (EU)", "kind": "inference"})
         self.assertEqual(providers["fikra"]["country"], "Kenya")
+        self.assertEqual(providers["tensorx"], {"country": "Ireland (EU)", "kind": "inference"})
 
     def test_unconfigured_catalog_pair_is_unavailable(self):
         reset_registry()
@@ -349,11 +353,13 @@ class DeveloperWorkspaceTests(TestCase):
             )
             self.assertEqual(response.status_code, 200, response.data)
         self.assertEqual(self.provider.call_count, 2)
-        self.assertEqual(self.provider.call_args.kwargs["params"]["max_tokens"], 256)
+        # Omitted max_tokens defaults to 1024 (was 256 — silently truncated
+        # agent replies with finish_reason=length).
+        self.assertEqual(self.provider.call_args.kwargs["params"]["max_tokens"], 1024)
 
     def test_omitted_provider_routes_to_cheapest_and_reports_selection(self):
-        # Cortecs: (0.22 + 0.66) EUR * 1.125 * 145 KES ~ 143 KES per 1M tokens.
-        # Mistral: (22 + 66) USD * 1.08 * 129 KES ~ 12,268 KES per 1M tokens.
+        # Cortecs: (1 + 2) EUR * 1.10 * 145 KES ~ 479 KES per 1M tokens.
+        # Mistral: (22 + 66) USD * 1.05 * 129 KES ~ 11,920 KES per 1M tokens.
         # The cheaper provider must win deterministically, not by row order.
         AgentModelPrice.objects.filter(provider="mistral", model="shared-model").update(
             input_price_per_1m=Decimal("0.01"), output_price_per_1m=Decimal("0.03")
@@ -635,6 +641,50 @@ class DeveloperWorkspaceTests(TestCase):
         self.assertEqual(SparkPool.objects.get(user=self.user).sparks, 10000)
         self.assertEqual(BillingReservation.objects.get().status, BillingReservation.Status.REFUNDED)
         self.assertNotIn("Private", BillingReservation.objects.get().refund_reason)
+
+    def test_tool_calls_finish_without_calls_is_refunded_error(self):
+        """A tool_calls finish with zero relayed calls is a broken upstream
+        response; billing must refund and the client must get an explicit
+        upstream error instead of a silently unusable 200 that stalls agent
+        loops."""
+        self.provider.return_value = ProviderResult(
+            text="I'll check that.",
+            usage={"prompt_tokens": 276, "completion_tokens": 49},
+            finish_reason="tool_calls",
+            tool_calls=None,
+        )
+        with self.assertLogs("capp.classes.agent_gateway.proxy_service", level="ERROR") as logs:
+            response = self.chat(save_history=False)
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("tool_calls_dropped", str(logs.output))
+        # Full refund, no sparks settled from the reservation.
+        self.assertEqual(SparkPool.objects.get(user=self.user).sparks, 10000)
+        self.assertEqual(BillingReservation.objects.get().status, BillingReservation.Status.REFUNDED)
+        usage = AgentUsageLog.objects.get()
+        self.assertEqual(usage.status, AgentUsageLog.Status.UPSTREAM_ERROR)
+        self.assertEqual(usage.sparks_charged, 0)
+
+    def test_relayed_tool_calls_still_bill_normally(self):
+        """The guard must not interfere with valid tool-call responses."""
+        self.provider.return_value = ProviderResult(
+            text="",
+            usage={"prompt_tokens": 276, "completion_tokens": 49},
+            finish_reason="tool_calls",
+            tool_calls=[
+                {
+                    "id": "call_0",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city": "Nairobi"}'},
+                }
+            ],
+        )
+        response = self.chat(save_history=False)
+        self.assertEqual(response.status_code, 200)
+        message = response.data["choices"][0]["message"]
+        self.assertEqual(message["tool_calls"][0]["function"]["name"], "get_weather")
+        usage = AgentUsageLog.objects.get()
+        self.assertGreater(usage.sparks_charged, 0)
+        self.assertEqual(BillingReservation.objects.get().status, BillingReservation.Status.SETTLED)
 
     def test_all_model_usage_pairs_monthly_and_total_no_truncation(self):
         for i in range(12):
@@ -925,8 +975,8 @@ class DeveloperWorkspaceTests(TestCase):
             [
                 {
                     "id": "shared-model",
-                    "input_price_per_1m": Decimal("0.22"),
-                    "output_price_per_1m": Decimal("0.66"),
+                    "input_price_per_1m": Decimal("1.00"),
+                    "output_price_per_1m": Decimal("2.00"),
                     "max_context": 65536,
                     "max_output_tokens": 4096,
                     "description": "Verified description",
@@ -944,8 +994,8 @@ class DeveloperWorkspaceTests(TestCase):
             [
                 {
                     "id": "shared-model",
-                    "input_price_per_1m": Decimal("0.22"),
-                    "output_price_per_1m": Decimal("0.66"),
+                    "input_price_per_1m": Decimal("1.00"),
+                    "output_price_per_1m": Decimal("2.00"),
                     "max_context": "invented",
                     "max_output_tokens": -1,
                 }
@@ -1110,12 +1160,17 @@ class DeveloperWorkspaceTests(TestCase):
         self.provider.assert_not_called()
 
 
+@override_settings(
+    AGENT_MARKUP_PERCENT=10,
+    CORTECS_UWENZAI_AGENT_MARKUP_PERCENT=7.5,
+    MISTRAL_UWENZAI_AGENT_MARKUP_PERCENT=5.0,
+)
 class PerProviderMarkupTests(TestCase):
-    """Per-provider markup resolution with a global default fallback."""
+    """Per-provider markup resolution with a global fallback (values are test fixtures)."""
 
     def test_defaults_and_fallback(self):
-        self.assertEqual(get_markup_percent("cortecs"), 12.5)
-        self.assertEqual(get_markup_percent("mistral"), 8.0)
+        self.assertEqual(get_markup_percent("cortecs"), 7.5)
+        self.assertEqual(get_markup_percent("mistral"), 5.0)
         self.assertEqual(get_markup_percent("fictional"), get_markup_percent(None))
         self.assertEqual(get_markup_percent(None), float(settings.AGENT_MARKUP_PERCENT))
 
@@ -1123,12 +1178,17 @@ class PerProviderMarkupTests(TestCase):
         with override_settings(MISTRAL_UWENZAI_AGENT_MARKUP_PERCENT=10.5):
             self.assertEqual(get_markup_percent("mistral"), 10.5)
             # Other providers are unaffected by one provider's override.
-            self.assertEqual(get_markup_percent("cortecs"), 12.5)
+            self.assertEqual(get_markup_percent("cortecs"), 7.5)
         with override_settings(AGENT_MARKUP_PERCENT=15):
             self.assertEqual(get_markup_percent("fictional"), 15.0)
             # A provider without its setting falls back to the global default.
             with override_settings(CORTECS_UWENZAI_AGENT_MARKUP_PERCENT=None):
                 self.assertEqual(get_markup_percent("cortecs"), 15.0)
+
+    def test_unset_markup_means_no_markup(self):
+        with override_settings(AGENT_MARKUP_PERCENT=0, CORTECS_UWENZAI_AGENT_MARKUP_PERCENT=None):
+            self.assertEqual(get_markup_percent("cortecs"), 0.0)
+            self.assertEqual(get_markup_percent(None), 0.0)
 
 
 @override_settings(
@@ -1154,8 +1214,8 @@ class CatalogSyncTests(TestCase):
             {
                 "id": "sync-model-existing",
                 "name": "sync-model-existing",
-                "input_price_per_1m": Decimal("0.22"),
-                "output_price_per_1m": Decimal("0.66"),
+                "input_price_per_1m": Decimal("1.00"),
+                "output_price_per_1m": Decimal("2.00"),
                 "currency": "EUR",
                 "max_context": 32768,
             },
@@ -1206,7 +1266,7 @@ class CatalogSyncTests(TestCase):
         # Admin kill-switch survives the refresh, but the price is updated.
         disabled.refresh_from_db()
         self.assertFalse(disabled.is_active)
-        self.assertEqual(disabled.input_price_per_1m, Decimal("0.22"))
+        self.assertEqual(disabled.input_price_per_1m, Decimal("1.00"))
         self.assertTrue(
             AgentModelPrice.objects.filter(provider="cortecs", model="sync-model-new", is_active=True).exists()
         )
@@ -1291,13 +1351,15 @@ class CatalogSyncTests(TestCase):
                     ]
                 }
 
-        provider = MistralAgentProvider()
-        with mock.patch("httpx.get", return_value=FakeResponse()):
-            count = provider.refresh_catalog()
+        # Fixture prices only: the public source ships no price table.
+        with override_settings(MISTRAL_UWENZAI_AGENT_MODEL_PRICES={"mistral-small-latest": ["1.10", "2.20"]}):
+            provider = MistralAgentProvider()
+            with mock.patch("httpx.get", return_value=FakeResponse()):
+                count = provider.refresh_catalog()
         self.assertEqual(count, 2)
         rows = {p.model: p for p in AgentModelPrice.objects.filter(provider="mistral")}
-        self.assertEqual(rows["mistral-small-latest"].input_price_per_1m, Decimal("0.15"))
-        self.assertEqual(rows["mistral-small-latest"].output_price_per_1m, Decimal("0.60"))
+        self.assertEqual(rows["mistral-small-latest"].input_price_per_1m, Decimal("1.10"))
+        self.assertEqual(rows["mistral-small-latest"].output_price_per_1m, Decimal("2.20"))
         self.assertEqual(rows["mistral-small-latest"].currency, "USD")
         self.assertEqual(rows["sync-mistral-priced"].input_price_per_1m, Decimal("0.10"))
         self.assertNotIn("glm-5-2", rows)
@@ -1321,14 +1383,16 @@ class CatalogSyncTests(TestCase):
                     ]
                 }
 
-        with override_settings(AKI_UWENZAI_AGENT_API_KEY="dummy"):
+        # Fixture prices only: the public source ships no price table.
+        aki_prices = {"mistral4-119b": ["1.20", "2.40"], "qwen3.8-27b": ["0.30", "0.60"]}
+        with override_settings(AKI_UWENZAI_AGENT_API_KEY="dummy", AKI_UWENZAI_AGENT_MODEL_PRICES=aki_prices):
             provider = AkiAgentProvider()
             with mock.patch("httpx.get", return_value=FakeResponse()):
                 count = provider.refresh_catalog()
         self.assertEqual(count, 2)
         rows = {p.model: p for p in AgentModelPrice.objects.filter(provider="aki")}
-        self.assertEqual(rows["mistral4-119b"].input_price_per_1m, Decimal("0.20"))
-        self.assertEqual(rows["mistral4-119b"].output_price_per_1m, Decimal("0.60"))
+        self.assertEqual(rows["mistral4-119b"].input_price_per_1m, Decimal("1.20"))
+        self.assertEqual(rows["mistral4-119b"].output_price_per_1m, Decimal("2.40"))
         self.assertEqual(rows["mistral4-119b"].currency, "EUR")
         self.assertEqual(rows["mistral4-119b"].max_context, 262144)
         self.assertIsNone(rows["qwen3.8-27b"].max_context)
@@ -1357,7 +1421,11 @@ class CatalogSyncTests(TestCase):
                     ]
                 }
 
-        with override_settings(FIKRA_UWENZAI_AGENT_API_KEY="dummy"):
+        # Fixture prices only: the public source ships no price table.
+        with override_settings(
+            FIKRA_UWENZAI_AGENT_API_KEY="dummy",
+            FIKRA_UWENZAI_AGENT_MODEL_PRICES={"fikra-flash": ["0.75", "0.75"]},
+        ):
             provider = FikraAgentProvider()
             with mock.patch("httpx.get", return_value=FakeResponse()):
                 count = provider.refresh_catalog()
@@ -1365,7 +1433,7 @@ class CatalogSyncTests(TestCase):
         rows = {p.model: p for p in AgentModelPrice.objects.filter(provider="fikra")}
         self.assertEqual(rows["fikra-pro-20b"].input_price_per_1m, Decimal("2.0"))
         self.assertEqual(rows["fikra-pro-20b"].output_price_per_1m, Decimal("2.0"))
-        self.assertEqual(rows["fikra-flash"].input_price_per_1m, Decimal("0.50"))
+        self.assertEqual(rows["fikra-flash"].input_price_per_1m, Decimal("0.75"))
         self.assertEqual(rows["fikra-flash"].currency, "USD")
         self.assertNotIn("fikra-embedding-v1", rows)
 
@@ -1437,3 +1505,34 @@ class KeyMonthlyBudgetTests(TestCase):
         self.assertFalse(AgentAPIKey.objects.exists())
         # The cap itself is accepted:
         self.assertEqual(self._create(monthly_spark_budget=1000).status_code, 200)
+
+
+class GatewayConsentVersionCoordinationTests(SimpleTestCase):
+    """The backend consent gate and the frontend publication must stay in sync.
+
+    The developer workspace POSTs the frontend ``LEGAL_POLICY_VERSION`` as the
+    consent version and the backend compares it against
+    ``AGENT_GATEWAY_CONSENT_VERSION``. When the two diverge, every confirmation
+    is rejected with 409 ``consent_version_mismatch`` and keys and the
+    playground stay locked for every user (seen in production on 2026-10-03
+    after a legal-document version bump). This test fails the build instead.
+
+    Both constants live in this monorepo, so the check is a plain file read.
+    """
+
+    FRONTEND_LEGAL_INDEX = Path(__file__).resolve().parents[2] / "Frontend" / "src" / "i18n" / "legal" / "index.js"
+
+    def test_backend_consent_version_equals_frontend_policy_version(self):
+        path = self.FRONTEND_LEGAL_INDEX
+        if not path.exists():  # backend-only checkout
+            self.skipTest(f"frontend legal index not found at {path}")
+
+        match = re.search(r'LEGAL_POLICY_VERSION\s*=\s*"([^"]+)"', path.read_text(encoding="utf-8"))
+        self.assertIsNotNone(match, "LEGAL_POLICY_VERSION export not found in frontend legal index")
+        self.assertEqual(
+            AGENT_GATEWAY_CONSENT_VERSION,
+            match.group(1),
+            "AGENT_GATEWAY_CONSENT_VERSION must equal the frontend LEGAL_POLICY_VERSION: "
+            "bump both together when legal documents change, or every gateway consent "
+            "confirmation will be rejected with 409 consent_version_mismatch.",
+        )

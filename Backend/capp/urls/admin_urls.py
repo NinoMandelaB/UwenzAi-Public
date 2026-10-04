@@ -18,6 +18,12 @@ from capp.views.admin_views import (
     admin_get_character_detail,
     admin_hard_delete_character,
     admin_audit_log,
+    admin_user_safety,
+    admin_message_user,
+    admin_reverse_safety_event,
+    admin_unlock_safety,
+    admin_reset_model_refusals,
+    admin_shadow_overview,
 )
 
 urlpatterns = [
@@ -50,4 +56,28 @@ urlpatterns = [
     # Unified audit trail: admin actions + Paystack payment events.
     # See capp/views/admin_views.py::admin_audit_log.
     path("audit-log/", admin_audit_log, name="admin_audit_log"),
+    # Cross-session safety ledger: event list + reversal + account unlock.
+    # Metadata only — never message text (see SafetyEvent).
+    path("users/<uuid:user_id>/safety/", admin_user_safety, name="admin_user_safety"),
+    path(
+        "users/<uuid:user_id>/safety/events/<uuid:event_id>/reverse/",
+        admin_reverse_safety_event,
+        name="admin_reverse_safety_event",
+    ),
+    path(
+        "users/<uuid:user_id>/safety/unlock/",
+        admin_unlock_safety,
+        name="admin_unlock_safety",
+    ),
+    # Direct admin outreach: open a support ticket on the user's behalf
+    # (first message from the admin). See admin_views.py::admin_message_user.
+    path("users/<uuid:user_id>/message/", admin_message_user, name="admin_message_user"),
+    path(
+        "users/<uuid:user_id>/safety/model-refusals/reset/",
+        admin_reset_model_refusals,
+        name="admin_reset_model_refusals",
+    ),
+    # Shadow-mode overview: every account the classifier flagged while the
+    # ledger only recorded (never enforced). Metadata only.
+    path("safety/shadow-overview/", admin_shadow_overview, name="admin_shadow_overview"),
 ]

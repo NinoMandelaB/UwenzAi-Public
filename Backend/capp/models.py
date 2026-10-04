@@ -142,6 +142,13 @@ class CustomUser(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
         SUSPENDED = "suspended", "Suspended"
         BANNED = "banned", "Banned"
         DEACTIVATED = "deactivated", "Deactivated"
+        # Automatic cross-session safety lock (repeated or critical safety
+        # violations). Deliberately NOT in the banned/suspended family: the
+        # user may still sign in and read their status / appeal via support,
+        # but every generation action (chat, images) is refused until an
+        # admin reviews and unlocks. See
+        # capp/classes/moderation/safety_ledger.py.
+        SAFETY_LOCKED = "safety_locked", "Safety Locked"
 
     class AuthProvider(models.TextChoices):
         USERNAME = "username", "Username"
@@ -388,6 +395,10 @@ class UserBYOKConfig(TimeStampedModel):
 
     # ── Optional system-prompt override ──────────────────────────────────────
     # Stored CLEAR TEXT for moderation. Users are warned at input time.
+    # Scope: replaces ONLY the "=== PLATFORM RULES (System) ===" section of
+    # the assembled prompt (see PromptBuilder._build_system_prompt). The
+    # character card (personality), memory, relationship, summary and
+    # safety sections are never affected by this override.
     system_prompt = models.TextField(
         blank=True,
         default="",
@@ -2321,6 +2332,16 @@ class SparkPackage(TimeStampedModel):
         default=0.00,
         help_text="e.g. 2.5 means 2.5% discount",
     )
+    vat_percent = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=0.00,
+        help_text=(
+            "VAT applied on top of the discounted price, e.g. 16 means 16% VAT "
+            "(Kenya standard rate for digital supplies). final_price_kes "
+            "includes this VAT."
+        ),
+    )
     final_price_kes = models.DecimalField(max_digits=10, decimal_places=2)
 
     is_active = models.BooleanField(default=True)
@@ -2926,6 +2947,9 @@ class AdminActionLog(TimeStampedModel):
         USER_STATUS_CHANGE = "user_status_change", "User Status Change"
         SPARK_ADJUSTMENT = "spark_adjustment", "Spark Adjustment"
         CHARACTER_HARD_DELETE = "character_hard_delete", "Character Hard Delete"
+        SAFETY_EVENT_REVERSE = "safety_event_reverse", "Safety Event Reversal"
+        SAFETY_ACCOUNT_UNLOCK = "safety_account_unlock", "Safety Account Unlock"
+        SAFETY_MODEL_REFUSALS_RESET = "safety_model_refusals_reset", "Safety Model-Refusal Flags Reset"
 
     log_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
@@ -3013,8 +3037,10 @@ class MediaDeletionJob(TimeStampedModel):
 
     def perform(self):
         from django.apps import apps
+        from django.core.files.storage import default_storage
 
-        # This table is populated only from server-owned FieldFile instances.
+        # This table is populated only from server-owned FieldFile instances
+        # and MessageAttachment storage keys.
         try:
             model = apps.get_model(self.model_label)
             field = model._meta.get_field(self.field_name)
@@ -3027,7 +3053,10 @@ class MediaDeletionJob(TimeStampedModel):
                 if owner_model.objects.using(self._state.db).filter(**{owner_field: self.file_name}).exists():
                     self.delete()
                     return True
-            field.storage.delete(self.file_name)
+            # MessageAttachment stores an encrypted blob under a CharField
+            # key rather than a FileField; fall back to the default storage.
+            storage = getattr(field, "storage", None) or default_storage
+            storage.delete(self.file_name)
         except Exception:
             # Log the queue ID, not possibly identifying file names/provider
             # exception payloads. The retained job remains available to retry.
@@ -3201,8 +3230,9 @@ class AgentModelPrice(TimeStampedModel):
     Cost catalog for Agent Gateway models.
 
     Stores the upstream (provider) pricing per 1M tokens in the provider's
-    native currency. UwenzAi adds a 12.5% markup (configurable via
-    AGENT_MARKUP_PERCENT) on top, then converts to KES using live FX.
+    native currency. UwenzAi adds a per-provider markup (configured via
+    AGENT_MARKUP_PERCENT and the provider-specific settings) on top, then
+    converts to KES using live FX.
 
     Editable via Django admin so price updates don't require a deploy.
     """
@@ -3409,3 +3439,219 @@ class AgentGatewayOperation(TimeStampedModel):
         constraints = [
             models.UniqueConstraint(fields=["user", "key", "client_operation_id"], name="unique_agent_operation")
         ]
+
+
+# ============================================================
+# USER-SENT PHOTO ATTACHMENTS
+# ============================================================
+
+
+class MessageAttachment(TimeStampedModel):
+    """A photo the user attached to a chat message.
+
+    The image itself lives in the private bucket as AES-256-GCM envelope-
+    encrypted ciphertext (see ``capp.classes.chat.attachment_crypto``); this
+    row holds the storage key, the wrapped per-image data key and the
+    moderation outcome. Rows are deleted with their message (conversation
+    delete / account erasure cascade), and the storage object is removed
+    through the same MediaDeletionJob outbox used for avatars and gallery
+    images.
+    """
+
+    class ModerationStatus(models.TextChoices):
+        APPROVED = "approved", "Approved"
+        REJECTED = "rejected", "Rejected"
+
+    attachment_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    message = models.ForeignKey(Message, on_delete=models.CASCADE, related_name="attachments")
+    # Kept for direct operator queries; the FK is SET_NULL so an erasure pass
+    # can scrub ownership without orphaning storage cleanup.
+    owner = models.ForeignKey(
+        CustomUser,
+        on_delete=models.SET_NULL,
+        related_name="chat_attachments",
+        blank=True,
+        null=True,
+    )
+
+    # --- Storage ---
+    storage_key = models.CharField(max_length=512)
+    content_type = models.CharField(max_length=32)
+    byte_size = models.PositiveIntegerField()  # ciphertext length
+    width = models.PositiveIntegerField(null=True, blank=True)
+    height = models.PositiveIntegerField(null=True, blank=True)
+    sha256 = models.CharField(max_length=64)  # of the normalised plaintext
+
+    # --- Envelope encryption metadata (never the key material itself) ---
+    key_version = models.CharField(max_length=32)
+    wrapped_key = models.TextField()  # base64 data key wrapped by master key
+    nonce = models.CharField(max_length=64)  # base64 image+wrap nonces
+
+    # --- Moderation outcome ---
+    moderation_status = models.CharField(
+        max_length=20,
+        choices=ModerationStatus.choices,
+        default=ModerationStatus.APPROVED,
+    )
+    moderation_provider = models.CharField(max_length=64, blank=True)
+    moderation_categories = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        db_table = "message_attachments"
+        indexes = [
+            models.Index(fields=["message"]),
+            models.Index(fields=["sha256"]),
+        ]
+
+    def __str__(self):
+        return f"Photo attachment {self.attachment_id} (message={self.message_id})"
+
+
+class PhotoScreeningEvent(TimeStampedModel):
+    """Minimal audit row for a REFUSED photo screening.
+
+    Written only when an upload was blocked (or could not be screened) —
+    allowed photos keep their moderation metadata on the user-deletable
+    attachment row instead. Retained past account erasure on the child-safety
+    reporting basis: it stores the acting user id, the image hash, the
+    provider, the decision and the blocked categories, and deliberately
+    nothing else (never image bytes, never captions). Operators with a
+    reporting obligation (e.g. Kenyan Children Act / Computer Misuse duties)
+    export from here.
+    """
+
+    event_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    # Plain UUID columns (no FK): the row must survive account erasure.
+    user_id = models.UUIDField(null=True, blank=True)
+    conversation_id = models.UUIDField(null=True, blank=True)
+
+    sha256 = models.CharField(max_length=64)
+    provider = models.CharField(max_length=64)
+    decision = models.CharField(max_length=20)  # block / unavailable
+    categories = models.JSONField(default=list, blank=True)
+
+    class Meta:
+        db_table = "photo_screening_events"
+        indexes = [
+            models.Index(fields=["user_id", "created_at"]),
+            models.Index(fields=["sha256"]),
+        ]
+
+    def __str__(self):
+        return f"Photo screening {self.decision} ({self.provider})"
+
+
+@receiver(post_delete, sender=MessageAttachment)
+def delete_message_attachment_file(sender, instance, using, **kwargs):
+    """Queue storage erasure for a deleted photo attachment.
+
+    Attachment blobs are not FieldFiles, so this mirrors
+    ``delete_file_after_commit`` with the default storage explicitly: the job
+    resolves the model/field for audit but the deletion always runs against
+    the bucket the encrypted blob was written to.
+    """
+    if instance.storage_key:
+        job = MediaDeletionJob.objects.using(using).create(
+            model_label="capp.MessageAttachment",
+            field_name="storage_key",
+            file_name=instance.storage_key,
+        )
+        transaction.on_commit(job.perform, using=using, robust=True)
+
+
+class SafetyEvent(TimeStampedModel):
+    """Cross-session safety ledger row for a classified user message.
+
+    Written by ``capp/classes/moderation/safety_ledger.py`` when the
+    deterministic text safety screen classifies a message. This is the
+    account-level counterpart of the per-image ``PhotoScreeningEvent``:
+    one row per recorded signal, so repeated or critical violations can lock
+    the account regardless of which chat they happened in.
+
+    Privacy by construction: the row stores ONLY structured metadata —
+    category, severity, confidence, the action taken, timestamps and an
+    irreversible HMAC fingerprint of the message used for deduplication.
+    It never stores the message text, an embedding, a summary, or any FK to
+    the message itself. Admins review counts and categories; the exact text
+    remains visible only to the user who wrote it (and their own exports).
+
+    Plain UUID columns (no FKs): rows must survive account erasure on the
+    same child-safety / legal-reporting basis as ``PhotoScreeningEvent``,
+    so an erased account still has its safety history for operators with a
+    reporting obligation.
+
+    Reversal: an admin can soft-reverse a specific event when it was a
+    false positive. Reversal is an annotation (``is_reversed``), never a
+    deletion — the audit trail of what was recorded and why it was undone
+    stays queryable.
+    """
+
+    class Category(models.TextChoices):
+        SELF_HARM = "self_harm", "Self-harm concern (care, non-punitive)"
+        WEAPONS_CONTEXT = "weapons_context", "Weapons interest (concern signal)"
+        WEAPONS_INSTRUCTIONS = "weapons_instructions", "Weapon construction instructions"
+        VIOLENCE_PLANNING = "violence_planning", "Violence planning"
+        THREATS = "threats_targeted", "Targeted threat against a person"
+        TRAFFICKING = "human_trafficking", "Human trafficking"
+        GENDER_VIOLENCE = "gender_violence", "Gender-based violence"
+        CSAM = "csam", "Child sexual abuse material"
+        MODEL_REFUSAL = "model_refusal", "Model refused a request (advisory, never punitive)"
+        PHOTO_CHILD_SAFETY = "photo_child_safety", "Blocked child-safety photo upload"
+
+    class Severity(models.TextChoices):
+        CRITICAL = "critical", "Critical"
+        HIGH = "high", "High"
+        MEDIUM = "medium", "Medium"
+        LOW = "low", "Low"
+
+    class Action(models.TextChoices):
+        LOGGED = "logged", "Logged (no message block)"
+        WARNED = "warned", "Blocked with warning"
+        BLOCKED = "blocked", "Blocked"
+        LOCKED = "locked", "Blocked and account locked"
+        SHADOWED = "shadowed", "Recorded in shadow mode (measured, not enforced)"
+
+    event_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # Plain UUID columns (no FK): rows survive account erasure.
+    user_id = models.UUIDField(null=False, blank=False)
+    conversation_id = models.UUIDField(null=True, blank=True)
+
+    category = models.CharField(max_length=40, choices=Category.choices)
+    severity = models.CharField(max_length=10, choices=Severity.choices)
+    action = models.CharField(max_length=10, choices=Action.choices)
+
+    # True for self-harm care events: recorded for support context only,
+    # excluded from every punitive computation.
+    is_care = models.BooleanField(default=False)
+
+    confidence = models.FloatField(default=1.0)
+    classifier_version = models.CharField(max_length=40)
+
+    # Irreversible keyed fingerprint of the normalised message text. Used
+    # only to deduplicate rapid re-sends within a short window so spamming
+    # the same violation does not stack the score. Not message content.
+    fingerprint = models.CharField(max_length=64)
+
+    # Aggravation marker: this violation was escalated because prior
+    # concern signals existed when it was recorded (e.g. earlier weapons
+    # interest in another conversation).
+    was_aggravated = models.BooleanField(default=False)
+
+    # Admin reversal (soft, never a delete).
+    is_reversed = models.BooleanField(default=False)
+    reversed_at = models.DateTimeField(blank=True, null=True)
+    reversed_by = models.UUIDField(blank=True, null=True)
+    reversal_reason = models.TextField(blank=True, null=True)
+
+    class Meta:
+        db_table = "safety_events"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["user_id", "created_at"]),
+            models.Index(fields=["user_id", "is_reversed", "created_at"]),
+            models.Index(fields=["category"]),
+        ]
+
+    def __str__(self):
+        return f"Safety event {self.category} ({self.severity}) {'[reversed]' if self.is_reversed else ''}"

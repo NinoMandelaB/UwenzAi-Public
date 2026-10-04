@@ -8,6 +8,7 @@ from openai import OpenAI
 from django.conf import settings
 from capp.classes.ai.mistral_client import MistralClient
 from capp.classes.ai import reasoning
+from capp.classes.ai.model_vision import message_has_image_parts, supports_vision
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +113,23 @@ class CortecsClient:
             }
 
         except Exception as e:
+            # A photo turn must never degrade to a text-only fallback: the
+            # user asked the companion to LOOK at their photo, and a
+            # text-only reply would be a paid non-answer. If the Mistral
+            # fallback model cannot view images, fail the turn instead — the
+            # task retries and ultimately refunds, so nobody pays for an
+            # unviewed photo. (If Mistral IS vision-capable, the fallback
+            # proceeds with the image parts intact.)
+            if message_has_image_parts(messages):
+                mistral_model = getattr(settings, "MISTRAL_MODEL", None)
+                if not supports_vision(mistral_model):
+                    logger.warning(
+                        "Cortecs failed on a photo turn and the Mistral fallback (model=%s) cannot view images; "
+                        "failing the turn so it is retried/refunded instead of answered text-only",
+                        mistral_model,
+                    )
+                    raise
+
             # Any failure — no credits, timeout, bad gateway, invalid key, etc.
             logger.warning(
                 "Cortecs failed (model=%s): %s – falling back to Mistral",

@@ -105,6 +105,11 @@ export const CREDITS = {
   // What's new since the beta release — newest first, ~6 entries max.
   shipped: [
     {
+      date: "2026-10-05",
+      en: "Photo messages — send a picture and your companion can see it",
+      sw: "Ujumbe wa picha — tuma picha na mwandani wako anaweza kuiona",
+    },
+    {
       date: "2026-09-15",
       en: "UwenzAi-Dev — your personal UwenzAi API key to access AI models for your personal use",
       sw: "UwenzAi-Dev — ufunguo wako wa API wa UwenzAi wa kufikia mifano ya AI kwa matumizi yako binafsi",

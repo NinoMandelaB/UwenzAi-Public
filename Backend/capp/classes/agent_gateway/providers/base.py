@@ -98,6 +98,16 @@ class ProviderResult:
     usage: dict[str, Any]  # Must contain prompt_tokens and completion_tokens
     status: str = "success"
     error_message: str | None = None
+    # Structured tool calls from the assistant message (OpenAI shape:
+    # [{"id": ..., "type": "function", "function": {"name": ..., "arguments": ...}}]).
+    # None when the model answered in plain text. Relayed verbatim to the
+    # client — the client, not the gateway, executes tools.
+    tool_calls: list[dict[str, Any]] | None = None
+    # Upstream HTTP status (int) when the failure was an HTTP response. The
+    # raw error_message may echo request content and is never logged or
+    # returned to callers; this numeric code is the safe diagnosable signal
+    # (400 bad parameter vs 403 model access vs 404 unknown model).
+    upstream_status_code: int | None = None
     finish_reason: str | None = None
     model: str | None = None
 
@@ -137,6 +147,7 @@ class ProviderResult:
                     "message": {
                         "role": "assistant",
                         "content": self.text,
+                        **({"tool_calls": self.tool_calls} if self.tool_calls else {}),
                     },
                     "finish_reason": self.finish_reason or "stop",
                 }

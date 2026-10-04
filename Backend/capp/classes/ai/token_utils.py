@@ -26,7 +26,13 @@ class TokenUtils:
     def count_message_tokens(
         cls, messages: List[Dict[str, str]], model: Optional[str] = None, tools: Optional[List[Dict]] = None
     ) -> int:
-        """Count tokens for a list of chat messages."""
+        """Count tokens for a list of chat messages.
+
+        Multimodal content (a list of text/image parts) is counted by its
+        text parts plus a fixed per-image estimate: serialising the base64
+        data URLs would count megabytes of characters the model never stores
+        as such, and evict the entire history from the budget.
+        """
         if not messages and not tools:
             return 0
         tokenizer = get_tokenizer_for_model(model)
@@ -37,10 +43,45 @@ class TokenUtils:
         for msg in messages:
             total += 8
             for value in msg.values():
-                text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
-                total += len(tokenizer.encode(text))
+                if isinstance(value, str):
+                    total += len(tokenizer.encode(value))
+                elif isinstance(value, list):
+                    total += cls._count_content_parts(value, model)
+                else:
+                    text = json.dumps(value, ensure_ascii=False)
+                    total += len(tokenizer.encode(text))
         if tools:
             total += 8 + len(tokenizer.encode(json.dumps(tools, ensure_ascii=False, sort_keys=True)))
+        return total
+
+    #: Fixed per-image budget cost (see settings PHOTO_IMAGE_TOKEN_ESTIMATE).
+    _IMAGE_TOKEN_ESTIMATE = 512
+
+    @classmethod
+    def _count_content_parts(cls, parts: List, model: Optional[str] = None) -> int:
+        """Token estimate for OpenAI-style content parts (text + image_url).
+
+        Tool-call objects can also arrive as a list (the ``tool_calls`` key
+        of an assistant message); those are serialised whole, exactly as the
+        provider would receive them.
+        """
+        from django.conf import settings
+
+        image_cost = max(0, int(getattr(settings, "PHOTO_IMAGE_TOKEN_ESTIMATE", 512)))
+        tokenizer = get_tokenizer_for_model(model)
+        total = 0
+        for part in parts:
+            if not isinstance(part, dict):
+                text = json.dumps(part, ensure_ascii=False, default=str)
+                total += len(tokenizer.encode(text))
+                continue
+            if part.get("type") == "image_url":
+                total += image_cost
+            elif "text" in part:
+                total += len(tokenizer.encode(str(part.get("text") or "")))
+            else:
+                # Tool-call dicts and any other structured part.
+                total += len(tokenizer.encode(json.dumps(part, ensure_ascii=False, default=str)))
         return total
 
     @classmethod

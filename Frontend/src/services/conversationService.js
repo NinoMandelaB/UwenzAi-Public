@@ -1,7 +1,11 @@
 // src/services/conversationService.js
 
 import { API } from "../config/constants";
-import { validUserMessage } from "../utils/textLimits";
+import {
+  characterCount,
+  USER_MESSAGE_LIMIT,
+  validUserMessage,
+} from "../utils/textLimits";
 import { apiFetch, getAccessToken } from "./apiClient";
 import { refreshAccessToken } from "./authService";
 import { idempotencyHeaders } from "../utils/idempotency";
@@ -93,8 +97,16 @@ export async function startConversation(payload) {
 // src/utils/idempotency.js.
 
 export async function sendMessage(conversationId, payload, operationId) {
-  // payload: { content }
-  if (!validUserMessage(payload?.content)) {
+  // payload: { content, image? } — with an image the request goes out as
+  // multipart FormData (apiClient detects FormData and skips JSON encoding).
+  // A photo send may carry an empty caption; the file itself is the message.
+  const hasImage = payload?.image instanceof File;
+  // With a photo the caption may be empty, but never over-length: the photo
+  // relaxes the "must be non-empty" rule, not the 800-character limit.
+  const captionOk = hasImage
+    ? characterCount(payload?.content) <= USER_MESSAGE_LIMIT
+    : validUserMessage(payload?.content);
+  if (!captionOk) {
     throw createApiError({
       message: "invalid_user_message",
       code: "invalid_user_message",
@@ -103,11 +115,19 @@ export async function sendMessage(conversationId, payload, operationId) {
   }
   await ensureAuth();
 
+  let body = payload;
+  if (hasImage) {
+    const form = new FormData();
+    form.append("content", payload.content || "");
+    form.append("image", payload.image);
+    body = form;
+  }
+
   let response;
   try {
     response = await apiFetch(API.CONVERSATIONS.SEND_MESSAGE(conversationId), {
       method: "POST",
-      body: payload,
+      body,
       headers: idempotencyHeaders(operationId),
     });
   } catch {

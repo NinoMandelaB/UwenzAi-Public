@@ -26,8 +26,8 @@ export const subprocessorsSw = {
           rows: [
             [
               "Railway",
-              "Uwekaji wa programu mtandaoni, hifadhidata ya PostgreSQL, akiba ya Redis na safu za kazi za nyuma, na ndoo inayooana na S3 inayohifadhi picha zilizopakiwa na zilizozalishwa.",
-              "Data yote ya akaunti na ya Huduma, ikijumuisha maudhui yako. Data iliyohifadhiwa imesimbwa kwa njia fiche ilipohifadhiwa kwenye tabaka la hifadhi; vitu vya picha ni vya faragha na vinafikiwa tu kupitia viungo vilivyotiwa sahihi vya muda mfupi.",
+              "Uwekaji wa programu mtandaoni, hifadhidata ya PostgreSQL, akiba ya Redis na safu za kazi za nyuma, na ndoo inayooana na S3 inayohifadhi picha zilizopakiwa na zilizozalishwa na picha unazotuma kwenye mazungumzo.",
+              "Data yote ya akaunti na ya Huduma, ikijumuisha maudhui yako. Data iliyohifadhiwa imesimbwa kwa njia fiche ilipohifadhiwa kwenye tabaka la hifadhi; vitu vya picha ni vya faragha na vinafikiwa tu kupitia viungo vilivyotiwa sahihi vya muda mfupi. Faili za picha unazotuma kwenye mazungumzo zinaongezewa usimbaji fiche wa vitufe vyetu mwenyewe kabla ya kufikia ndoo, kwa hivyo mtoa huduma wa hifadhi anazishikilia kama maandishi yaliyosimbwa.",
             ],
           ],
         },
@@ -35,7 +35,7 @@ export const subprocessorsSw = {
     },
     {
       id: "2",
-      heading: "2. Uzalishaji wa maandishi kwa AI na uwakilishi wa kihesabu",
+      heading: "2. Majibu ya mazungumzo kwa AI na uwakilishi wa kihesabu",
       blocks: [
         {
           type: "table",
@@ -43,18 +43,18 @@ export const subprocessorsSw = {
           rows: [
             [
               "Cortecs",
-              "Mtoa huduma mkuu kwa aina zote mbili za uchakataji wa maandishi tunaofanya: kuzalisha majibu ya mazungumzo, na kuunda uwakilishi wa kihesabu (embeddings) unaowezesha kumbukumbu ya mhusika.",
-              "Kwa majibu, muktadha wa mazungumzo: ujumbe wako, maelezo ya mhusika, na muhtasari na kumbukumbu zinazohusika. Kwa uwakilishi wa kihesabu, maandishi ya kumbukumbu inayohifadhiwa au maandishi yanayolinganishwa nayo. Hakuna data ya malipo.",
+              "Mtoa huduma mkuu kwa aina zote mbili za uchakataji wa maandishi tunaofanya: kuzalisha majibu ya mazungumzo, na kuunda uwakilishi wa kihesabu (embeddings) unaowezesha kumbukumbu ya mhusika. Ujumbe wa mazungumzo ukiwa na picha na modeli inayotumika inaweza kuona picha, picha hutumwa kwa Cortecs kama sehemu ya ombi la jibu.",
+              "Kwa majibu, muktadha wa mazungumzo: ujumbe wako, picha unazotuma modeli inayotumika inapoweza kuiona, maelezo ya mhusika, na muhtasari na kumbukumbu zinazohusika. Kwa uwakilishi wa kihesabu, maandishi ya kumbukumbu inayohifadhiwa au maandishi yanayolinganishwa nayo. Hakuna data ya malipo.",
             ],
             [
               "Mistral AI",
-              "Mtoa huduma wa akiba kwa majibu ya mazungumzo na kwa uwakilishi wa kihesabu, hutumika Cortecs inaposhindwa au haijasanidiwa. Pia huitwa moja kwa moja kwa kazi za maandishi zinazoendeshwa nyuma: kuchambua kumbukumbu, kuandika muhtasari wa mazungumzo, kutunga maelezo ya tabia ya mhusika, na kupima hisia za mazungumzo.",
-              "Muktadha huo huo wa mazungumzo na maandishi ya kumbukumbu kama yaliyotajwa hapo juu, kutegemea kazi inayoendeshwa.",
+              "Mtoa huduma wa akiba kwa majibu ya mazungumzo na kwa uwakilishi wa kihesabu, hutumika Cortecs inaposhindwa au haijasanidiwa. Pia huitwa moja kwa moja kwa kazi za maandishi zinazoendeshwa nyuma: kuchambua kumbukumbu, kuandika muhtasari wa mazungumzo, kutunga maelezo ya tabia ya mhusika, na kupima hisia za mazungumzo. Pia ni mtoa huduma wetu wa sasa wa uchambuzi wa kiotomatiki wa usalama wa watoto kwa picha zinazotumwa kwenye mazungumzo: nakala ya picha yenye ukubwa uliopunguzwa, bila maelezo ya kina, hutumwa kwa uchambuzi kabla ya picha kuhifadhiwa. Kwa uchambuzi huo picha pekee ndiyo inayotumwa — si maandishi ya ujumbe wako.",
+              "Muktadha huo huo wa mazungumzo na maandishi ya kumbukumbu kama yaliyotajwa hapo juu, kutegemea kazi inayoendeshwa, na — kwa uchambuzi wa picha — nakala ya picha iliopunguzwa ukubwa iliyoelezwa hapa.",
             ],
             [
               "Mtoa huduma wako mwenyewe wa AI (Leta Kitufe Chako Mwenyewe)",
-              "Hutumika kwa majibu ya mazungumzo badala ya watoa huduma walio hapo juu tu ikiwa unasanidi mahali pako pa kufikia na kitufe chako cha API. Uwakilishi wa kihesabu na kazi zinazoendeshwa nyuma huendelea kutumia watoa huduma walio hapo juu.",
-              "Muktadha wa mazungumzo yako hutumwa mahali ulipochagua. Masharti ya mtoa huduma huyo yanatumika na hatuna udhibiti wowote juu ya muda wanaobakiza data.",
+              "Hutumika kwa majibu ya mazungumzo badala ya watoa huduma walio hapo juu tu ikiwa unasanidi mahali pako pa kufikia na kitufe chako cha API. Modeli uliyosanidi inapoweza kuona picha, picha unazotuma zinajumuishwa kwa maombi yanayoelekezwa mahali pako pa kufikia. Uwakilishi wa kihesabu na kazi zinazoendeshwa nyuma huendelea kutumia watoa huduma walio hapo juu, na picha unazotuma bado huchambuliwa na sisi kabla ya kuhifadhiwa (ona safu ya Mistral AI).",
+              "Muktadha wa mazungumzo yako — pamoja na picha unazotuma, modeli yako inapoweza kuiona — hutumwa mahali ulipochagua. Masharti ya mtoa huduma huyo yanatumika na hatuna udhibiti wowote juu ya muda wanaobakiza data.",
             ],
           ],
         },
@@ -170,7 +170,7 @@ export const subprocessorsSw = {
         },
         {
           type: "p",
-          text: "Watoa huduma wa awali wa lango ni Cortecs, Mistral AI, Fikra, Inceptron, AKI.IO na OVHcloud. Mtoa huduma hupatikana tu ikiwa amesanidiwa na amewekwa kwenye orodha ya lango. Kutegemea modeli na mtoa huduma uliowachagua, mtoa huduma anayechakata ombi lako hupokea ujumbe uliotuma, historia yoyote iliyojumuishwa katika ombi, na mipangilio inayohitajika kuzalisha jibu. Kutajwa kwa mtoa huduma hapa hakumaanishi kwamba kila ombi hutumwa kwake.",
+          text: "Watoa huduma wa awali wa lango ni Cortecs, Mistral AI, Fikra, Inceptron, AKI.IO, OVHcloud na TensorX. Mtoa huduma hupatikana tu ikiwa amesanidiwa na amewekwa kwenye orodha ya lango. Kutegemea modeli na mtoa huduma uliowachagua, mtoa huduma anayechakata ombi lako hupokea ujumbe uliotuma, historia yoyote iliyojumuishwa katika ombi, na mipangilio inayohitajika kuzalisha jibu. Kutajwa kwa mtoa huduma hapa hakumaanishi kwamba kila ombi hutumwa kwake.",
         },
         {
           type: "p",
@@ -193,6 +193,20 @@ export const subprocessorsSw = {
         {
           type: "p",
           text: "Maswali kuhusu mtoa huduma yeyote kwenye orodha hii: [info@uwenzai.com](mailto:info@uwenzai.com).",
+        },
+      ],
+    },
+    {
+      id: "10",
+      heading: "10. Upeo wa orodha hii",
+      blocks: [
+        {
+          type: "p",
+          text: "Vifungu cha 1 hadi 7 vinaelezea watoa huduma wanaoendesha Huduma kwa ujumla, ikijumuisha programu ya AI washirika na vipengele vya akaunti, utafutaji na malipo vilivyo kuzunguka. Kifungu cha 8 kinaelezea watoa huduma walio nyuma ya huduma tofauti ya wasanidi ya UwenzAi-Dev. Kuongeza mtoa huduma kwenye lango la UwenzAi-Dev hakumaanishi kwamba hutumiwa kwenye programu ya AI washirika.",
+        },
+        {
+          type: "p",
+          text: "Kwa programu ya AI washirika, watoa huduma wa AI wanaopokea maudhui ya mazungumzo — ujumbe wako, maelezo ya wahusika, kumbukumbu na uwakilishi wa kihesabu unaowezesha kumbukumbu ya mhusika — wako katika Umoja wa Ulaya: Cortecs nchini Austria na Mistral AI nchini Ufaransa. Kwa hiyo maudhui ya mazungumzo tunayotuma kwa niaba yako huchakatwa na watoa huduma wa AI walioko Ulaya pekee; ubaguzi pekee ni mahali pa kufikia ulipochagua wewe mwenyewe kwa Bring Your Own Key. Watoa huduma wenye makao makuu nje ya Ulaya hawapokei kamwe maudhui ya mazungumzo ya AI washirika: mtoa huduma wa AI asiye wa Ulaya, Fikra (Kenya), hutumiwa kwa lango la wasanidi la UwenzAi-Dev pekee, kama ilivyoelezwa katika kifungu cha 8, na watoa huduma wasioko Ulaya wanaounga mkono vipengele vingine (kwa mfano uzalishaji wa picha, malipo, kuingia au kutuma barua pepe) hufanya kazi chini ya dhamana za uhamishaji zilizoelezwa katika kifungu cha 11 cha [Sera ya Faragha](/privacy).",
         },
       ],
     },

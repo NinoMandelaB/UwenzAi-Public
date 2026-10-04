@@ -6,7 +6,7 @@ import uuid
 from django.db import transaction
 from django.utils import timezone
 
-from capp.authentication import account_can_authenticate
+from capp.authentication import account_can_generate
 from capp.classes.ai.token_utils import TokenUtils
 from capp.models import AgentModelPrice, AgentPlaygroundHistory, CustomUser
 from capp.utils.encryption import EncryptionService
@@ -83,7 +83,7 @@ def begin_history(user, model, provider):
     EncryptionService.encrypt_value("[]")  # Fail before billing if encryption is not configured.
     with transaction.atomic():
         owner = CustomUser.objects.select_for_update().get(pk=user.pk)
-        if not account_can_authenticate(owner):
+        if not account_can_generate(owner):
             raise ValueError("Account is unavailable. Sign in with an active account")
         history = AgentPlaygroundHistory.objects.filter(user=user, model=model, provider=provider).first()
         if history:

@@ -8,13 +8,17 @@ from redis import Redis
 from redis.exceptions import RedisError
 from rest_framework.exceptions import APIException
 from rest_framework.permissions import IsAuthenticated
-from capp.authentication import account_can_authenticate
+from capp.authentication import account_can_generate
 
 from capp.models import ComplianceConfirmationLog
 
 # Version of the developer notice actually displayed before explicit acceptance.
 # Keep historical logs as recorded; never backfill acceptance of a newer notice.
-AGENT_GATEWAY_CONSENT_VERSION = "2026-09-14"
+# This MUST equal LEGAL_POLICY_VERSION in Frontend/src/i18n/legal/index.js: the
+# developer workspace POSTs that constant as the consent version, and any
+# divergence is rejected with 409 consent_version_mismatch, locking keys and
+# the playground for every user. A regression test pins the two together.
+AGENT_GATEWAY_CONSENT_VERSION = "2026-10-07"
 
 
 class GatewayUnavailable(APIException):
@@ -49,7 +53,10 @@ def gateway_lock(identity):
         raise GatewayUnavailable()
     client = Redis.from_url(url, socket_connect_timeout=2, socket_timeout=2)
     try:
-        lock = client.lock(f"agent-gateway:{identity}", timeout=180, blocking_timeout=0)
+        # 300s matches the upstream read timeout (large agent generations can
+        # run minutes); durable DB claims fence duplicates even after lease
+        # expiry, the lock just restores the no-duplicate-starts window.
+        lock = client.lock(f"agent-gateway:{identity}", timeout=300, blocking_timeout=0)
         acquired = lock.acquire(blocking=False)
     except RedisError as exc:
         client.close()
@@ -81,4 +88,4 @@ class GatewayAccountPermission(IsAuthenticated):
     message = "Account is unavailable. Sign in with an active account."
 
     def has_permission(self, request, view):
-        return super().has_permission(request, view) and account_can_authenticate(request.user)
+        return super().has_permission(request, view) and account_can_generate(request.user)

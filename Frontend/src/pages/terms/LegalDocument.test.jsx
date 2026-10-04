@@ -258,10 +258,28 @@ function sectionText(doc, id) {
   return [section.heading, ...section.blocks.map((b) => b.text)].join("\n");
 }
 
-describe("2026-09-14 developer legal publication", () => {
+describe("legal publication versions", () => {
   it("versions registration and the displayed policy set together", () => {
-    expect(LEGAL_POLICY_VERSION).toBe("2026-09-14");
-    expect(LEGAL_LAST_UPDATED).toBe("14-SEP-2026");
+    // 2026-09-14: UwenzAi-Dev developer publication (initial consent version).
+    // 2026-09-20: subprocessor disclosure updated (AWS Bedrock removed from
+    // the UwenzAi-Dev gateway; section 10 uses Fikra as the non-EU example).
+    // 2026-09-23: TensorX (Ireland, EU) added to the gateway provider set.
+    // 2026-10-05: photo-message disclosures — Terms 7.3-7.6 (upload rules and
+    // screening), Privacy sections 1/6/8/9/17 (photo screening before storage,
+    // application-level encryption of chat photos, photos to the active chat
+    // provider), subprocessor purposes updated. New processing purposes are
+    // disclosed, so the consent version moves to 2026-10-05; existing
+    // acceptance records keep the version they have.
+    // 2026-10-06: cross-session safety ledger — Terms 6.7 and 14.4 (automated
+    // safety screening, warnings, account safety lock and admin review),
+    // Privacy 4/10/14/15 (safety records with category/severity metadata
+    // only, never message text; summary-only admin visibility; retention
+    // and the child-safety retention basis). A new category of record is
+    // disclosed, so the consent version moves again.
+    // 2026-10-07: advisory model-refusal records (Privacy §4) — counted,
+    // never punitive, admin-resettable, deleted with the account.
+    expect(LEGAL_POLICY_VERSION).toBe("2026-10-07");
+    expect(LEGAL_LAST_UPDATED).toBe("07-OCT-2026");
   });
 
   for (const language of ["en", "sw"]) {
@@ -444,7 +462,7 @@ describe("2026-09-14 developer legal publication", () => {
           : /haijumuishi siri za API.*alama za hashi.*watoa huduma.*funguo za usimbaji fiche za seva/,
       );
     });
-    it(`${language} lists all six configurable gateway providers without a metadata-only storage promise`, () => {
+    it(`${language} lists all seven configurable gateway providers without a metadata-only storage promise`, () => {
       const gateway = sectionText(providers, "8");
       for (const name of [
         "Cortecs",
@@ -453,6 +471,7 @@ describe("2026-09-14 developer legal publication", () => {
         "Inceptron",
         "AKI.IO",
         "OVHcloud",
+        "TensorX",
       ])
         expect(gateway).toContain(name);
       expect(gateway).toMatch(
@@ -538,7 +557,7 @@ describe("section numbering and cross-references", () => {
   }
 
   // Only the Terms cite their own sections. The provider disclosure's "section 10"
-  // and "section 19" point into the Terms, not at its own nine sections.
+  // and "section 19" point into the Terms, not at its own ten sections.
   for (const language of ["en", "sw"]) {
     const citation =
       language === "en" ? /section (\d+)/gi : /kifungu cha (\d+)/gi;
@@ -553,6 +572,42 @@ describe("section numbering and cross-references", () => {
       }
     });
   }
+
+  // 2026-09-20: AWS Bedrock was removed from the gateway entirely; the
+  // disclosure must not mention it anywhere, and non-EU AI providers stay
+  // scoped to the developer gateway only.
+  it("removes AWS Bedrock from the disclosure and keeps non-EU AI out of the companion app", () => {
+    for (const language of ["en", "sw"]) {
+      // AWS/Amazon/Bedrock are gone from every document...
+      for (const doc of ["privacy", "terms", "subprocessors"]) {
+        const whole = legalDocuments[doc][language].sections
+          .map((s) =>
+            [s.heading, ...(s.blocks || []).map((b) => b.text)].join("\n"),
+          )
+          .join("\n");
+        expect(whole).not.toMatch(/\bAWS\b|Amazon|Bedrock/i);
+      }
+      const scope = sectionText(legalDocuments.subprocessors[language], "10");
+      // ...and Fikra (Kenya) is the non-EU example used only by the gateway.
+      expect(scope).toMatch(
+        language === "en"
+          ? /Fikra \(Kenya\) is used exclusively for the UwenzAi-Dev developer gateway/
+          : /Fikra \(Kenya\), hutumiwa kwa lango la wasanidi la UwenzAi-Dev pekee/,
+      );
+      // EU processing of companion AI content stays stated, with the BYOK
+      // exception kept so the claim never overreaches the implementation.
+      expect(scope).toMatch(
+        language === "en"
+          ? /Cortecs in Austria and Mistral AI in France/
+          : /Cortecs nchini Austria na Mistral AI nchini Ufaransa/,
+      );
+      expect(scope).toMatch(
+        language === "en"
+          ? /processed only by EU-based AI providers/
+          : /walioko Ulaya pekee/,
+      );
+    }
+  });
 
   it("keeps the disclosure's cross-document citations pointing at the right Terms sections", () => {
     expect(sectionText(legalDocuments.terms.en, "10")).toMatch(/BYOK/);
@@ -835,4 +890,126 @@ describe("privacy policy renders unconditionally", () => {
       "subprocessors",
     ]);
   });
+});
+
+describe("photo message disclosures (2026-10-05)", () => {
+  it.each(["en", "sw"])(
+    "privacy.%s discloses chat-photo screening before storage",
+    (language) => {
+      const s8 = sectionText(legalDocuments.privacy[language], "8");
+      if (language === "en") {
+        expect(s8).toMatch(/child-safety screening/i);
+        expect(s8).toMatch(/never your message text or caption/i);
+        expect(s8).toMatch(/refused and never stored/i);
+      } else {
+        expect(s8).toMatch(/usalama wa watoto/i);
+        expect(s8).toMatch(/si maandishi ya ujumbe wako/i);
+        expect(s8).toMatch(/hazihifadhiwi kabisa/i);
+      }
+    },
+  );
+
+  it.each(["en", "sw"])(
+    "privacy.%s states chat photos get application-level encryption while generated images do not",
+    (language) => {
+      const doc = flatten(legalDocuments.privacy[language]);
+      if (language === "en") {
+        expect(doc).toMatch(/chat photos are individually encrypted by us/i);
+        expect(doc).toMatch(/rely on the storage provider's encryption only/i);
+      } else {
+        expect(doc).toMatch(
+          /picha za mazungumzo zinasimbwa mmoja mmoja na sisi/i,
+        );
+        expect(doc).toMatch(
+          /hutegemea usimbaji fiche wa mtoa huduma wa hifadhi pekee/i,
+        );
+      }
+    },
+  );
+
+  it.each(["en", "sw"])(
+    "privacy.%s discloses that the active chat provider receives the photo",
+    (language) => {
+      const s6 = sectionText(legalDocuments.privacy[language], "6");
+      if (language === "en") {
+        expect(s6).toMatch(
+          /the photo is sent to that provider as part of the same request/i,
+        );
+      } else {
+        expect(s6).toMatch(
+          /picha hutumwa kwa mtoa huduma huyo kama sehemu ya ombi/i,
+        );
+      }
+    },
+  );
+
+  it.each(["en", "sw"])(
+    "subprocessors.%s discloses the Mistral photo safety screening",
+    (language) => {
+      const doc = flatten(legalDocuments.subprocessors[language]);
+      if (language === "en") {
+        expect(doc).toMatch(/child-safety screening of photos sent in chat/i);
+        expect(doc).toMatch(/never your message text/i);
+      } else {
+        expect(doc).toMatch(
+          /usalama wa watoto kwa picha zinazotumwa kwenye mazungumzo/i,
+        );
+        expect(doc).toMatch(/si maandishi ya ujumbe wako/i);
+      }
+    },
+  );
+
+  it.each(["en", "sw"])(
+    "subprocessors.%s discloses photos can reach Cortecs and BYOK endpoints",
+    (language) => {
+      const doc = flatten(legalDocuments.subprocessors[language]);
+      if (language === "en") {
+        expect(doc).toMatch(
+          /the photo is sent to Cortecs as part of the reply request/i,
+        );
+        expect(doc).toMatch(
+          /photos you send are included in the requests to your endpoint/i,
+        );
+        expect(doc).toMatch(
+          /photos you send are still screened by us before storage/i,
+        );
+      } else {
+        expect(doc).toMatch(
+          /picha hutumwa kwa Cortecs kama sehemu ya ombi la jibu/i,
+        );
+        expect(doc).toMatch(/picha unazotuma zinajumuishwa kwa maombi/i);
+        expect(doc).toMatch(/bado huchambuliwa na sisi kabla ya kuhifadhiwa/i);
+      }
+    },
+  );
+
+  it.each(["en", "sw"])(
+    "terms.%s keeps uploaded-photo prohibitions separate from generation prohibitions",
+    (language) => {
+      const s7 = sectionText(legalDocuments.terms[language], "7");
+      if (language === "en") {
+        expect(s7).toMatch(
+          /The prohibitions in section 7\.2 govern what you may ask us to generate/i,
+        );
+        expect(s7).toMatch(
+          /A separate rule governs photos you upload and send/i,
+        );
+        // Ordinary clothed photos of children must stay allowed (only child
+        // nudity / sexual content blocks, unlike the generation rule).
+        expect(s7).toMatch(
+          /fully-clothed photos of children[^]*are not prohibited by this rule/i,
+        );
+        expect(s7).toMatch(/no sparks are charged for them/i);
+      } else {
+        expect(s7).toMatch(
+          /Marufuku ya kifungu cha 7\.2 zinasimamia unachoruhusiwa kuomba tuzalishe/i,
+        );
+        expect(s7).toMatch(
+          /Kanuni tofauti inasimamia picha unazopakia na kutuma/i,
+        );
+        expect(s7).toMatch(/hazipigwa marufuku na kanuni hii/i);
+        expect(s7).toMatch(/hakuna cheche zinazotozwa kwa zile/i);
+      }
+    },
+  );
 });

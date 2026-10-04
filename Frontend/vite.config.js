@@ -19,12 +19,14 @@ export default defineConfig(({ mode }) => ({
           /^\/llms\.txt$/,
           /^\/ai\.txt$/,
           /^\/manifest\.webmanifest$/,
+          // Static API docs served from public/uwenzai-dev/docs — never route into the SPA.
+          /^\/uwenzai-dev\/docs(\/.*)?$/,
         ],
         cleanupOutdatedCaches: true,
         importScripts: ["push-sw.js"],
       },
       manifest: {
-        name: "UwenzAi — AI Companions Built for East Africa",
+        name: "UwenzAi — AI Companions & AI Gateway for East Africa",
         short_name: "UwenzAi",
         description:
           "Intelligent, multilingual (English & Kiswahili) AI companions with memory, relationships, and culturally aware conversations.",

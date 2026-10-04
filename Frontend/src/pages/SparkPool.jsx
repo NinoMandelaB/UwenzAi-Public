@@ -494,14 +494,24 @@ export default function SparkPool() {
               {t("spark_pool.confirmPurchase")}
             </h3>
             {confirmDialog.type === "spark" ? (
-              <p className="mt-2 text-sm theme-text-muted">
-                {t("spark_pool.purchaseSparkConfirmation")
-                  .replace("{sparks}", confirmDialog.base_spark_amount)
-                  .replace(
-                    "{price}",
-                    `KES ${Number(confirmDialog.final_price_kes).toFixed(2)}`,
-                  )}
-              </p>
+              <>
+                <p className="mt-2 text-sm theme-text-muted">
+                  {t("spark_pool.purchaseSparkConfirmation")
+                    .replace("{sparks}", confirmDialog.base_spark_amount)
+                    .replace(
+                      "{price}",
+                      `KES ${Number(confirmDialog.final_price_kes).toFixed(2)}`,
+                    )}
+                </p>
+                {Number(confirmDialog.vat_percent) > 0 && (
+                  <p className="mt-1 text-xs theme-text-muted">
+                    {t("spark_pool.vatIncluded").replace(
+                      "{vat}",
+                      Number(confirmDialog.vat_percent).toFixed(0),
+                    )}
+                  </p>
+                )}
+              </>
             ) : (
               <div className="mt-2 text-sm theme-text-muted space-y-1">
                 {activeSubscription ? (

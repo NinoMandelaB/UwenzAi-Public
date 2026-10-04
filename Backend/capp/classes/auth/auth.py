@@ -30,6 +30,9 @@ from capp.models import (
     SparkTransaction,
 )
 
+# Photo feature flags/limits for the client config (auth/me payload).
+from capp.classes.chat.attachment_service import photo_upload_limits, photo_uploads_enabled  # noqa: E402
+
 from capp.classes.auth.email_verification_service import EmailVerificationService
 from capp.classes.auth.codes import code_matches
 from capp.authentication import account_can_authenticate
@@ -1685,6 +1688,9 @@ class Auth:
 
     @classmethod
     def _serialize_user(cls, user: CustomUser) -> Dict[str, Any]:
+        # Cheap settings reads; photo_uploads_enabled also resolves the
+        # screening provider (a settings lookup, no network call).
+        photo_limits = photo_upload_limits()
         return {
             "user_id": str(user.user_id),
             "username": user.username,
@@ -1705,6 +1711,13 @@ class Auth:
             "total_tokens_used": user.total_tokens_used,
             "timezone": user.timezone,
             "feature_preferences": FeaturePreferences.get(user),
+            # Photo sends: the effective server-side availability (env opt-in
+            # AND a screening provider) plus the upload limits, so the client
+            # can hide the camera button when photos are off and warn with
+            # the exact maximum before uploading (audit F6).
+            "photo_uploads_enabled": photo_uploads_enabled(),
+            "photo_max_bytes": photo_limits["max_bytes"],
+            "photo_max_megapixels": photo_limits["max_megapixels"],
         }
 
     @classmethod

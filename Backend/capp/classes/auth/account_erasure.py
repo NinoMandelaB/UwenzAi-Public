@@ -6,6 +6,7 @@ import uuid
 from django.db.models import Q
 from django.utils import timezone
 
+from capp.classes.moderation.model_refusal import CATEGORY_MODEL_REFUSAL
 from capp.models import (
     AgentPlaygroundHistory,
     AgentAPIKey,
@@ -21,6 +22,7 @@ from capp.models import (
     MessageFlag,
     ModerationFlag,
     PaymentTransaction,
+    SafetyEvent,
     SparkTransaction,
     UsageCharge,
     delete_file_after_commit,
@@ -39,6 +41,20 @@ def erase_private_content(user):
     scrub_audit_snapshots(user)
     AgentPlaygroundHistory.objects.filter(user=user).delete()
     AgentAPIKey.objects.filter(user=user).update(is_active=False)
+    # Safety-ledger hygiene: support (care) events and shadow-mode telemetry
+    # exist for the user's benefit and to measure the classifier — neither
+    # purpose outlives the account, so they are deleted on erasure. Advisory
+    # model-refusal flags are deleted with them: they are advisory-only
+    # (never scored, never blocking, metadata-only) and once the account row
+    # is gone they are orphans no admin surface can show or reset. Recorded
+    # VIOLATIONS are what the child-safety reporting / repeat-abuse
+    # prevention basis covers, and those stay (Privacy Policy safety-records
+    # paragraph). The "only an administrator can change or reset refusal
+    # flags" rule applies to the account's lifetime — clearing memory or
+    # deleting messages never touches them — and ends with the account.
+    SafetyEvent.objects.filter(user_id=user.pk).filter(
+        Q(is_care=True) | Q(action=SafetyEvent.Action.SHADOWED) | Q(category=CATEGORY_MODEL_REFUSAL)
+    ).delete()
     for character in Character.objects.select_for_update().filter(created_by=user):
         if character.is_public:
             # Shared fictional content is functionally needed, creator-only

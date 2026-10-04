@@ -13,6 +13,7 @@ from capp.classes.agent_gateway.providers.fikra import FikraAgentProvider
 from capp.classes.agent_gateway.providers.inceptron import InceptronAgentProvider
 from capp.classes.agent_gateway.providers.aki import AkiAgentProvider
 from capp.classes.agent_gateway.providers.ovh import OvhAgentProvider
+from capp.classes.agent_gateway.providers.tensorx import TensorXAgentProvider
 
 # Provider registry: maps provider names to provider classes
 PROVIDERS: Dict[str, Type[AgentProvider]] = {
@@ -22,6 +23,7 @@ PROVIDERS: Dict[str, Type[AgentProvider]] = {
     "inceptron": InceptronAgentProvider,
     "aki": AkiAgentProvider,
     "ovh": OvhAgentProvider,
+    "tensorx": TensorXAgentProvider,
 }
 
 # Provider instances cache

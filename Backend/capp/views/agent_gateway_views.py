@@ -13,9 +13,11 @@ Endpoints:
 - GET /api/v1/agent/usage - Get usage summary (session auth)
 """
 
+import json
 import logging
 from datetime import datetime
 
+from django.http import StreamingHttpResponse
 from django.utils import timezone
 from django.utils.decorators import method_decorator
 from django.views.decorators.cache import never_cache
@@ -333,7 +335,7 @@ def agent_gateway_consent(request: Request) -> Response:
                     "version": AGENT_GATEWAY_CONSENT_VERSION,
                     "spark_value_kes": SPARK_BASE_VALUE_KES,
                     "fx_eur_kes": fx_eur_kes,
-                    "markup_percent": getattr(settings, "AGENT_MARKUP_PERCENT", 12.5),
+                    "markup_percent": getattr(settings, "AGENT_MARKUP_PERCENT", 0),
                 },
             }
         )
@@ -437,7 +439,7 @@ def agent_gateway_pricing(request: Request) -> Response:
                 "providers": PROVIDER_DETAILS,
                 "base_url": settings.AGENT_BASE_URL,
                 "playground_limits": playground_service.PLAYGROUND_LIMITS,
-                "markup_percent": getattr(settings, "AGENT_MARKUP_PERCENT", 12.5),
+                "markup_percent": getattr(settings, "AGENT_MARKUP_PERCENT", 0),
                 "spark_value_kes": SPARK_BASE_VALUE_KES,
             },
         }
@@ -501,7 +503,10 @@ def agent_chat_completions(request: Request) -> Response:
     - max_tokens: Maximum tokens to generate
     - temperature: Temperature (0.0 - 1.0)
     - top_p: Top-p sampling
-    - stream: Boolean (currently disabled for v1)
+    - stream: Boolean — when true the response is an SSE stream (the upstream
+      call itself stays non-streaming; the completed response is emitted as
+      OpenAI-shaped chat.completion.chunk events, so streaming clients work
+      while billing stays exact and idempotent)
     - client_operation_id: Optional idempotency key
 
     Returns OpenAI-compatible response with usage block.
@@ -541,15 +546,23 @@ def agent_chat_completions(request: Request) -> Response:
         "temperature": request.data.get("temperature"),
         "top_p": request.data.get("top_p"),
         "stream": request.data.get("stream", False),
+        "stream_options": request.data.get("stream_options"),
         "stop": request.data.get("stop"),
         "presence_penalty": request.data.get("presence_penalty"),
         "frequency_penalty": request.data.get("frequency_penalty"),
         "user": request.data.get("user"),
+        "tools": request.data.get("tools"),
+        "tool_choice": request.data.get("tool_choice"),
     }
 
     client_operation_id = request.data.get("client_operation_id")
 
     provider_name = request.data.get("provider")
+    # Streaming is emulated end-to-end: the upstream call and settlement run
+    # exactly as in the non-streaming path, then the finished response is
+    # wrapped in OpenAI-shaped SSE chunks (see _sse_frames). Errors stay JSON
+    # with their HTTP status — the standard OpenAI behavior for pre-stream
+    # failures, which every SSE client handles.
 
     try:
         result = AgentProxyService.execute_request(
@@ -581,6 +594,8 @@ def agent_chat_completions(request: Request) -> Response:
 
             return Response(result, status=status_code)
 
+        if request.data.get("stream"):
+            return _sse_stream_response(result)
         return Response(result)
 
     except ValueError as exc:
@@ -611,6 +626,78 @@ def agent_chat_completions(request: Request) -> Response:
             {"error": {"status": "internal_error", "message": "Internal server error"}},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
+
+def _sse_frames(payload: dict) -> str:
+    """OpenAI-shaped SSE stream built from a completed (non-streamed) result.
+
+    The upstream call and settlement happen exactly as in the non-streaming
+    path; the finished response is then emitted as chat.completion.chunk
+    events — a role chunk, one content chunk, a final chunk carrying
+    finish_reason and usage (per OpenAI's stream_options.include_usage
+    shape, harmless for clients that ignore it), then `data: [DONE]`.
+    Streaming-only clients (agent CLIs, SSE parsers) therefore work, while
+    billing stays exact and idempotent. The content is served only after
+    settlement, so a mid-stream disconnect cannot split a charge.
+    """
+    import time
+
+    model = payload.get("model", "")
+    created = payload.get("created") or int(time.time())
+    completion_id = payload.get("id") or f"chatcmpl-uwenzai-{created}"
+    choice = (payload.get("choices") or [{}])[0]
+    message = choice.get("message") or {}
+    content = message.get("content") or ""
+    finish_reason = choice.get("finish_reason") or "stop"
+    usage = payload.get("usage") or {}
+    tool_calls = message.get("tool_calls")
+    if isinstance(tool_calls, list) and tool_calls:
+        # Streamed tool calls use delta.tool_calls with an index per call; the
+        # completed list is emitted as one delta — legal for SSE emulation and
+        # the shape OpenAI clients accumulate over.
+        tool_calls = [{"index": i, **call} for i, call in enumerate(tool_calls) if isinstance(call, dict)] or None
+
+    def chunk(delta, finish=None, with_usage=False):
+        body = {
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": delta,
+                    "finish_reason": finish,
+                }
+            ],
+        }
+        if with_usage and usage:
+            body["usage"] = usage
+        return "data: {}\n\n".format(json.dumps(body, separators=(",", ":")))
+
+    frames = [chunk({"role": "assistant"})]
+    if content:
+        frames.append(chunk({"content": content}))
+    if tool_calls:
+        frames.append(chunk({"tool_calls": tool_calls}))
+    frames.append(chunk({}, finish=finish_reason, with_usage=True))
+    frames.append("data: [DONE]\n\n")
+    return "".join(frames)
+
+
+def _sse_stream_response(payload: dict) -> StreamingHttpResponse:
+    frames = _sse_frames(payload)
+
+    async def frame_iterator():
+        # Async so ASGI serves the stream natively; a sync iterator made uvicorn
+        # log "StreamingHttpResponse must consume synchronous iterators" per
+        # request (harmless, but noisy in production logs).
+        yield frames.encode()
+
+    response = StreamingHttpResponse(frame_iterator(), content_type="text/event-stream")
+    response["Cache-Control"] = "no-cache"
+    response["X-Accel-Buffering"] = "no"
+    return response
 
 
 # Routing: agent_public_urls.py exposes only inference at "api/v1/" on the

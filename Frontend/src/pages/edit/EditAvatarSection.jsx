@@ -144,7 +144,9 @@ export default function EditAvatarSection({
           ) : (
             <Sparkles size={16} />
           )}
-          {t("characters.generate")}
+          {previewUrl || avatarFile
+            ? t("imageSetup.regenerateAvatar")
+            : t("imageSetup.generateAvatar")}
         </button>
 
         {/* Upload button — admins only, mirroring the server-side restriction */}
@@ -200,7 +202,9 @@ export default function EditAvatarSection({
                 {t("common.cancel")}
               </button>
               <PrimaryButton onClick={confirmExtraPrompt}>
-                {t("characters.generate")}
+                {previewUrl || avatarFile
+                  ? t("imageSetup.regenerateAvatar")
+                  : t("imageSetup.generateAvatar")}
               </PrimaryButton>
             </div>
           </div>

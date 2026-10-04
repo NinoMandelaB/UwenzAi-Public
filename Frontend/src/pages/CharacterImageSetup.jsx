@@ -15,6 +15,7 @@ import {
   deleteGalleryImage,
   completeCharacterSetup,
 } from "../services/characterService";
+import { getPricing } from "../services/billingService";
 import { getCharacterMessage } from "../utils/characterMessageMapper";
 import PageCard from "../components/PageCard";
 import PrimaryButton from "../components/PrimaryButton";
@@ -43,6 +44,10 @@ export default function CharacterImageSetup() {
 
   // Avatar state
   const [isGeneratingAvatar, setIsGeneratingAvatar] = useState(false);
+  const [isAutoGenerating, setIsAutoGenerating] = useState(false);
+  // Guards the one automatic first-avatar attempt per mount so React's
+  // double-invoked effects (StrictMode) or re-fetches cannot fire it twice.
+  const autoGenerationAttemptedRef = useRef(false);
 
   // One key per generation attempt, reused if that attempt is retried, so a
   // request the server already charged for is never paid for twice.
@@ -50,6 +55,9 @@ export default function CharacterImageSetup() {
   const galleryOperationRef = useRef(null);
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
   const avatarFileInputRef = useRef(null);
+
+  // Spark cost of a paid (regeneration) avatar, from the pricing endpoint.
+  const [avatarRegenerationCost, setAvatarRegenerationCost] = useState(null);
 
   // Gallery state
   const [isGeneratingGallery, setIsGeneratingGallery] = useState(false);
@@ -73,6 +81,7 @@ export default function CharacterImageSetup() {
 
   // Fetch character and gallery on mount
   useEffect(() => {
+    let cancelled = false;
     async function fetchData() {
       setIsLoading(true);
       setError(null);
@@ -81,16 +90,57 @@ export default function CharacterImageSetup() {
           getCharacterById(characterId),
           listGalleryImages(characterId),
         ]);
-        setCharacter(charRes?.data?.character);
+        if (cancelled) return;
+        const fetched = charRes?.data?.character;
+        setCharacter(fetched);
         setGalleryImages(galleryRes?.data?.images || []);
+
+        // ── Automatic first avatar ──────────────────────────────
+        // The wizard drops the user here with a DRAFT character and no
+        // avatar; without one the character never reaches the gallery.
+        // The first avatar is free server-side (included in the character
+        // creation fee), so kick it off right away. The user can still
+        // regenerate afterwards — those cost sparks, billed by the backend.
+        if (
+          fetched &&
+          !fetched.avatar_url &&
+          // Serialized statuses are the lowercase model values ("draft", …).
+          fetched.review_status === "draft" &&
+          !autoGenerationAttemptedRef.current
+        ) {
+          autoGenerationAttemptedRef.current = true;
+          handleGenerateAvatar("", { isAuto: true });
+        }
       } catch (err) {
-        setError(getCharacterMessage(err, "Failed to load character."));
+        if (!cancelled) {
+          setError(getCharacterMessage(err, "Failed to load character."));
+        }
       } finally {
-        setIsLoading(false);
+        if (!cancelled) setIsLoading(false);
       }
     }
     fetchData();
+    return () => {
+      cancelled = true;
+    };
   }, [characterId]);
+
+  // Fetch the paid-avatar cost once, to show the regeneration hint
+  useEffect(() => {
+    let cancelled = false;
+    getPricing()
+      .then((res) => {
+        if (!cancelled && res?.data?.image_generation_cost != null) {
+          setAvatarRegenerationCost(res.data.image_generation_cost);
+        }
+      })
+      .catch(() => {
+        // Non-critical: the hint is simply omitted when pricing is unavailable.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Refresh character avatar after update
   const refreshCharacter = async () => {
@@ -129,10 +179,12 @@ export default function CharacterImageSetup() {
     }
   };
 
-  // Handle avatar generation (AI) – with optional extra prompt
-  const handleGenerateAvatar = async (extra = "") => {
-    if (isGeneratingAvatar) return;
-    setIsGeneratingAvatar(true);
+  // Handle avatar generation (AI) – with optional extra prompt.
+  // `isAuto` marks the automatic first-avatar attempt triggered on arrival.
+  const handleGenerateAvatar = async (extra = "", { isAuto = false } = {}) => {
+    if (isGeneratingAvatar || isAutoGenerating) return;
+    if (isAuto) setIsAutoGenerating(true);
+    else setIsGeneratingAvatar(true);
     setError(null);
     try {
       const result = await generateAvatar(characterId, {
@@ -144,15 +196,24 @@ export default function CharacterImageSetup() {
       });
       clearOperationId(avatarOperationRef);
       await refreshCharacter();
-      // If the response contains the prompt used, show it
-      if (result?.data?.prompt_used) {
+      // If the response contains the prompt used, show it — but not for the
+      // automatic attempt, where an unprompted modal is just noise.
+      if (!isAuto && result?.data?.prompt_used) {
         setPromptUsed(result.data.prompt_used);
         setShowPromptModal(true);
       }
     } catch (err) {
-      setError(getCharacterMessage(err, "Failed to generate avatar."));
+      setError(
+        getCharacterMessage(
+          err,
+          isAuto
+            ? t("imageSetup.autoGenerateFailed")
+            : t("characters.avatarGenerateFailed"),
+        ),
+      );
     } finally {
-      setIsGeneratingAvatar(false);
+      if (isAuto) setIsAutoGenerating(false);
+      else setIsGeneratingAvatar(false);
     }
   };
 
@@ -195,7 +256,7 @@ export default function CharacterImageSetup() {
         setShowPromptModal(true);
       }
     } catch (err) {
-      setError(getCharacterMessage(err, "Failed to generate gallery image."));
+      setError(getCharacterMessage(err, t("characters.galleryGenerateFailed")));
     } finally {
       setIsGeneratingGallery(false);
     }
@@ -212,7 +273,7 @@ export default function CharacterImageSetup() {
       await uploadGalleryImage(characterId, file);
       await refreshGallery();
     } catch (err) {
-      setError(getCharacterMessage(err, "Failed to upload gallery image."));
+      setError(getCharacterMessage(err, t("characters.galleryUploadFailed")));
     } finally {
       setIsUploadingGallery(false);
       if (galleryFileInputRef.current) {
@@ -230,7 +291,7 @@ export default function CharacterImageSetup() {
       await deleteGalleryImage(imageId);
       await refreshGallery();
     } catch (err) {
-      setError(getCharacterMessage(err, "Failed to delete image."));
+      setError(getCharacterMessage(err, t("characters.galleryDeleteFailed")));
     } finally {
       setDeletingImageId(null);
     }
@@ -239,7 +300,7 @@ export default function CharacterImageSetup() {
   // Complete setup
   const handleCompleteSetup = async () => {
     if (!character?.avatar_url) {
-      setError("Please add an avatar before completing setup.");
+      setError(t("imageSetup.avatarRequiredError"));
       return;
     }
     if (isCompleting) return;
@@ -251,8 +312,8 @@ export default function CharacterImageSetup() {
       });
       setSuccessMessage(
         isAdmin
-          ? "Character is now live and visible!"
-          : "Character submitted for approval!",
+          ? t("imageSetup.adminSuccessMessage")
+          : t("imageSetup.userSuccessMessage"),
       );
       setShowSuccessPopup(true);
       setTimeout(() => {
@@ -276,12 +337,15 @@ export default function CharacterImageSetup() {
   if (!character) {
     return (
       <PageCard className="text-center">
-        <p className="text-sm font-medium theme-text">Character not found.</p>
+        <p className="text-sm font-medium theme-text">
+          {t("imageSetup.characterNotFound")}
+        </p>
       </PageCard>
     );
   }
 
   const hasAvatar = Boolean(character.avatar_url);
+  const avatarBusy = isGeneratingAvatar || isAutoGenerating;
 
   return (
     <div className="space-y-6 max-w-2xl">
@@ -290,7 +354,7 @@ export default function CharacterImageSetup() {
         open={showSuccessPopup}
         message={successMessage}
         type="success"
-        title="Setup Complete"
+        title={t("imageSetup.setupCompleteTitle")}
         onClose={() => setShowSuccessPopup(false)}
       />
 
@@ -298,17 +362,17 @@ export default function CharacterImageSetup() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="w-full max-w-md rounded-2xl p-6 shadow-lg theme-card">
             <h3 className="text-lg font-semibold theme-text mb-2">
-              Add extra details (optional)
+              {t("imageSetup.extraDetailsTitle")}
             </h3>
             <p className="text-sm theme-text-muted mb-4">
-              Describe specific clothing, background, pose, or anything else.
+              {t("imageSetup.extraDetailsHint")}
             </p>
             <textarea
               autoFocus
               rows={3}
               value={extraPromptText}
               onChange={(e) => setExtraPromptText(e.target.value)}
-              placeholder="e.g. wearing a red dress, standing in a sunflower field"
+              placeholder={t("imageSetup.extraDetailsPlaceholder")}
               className="w-full rounded-xl border px-4 py-3 text-sm theme-text theme-input"
             />
             <div className="flex justify-end gap-3 mt-4">
@@ -316,10 +380,10 @@ export default function CharacterImageSetup() {
                 onClick={() => setShowExtraPrompt(false)}
                 className="rounded-xl px-4 py-2 text-sm font-medium theme-text-muted hover:theme-soft"
               >
-                Cancel
+                {t("imageSetup.cancel")}
               </button>
               <PrimaryButton onClick={handleConfirmExtraPrompt}>
-                Generate
+                {t("chat.generate")}
               </PrimaryButton>
             </div>
           </div>
@@ -331,7 +395,7 @@ export default function CharacterImageSetup() {
           <div className="w-full max-w-2xl rounded-2xl p-6 shadow-lg theme-card">
             <div className="flex items-start justify-between mb-4">
               <h3 className="text-lg font-semibold theme-text">
-                Prompt Used for Generation
+                {t("imageSetup.promptUsedTitle")}
               </h3>
               <button
                 onClick={() => setShowPromptModal(false)}
@@ -354,7 +418,7 @@ export default function CharacterImageSetup() {
                 onClick={() => setShowPromptModal(false)}
                 className="rounded-xl px-4 py-2 text-sm font-medium bg-[var(--color-accent)] text-[#082f49]"
               >
-                Close
+                {t("imageSetup.close")}
               </button>
             </div>
           </div>
@@ -364,11 +428,10 @@ export default function CharacterImageSetup() {
       {/* Header */}
       <div>
         <h1 className="text-2xl font-bold theme-text">
-          Set Up Character Images
+          {t("imageSetup.title")}
         </h1>
         <p className="mt-1 text-sm theme-text-muted">
-          Add an avatar and optional gallery images for{" "}
-          <strong>{character.name}</strong>.
+          {t("imageSetup.subtitle", { name: character.name })}
         </p>
       </div>
 
@@ -383,28 +446,32 @@ export default function CharacterImageSetup() {
       <PageCard>
         <div className="flex items-start justify-between">
           <div>
-            <h2 className="text-lg font-semibold theme-text">Avatar</h2>
+            <h2 className="text-lg font-semibold theme-text">
+              {t("imageSetup.avatar")}
+            </h2>
             <p className="text-sm theme-text-muted">
-              Required for your character.
+              {t("imageSetup.avatarRequired")}
             </p>
           </div>
           <div className="flex gap-2">
             <button
               type="button"
               onClick={() => openExtraPrompt("avatar")}
-              disabled={isGeneratingAvatar}
+              disabled={avatarBusy}
               className="flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition hover:opacity-90 disabled:opacity-50"
               style={{
                 backgroundColor: "var(--color-accent-soft)",
                 color: "var(--color-accent)",
               }}
             >
-              {isGeneratingAvatar ? (
+              {avatarBusy ? (
                 <Loader2 className="animate-spin" size={16} />
               ) : (
                 <Sparkles size={16} />
               )}
-              Generate
+              {hasAvatar
+                ? t("imageSetup.regenerateAvatar")
+                : t("imageSetup.generateAvatar")}
             </button>
             {isAdmin && (
               <>
@@ -431,7 +498,7 @@ export default function CharacterImageSetup() {
                   ) : (
                     <Upload size={16} />
                   )}
-                  Upload
+                  {t("imageSetup.upload")}
                 </button>
               </>
             )}
@@ -439,11 +506,18 @@ export default function CharacterImageSetup() {
         </div>
 
         <div className="mt-4">
+          {/* Automatic first-avatar notice */}
+          {isAutoGenerating && (
+            <div className="mb-4 flex items-center justify-center gap-2 rounded-xl border border-cyan-400/30 bg-cyan-400/10 p-3 text-sm text-cyan-300">
+              <Loader2 className="animate-spin" size={16} />
+              {t("imageSetup.autoGenerating")}
+            </div>
+          )}
           {hasAvatar ? (
             <div className="relative mx-auto w-48 h-48 rounded-2xl overflow-hidden border-2 border-cyan-400/30">
               <img
                 src={character.avatar_url}
-                alt="Avatar"
+                alt={t("imageSetup.avatar")}
                 className="h-full w-full object-cover"
               />
             </div>
@@ -454,10 +528,22 @@ export default function CharacterImageSetup() {
             >
               <div className="text-center">
                 <ImageIcon className="mx-auto h-10 w-10 theme-text-muted" />
-                <p className="mt-2 text-sm theme-text-muted">No avatar yet</p>
+                <p className="mt-2 text-sm theme-text-muted">
+                  {t("imageSetup.noAvatarYet")}
+                </p>
               </div>
             </div>
           )}
+          {/* Cost hint: the first avatar is free, regenerating costs sparks */}
+          <p className="mt-3 text-center text-xs theme-text-muted">
+            {hasAvatar && avatarRegenerationCost != null
+              ? t("imageSetup.regenerationCost", {
+                  cost: avatarRegenerationCost,
+                })
+              : !hasAvatar && !avatarBusy
+                ? t("imageSetup.firstAvatarFree")
+                : ""}
+          </p>
         </div>
       </PageCard>
 
@@ -465,9 +551,11 @@ export default function CharacterImageSetup() {
       <PageCard>
         <div className="flex items-start justify-between">
           <div>
-            <h2 className="text-lg font-semibold theme-text">Gallery</h2>
+            <h2 className="text-lg font-semibold theme-text">
+              {t("imageSetup.gallery")}
+            </h2>
             <p className="text-sm theme-text-muted">
-              Optional additional images.
+              {t("imageSetup.galleryOptional")}
             </p>
           </div>
           <div className="flex gap-2">
@@ -486,7 +574,7 @@ export default function CharacterImageSetup() {
               ) : (
                 <Sparkles size={16} />
               )}
-              Generate
+              {t("chat.generate")}
             </button>
             {isAdmin && (
               <>
@@ -513,7 +601,7 @@ export default function CharacterImageSetup() {
                   ) : (
                     <Plus size={16} />
                   )}
-                  Add Image
+                  {t("imageSetup.addImage")}
                 </button>
               </>
             )}
@@ -526,7 +614,9 @@ export default function CharacterImageSetup() {
               className="flex h-32 items-center justify-center rounded-xl border-2 border-dashed"
               style={{ borderColor: "var(--color-border)" }}
             >
-              <p className="text-sm theme-text-muted">No gallery images yet.</p>
+              <p className="text-sm theme-text-muted">
+                {t("imageSetup.noGalleryImages")}
+              </p>
             </div>
           ) : (
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
@@ -569,14 +659,16 @@ export default function CharacterImageSetup() {
           onClick={() => navigate(`/characters/${characterId}`)}
           className="text-sm font-medium theme-text-muted hover:underline"
         >
-          Skip for now
+          {t("imageSetup.skipForNow")}
         </button>
         <PrimaryButton
           onClick={handleCompleteSetup}
-          disabled={!hasAvatar || isCompleting}
+          disabled={!hasAvatar || isCompleting || avatarBusy}
           loading={isCompleting}
         >
-          {isCompleting ? "Completing..." : "Complete Setup"}
+          {isCompleting
+            ? t("imageSetup.completing")
+            : t("imageSetup.completeSetup")}
         </PrimaryButton>
       </div>
     </div>

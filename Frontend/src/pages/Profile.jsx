@@ -113,7 +113,7 @@ export default function Profile() {
         <DetailRow
           icon={Shield}
           label="Account Status"
-          value={user?.account_status || "Active"}
+          value={formatAccountStatus(user?.account_status)}
         />
       </div>
 
@@ -160,6 +160,22 @@ export default function Profile() {
       </div>
     </div>
   );
+}
+
+// Maps raw CustomUser.AccountStatus values to readable labels.
+// Kept in sync with Backend/capp/models.py::CustomUser.AccountStatus.
+const ACCOUNT_STATUS_LABELS = {
+  active: "Active",
+  pending: "Pending",
+  suspended: "Suspended",
+  banned: "Banned",
+  deactivated: "Deactivated",
+  safety_locked: "Locked (safety review)",
+};
+
+function formatAccountStatus(value) {
+  if (!value) return "Active";
+  return ACCOUNT_STATUS_LABELS[value] || value;
 }
 
 function DetailRow({ icon: Icon, label, value }) {

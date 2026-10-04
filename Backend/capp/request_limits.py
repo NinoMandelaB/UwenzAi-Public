@@ -31,9 +31,12 @@ class BoundedJSONParser(JSONParser):
 
 class BoundedHTTPBody:
     """Reject oversize ASGI ingress before Django buffers it in a spool file.
-
-    Non-multipart requests receive the JSON byte budget. Multipart retains the
-    existing upload budget, now enforced as a cap rather than memory threshold.
+    Non-multipart requests receive the JSON byte budget. Multipart keeps the
+    generic upload budget EXCEPT on the chat message send route, which now
+    legitimately accepts one photo per message and gets a photo-scoped budget
+    (MESSAGE_MULTIPART_MAX_BYTES) instead — a media-type spoof on that route
+    still cannot reach the generic 100 MB budget, and the view additionally
+    enforces per-file PHOTO_MAX_BYTES and caption limits.
     An edge must additionally enforce body/time/concurrent-connection limits.
     """
 
@@ -46,17 +49,35 @@ class BoundedHTTPBody:
         headers = dict(scope.get("headers", ()))
         multipart = headers.get(b"content-type", b"").lower().startswith(b"multipart/form-data")
         path = scope.get("path", "")
-        # A media-type spoof must not give the USER-message endpoint the much
-        # larger file-upload budget. Actual file routes keep multipart support.
+        # The chat message send route accepts photo uploads (multipart), but
+        # only within a photo-scoped budget — never the generic upload budget.
         message_route = path.startswith("/api/v1/conversations/") and path.endswith("/messages/")
-        multipart = multipart and not message_route
-        limit = settings.DATA_UPLOAD_MAX_MEMORY_SIZE if multipart else settings.JSON_REQUEST_MAX_BYTES
+        if multipart and message_route:
+            limit = settings.MESSAGE_MULTIPART_MAX_BYTES
+            # Same contract as the view-level photo_too_large refusal: carry
+            # the allowed size so the client can show a precise message.
+            import json as _json
+
+            max_bytes = int(getattr(settings, "PHOTO_MAX_BYTES", 10 * 1024 * 1024))
+            reject_body = _json.dumps(
+                {
+                    "status": "fail",
+                    "data": "photo_too_large",
+                    "details": {"max_bytes": max_bytes, "max_mb": round(max_bytes / (1024 * 1024))},
+                }
+            ).encode("utf-8")
+        elif multipart:
+            limit = settings.DATA_UPLOAD_MAX_MEMORY_SIZE
+            reject_body = b'{"detail":"Request body is too large."}'
+        else:
+            limit = settings.JSON_REQUEST_MAX_BYTES
+            reject_body = b'{"detail":"Request body is too large."}'
 
         async def reject():
             await send(
                 {"type": "http.response.start", "status": 413, "headers": [(b"content-type", b"application/json")]}
             )
-            await send({"type": "http.response.body", "body": b'{"detail":"Request body is too large."}'})
+            await send({"type": "http.response.body", "body": reject_body})
 
         length = headers.get(b"content-length")
         if length and (len(length) > 20 or not length.isdigit() or int(length) > limit):

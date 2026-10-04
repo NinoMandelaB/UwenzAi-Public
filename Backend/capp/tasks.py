@@ -24,6 +24,7 @@ from capp.models import (
     CustomUser,
     GuestIdentity,
     Message,
+    MessageAttachment,
     TokenUsageLog,
     GuestTokenQuota,
     UserSubscription,
@@ -33,6 +34,7 @@ from capp.models import (
     CharacterGalleryImage,
 )
 from capp.classes.ai.cortecs_client import CortecsClient
+from capp.classes.ai.model_vision import supports_vision
 from capp.classes.ai.prompt_builder import PromptBuilder
 from capp.classes.ai.token_utils import PromptBudgetExceeded
 from capp.classes.byok.byok_service import BYOKService
@@ -73,6 +75,8 @@ from capp.classes.billing.charge_service import _push_spark_pool_balance
 from capp.classes.billing.idempotency import result_key
 from capp.classes.billing.paid_features import InsufficientBalance, PaidFeature, ReservationError
 from capp.classes.billing.reservation_service import BillingReservationService
+from capp.classes.moderation.model_refusal import extract_refusal
+from capp.classes.moderation.safety_ledger import SafetyLedgerService
 from capp.classes.moderation.image_prompt_policy import ImagePromptPolicy
 
 logger = logging.getLogger(__name__)
@@ -752,50 +756,80 @@ def process_ai_response(self, conversation_id, user_message_id, is_guest=False, 
 
         model = getattr(settings, "CORTECS_MODEL", None)
 
-        effective_lang = (
-            conversation.preferred_language
-            or (character.primary_language if character else None)
-            or user_message.language_code
+        # Whether this turn's photos ride along as image parts. BYOK: the user
+        # chose their own endpoint, so image support is their responsibility
+        # (Settings documents this); a text-only model there fails through the
+        # normal refund path. Platform: only when the routed model can view
+        # images — the send endpoint already refuses photo sends for
+        # text-only platform models, so this is the second, defensive gate
+        # (e.g. a mid-deploy model rename).
+        turn_has_photos = (
+            user_message.sender_type == Message.SenderType.USER
+            and MessageAttachment.objects.filter(
+                message_id=user_message.message_id,
+                moderation_status=MessageAttachment.ModerationStatus.APPROVED,
+            ).exists()
         )
-        logger.info(
-            "LANG CHECK: conv_lang=%s  char_lang=%s  msg_lang=%s  effective_lang=%s",
-            conversation.preferred_language,
-            character.primary_language if character else None,
-            user_message.language_code,
-            effective_lang,
-        )
-
-        # Only apply Swahili model switching when NOT using BYOK
-        if not byok and effective_lang in ("sw", "sh"):
-            swahili_model = getattr(settings, "CORTECS_SWAHILI_MODEL", None)
-            if swahili_model:
-                model = swahili_model
-                logger.info("Swahili/Sheng conversation - switching model to %s", model)
+        if byok:
+            include_images = turn_has_photos
+        else:
+            effective_lang_for_model = (
+                conversation.preferred_language
+                or (character.primary_language if character else None)
+                or user_message.language_code
+            )
+            logger.info(
+                "LANG CHECK: conv_lang=%s  char_lang=%s  msg_lang=%s  effective_lang=%s",
+                conversation.preferred_language,
+                character.primary_language if character else None,
+                user_message.language_code,
+                effective_lang_for_model,
+            )
+            if effective_lang_for_model in ("sw", "sh"):
+                swahili_model = getattr(settings, "CORTECS_SWAHILI_MODEL", None)
+                if swahili_model:
+                    model = swahili_model
+                    logger.info("Swahili/Sheng conversation - switching model to %s", model)
+            include_images = turn_has_photos and supports_vision(model)
 
         logger.info(
             "Building prompt with max_context=%d, model=%s",
             effective_max,
             model or "default",
         )
+        # -- BYOK system-prompt override -------------------------------------------
+        # The custom prompt replaces ONLY the PLATFORM RULES section inside
+        # the assembled system prompt (folded in by PromptBuilder.build_messages).
+        # The character card (personality), memory, relationship, summary and
+        # the safety sandwich are immutable platform context — a BYOK user
+        # must never be able to drop them by setting a system prompt. The old
+        # wholesale messages[0] replacement here caused exactly that bug.
+        byok_rules_override = byok.system_prompt if (byok and byok.system_prompt) else None
+
         try:
             messages = PromptBuilder.build_messages(
                 conversation=conversation,
                 user_message=user_message,
                 max_context_tokens=effective_max,
                 model=byok.model_name if byok else model,
+                include_images=include_images,
+                platform_rules_override=byok_rules_override,
             )
-            logger.info("Prompt built - system + %d history messages", len(messages) - 1)
+            logger.info(
+                "Prompt built - system + %d history messages (images=%s)",
+                len(messages) - 1,
+                include_images,
+            )
+            if byok_rules_override:
+                logger.info(
+                    "BYOK system prompt applied to platform rules only (%d chars)",
+                    len(byok_rules_override),
+                )
         except Exception as e:
             logger.exception("Prompt construction failed")
             PaidFeature.refund(reservation, reason="prompt_build_failed")
             _mark_message_failed(user_message, f"Prompt error: {str(e)}")
             return
-
-        # -- BYOK system-prompt override -------------------------------------------
-        if byok and byok.system_prompt:
-            if messages and messages[0].get("role") == "system":
-                messages[0]["content"] = byok.system_prompt
-                logger.info("BYOK system prompt applied (%d chars)", len(byok.system_prompt))
 
         # -- Web search + open_url tools (per-chat toggle) --------------------------
         # Search execution is provider-independent, so both the Cortecs and
@@ -904,8 +938,9 @@ def process_ai_response(self, conversation_id, user_message_id, is_guest=False, 
         )
         continuation_used = False
         try:
-            # The complete request differs from build_messages: BYOK may have
-            # replaced the system prompt and schemas also consume context.
+            # The complete request differs from the build result: tool schemas
+            # also consume context (any BYOK override is already folded into
+            # the platform-rules section by build_messages).
             messages = PromptBuilder.enforce_budget(
                 messages,
                 max_context_tokens=effective_max,
@@ -1030,7 +1065,12 @@ def process_ai_response(self, conversation_id, user_message_id, is_guest=False, 
                 _mark_message_failed(user_message, f"AI error after retries: {str(e)}")
                 _send_system_message(
                     conversation.conversation_id,
-                    "Sorry, the AI encountered an error. Please try again later.",
+                    (
+                        "Sorry, the AI could not view your photo right now (the image model is "
+                        "temporarily unavailable). No sparks were charged — please try again later."
+                        if turn_has_photos
+                        else "Sorry, the AI encountered an error. Please try again later."
+                    ),
                 )
             return
 
@@ -1170,6 +1210,21 @@ def process_ai_response(self, conversation_id, user_message_id, is_guest=False, 
                     # minimal line so the transcript still reads naturally.
                     ai_content = "..."
 
+        # ── Advisory model-refusal marker ─────────────────────────────────
+        # The SAFETY CAUTION segment in the prompt tells the model to begin
+        # refusals with [UWENZAI_SAFETY_REFUSAL]. Like [PHOTO_OFFER:...] it is
+        # platform syntax: strip it before the reply is stored or shown. The
+        # marker is stripped for guests too (they must never see it), but the
+        # advisory flag itself is only recorded for authenticated users —
+        # guests have no account to review. The raw text is kept for the
+        # fingerprint so a redelivered task cannot double-count one refusal.
+        model_refusal_raw = ai_content
+        ai_content, model_refusal_detected = extract_refusal(ai_content)
+        if model_refusal_detected and not ai_content:
+            # A marker-only reply would leave an empty bubble; keep a minimal
+            # line so the transcript still reads naturally.
+            ai_content = "..."
+
         usage = response.get("usage", {})
         input_tokens_used = usage.get("prompt_tokens", 0)
         output_tokens_used = usage.get("completion_tokens", 0)
@@ -1238,6 +1293,25 @@ def process_ai_response(self, conversation_id, user_message_id, is_guest=False, 
             # neither happened and the hold is still refundable.
             PaidFeature.settle(reservation, reason="ai_reply_persisted")
         reply_committed = True
+
+        # ── Advisory model-refusal flag (after the reply is durable) ──────
+        # Recorded only once the reply is stored, settled and delivered: a
+        # flagging failure must never break or refund a chat turn, so this
+        # runs in its own guard. BYOK turns count the same as platform turns
+        # — the caution segment is in every prompt either way.
+        if model_refusal_detected and user is not None:
+            try:
+                SafetyLedgerService.record_model_refusal(
+                    user=user,
+                    conversation_id=conversation.conversation_id,
+                    response_text=model_refusal_raw,
+                    user_text=user_message.content,
+                )
+            except Exception:
+                logger.exception(
+                    "Model-refusal flag recording failed for conv=%s; reply is unaffected",
+                    conversation_id,
+                )
 
         # Delivery is best effort from here. The reply is durable and paid for,
         # so a failed WebSocket push is not a reason to refund or regenerate —
@@ -1403,6 +1477,12 @@ def extract_memory_facts(self, conversation_id, user_message_id, ai_message_id):
     try:
         conversation = Conversation.objects.get(conversation_id=conversation_id)
         user_message = Message.objects.get(message_id=user_message_id)
+        # Photo-only messages carry no user text to extract facts from; the AI
+        # reply alone would tempt the extractor into inventing "user said"
+        # facts about pixels it never saw.
+        if not (user_message.content or "").strip():
+            logger.info("Skipping memory extraction for photo-only message %s", user_message_id)
+            return
         ai_message = Message.objects.get(message_id=ai_message_id)
         MemoryService.extract_and_save_facts(conversation, user_message, ai_message)
     except Exception as e:

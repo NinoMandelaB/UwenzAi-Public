@@ -3,6 +3,7 @@ import {
   Activity,
   ArrowDownLeft,
   ArrowUpRight,
+  BookOpen,
   Check,
   Copy,
   Eye,
@@ -46,6 +47,10 @@ import {
   errorText,
   connectionCode,
 } from "./developerWorkspaceUtils";
+
+// Public API documentation site linked from the workspace.
+const DEV_DOCS_URL =
+  import.meta.env.VITE_DEV_DOCS_URL || "https://uwenzai.com/uwenzai-dev/docs/";
 import "./UwenzAiDev.css";
 
 // Each mounted scope owns its work. Account and pair boundaries unmount scopes;
@@ -721,6 +726,15 @@ function Connection({ pair, baseUrl, tx }) {
         <h2 id="dev-connect-title">{tx("connection")}</h2>
       </div>
       <p className="dev-muted">{tx("connectionHint")}</p>
+      <a
+        className="dev-docs-link"
+        href={DEV_DOCS_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        <BookOpen size={15} />
+        {tx("docsLink")}
+      </a>
       <dl className="dev-config-values">
         {[
           ["baseUrl", baseUrl],

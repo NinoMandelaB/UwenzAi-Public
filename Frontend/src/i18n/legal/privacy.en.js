@@ -39,7 +39,7 @@ export const privacyEn = {
             "Your conversations stay private to your account. They are not published, not shown to other users, and not sold.",
             "Message text, conversation summaries and memory notes are encrypted in our database using keys held by our servers. This is not end-to-end encryption — our systems can decrypt this content, and a small number of authorised personnel can access it where necessary.",
             "To generate replies and images, we must send your prompts — and, for some image features, a reference image — to the AI providers that power those features.",
-            "Images are stored in a private, access-controlled bucket that our hosting provider encrypts at rest. We do not apply a separate per-image encryption layer of our own.",
+            "Photos you send in chat are encrypted with our own keys before they are stored, on top of the storage provider's at-rest encryption. Generated and gallery images rely on the storage provider's encryption only.",
             "You can export your data and delete your account from inside the app. Account deletion removes your profile, chats and private content; public characters you created stay on the Service without your name.",
             "We do not use your private conversations to train AI models, and we do not run advertising or third-party analytics trackers.",
           ],
@@ -118,6 +118,10 @@ export const privacyEn = {
         },
         {
           type: "p",
+          text: "Safety records. When our automated safety screening detects a possible violation in a message or image prompt, or records a safety concern, we store a safety record containing only the rule category, a severity rating, the action taken (for example recorded only, warned or blocked), and the time and conversation it relates to. By default, screening of your chat messages is recording-only: a possible violation is recorded, but your message is not blocked and your account is not restricted automatically. Records made in this way never count toward any later automatic enforcement. Our administrators can review safety records, and an administrator decides whether any action is taken on an account. Image prompts that match a prohibited subject are still refused automatically. Safety records never contain the text of your message, an embedding of it, or a link to the message itself. We also store an irreversible keyed fingerprint of the message, used solely so the same message is not counted twice. When your AI companion itself declines one of your requests, we also count that refusal as an advisory safety record: it stores the category, the time and an irreversible keyed fingerprint of the reply, and nothing else. Refusals never count toward enforcement and never trigger automatic locks; if enough accumulate, the system may suggest to our administrators that they consider blocking your account, and an administrator always decides. Refusal records are not deleted when you clear a character's memory or delete messages or conversations — only an administrator can review or reset them, and every reset is recorded in our internal audit trail. When your account is deleted, your refusal records are deleted with it. Self-harm disclosures are treated as a support concern, not a violation: they are recorded to give you better support and never count toward enforcement.",
+        },
+        {
+          type: "p",
           text: "Technical data. Information needed to run and secure the Service, such as authentication cookies, CSRF tokens, request metadata, rate-limiting and failed-login counters, and server logs. Our logs are written to record operational events rather than the content of your conversations.",
         },
         {
@@ -157,7 +161,7 @@ export const privacyEn = {
       blocks: [
         {
           type: "p",
-          text: "UwenzAi does not run its own AI models. To produce a reply we send the relevant conversation context — which includes your messages, the character definition, and relevant memory notes and summaries — to a third-party AI provider over an encrypted connection. This processing is unavoidable if you want the Service to work.",
+          text: "UwenzAi does not run its own AI models. To produce a reply we send the relevant conversation context — which includes your messages, the character definition, and relevant memory notes and summaries — to a third-party AI provider over an encrypted connection. If your message includes a photo and the active model can view images, the photo is sent to that provider as part of the same request so your companion can respond to it. This processing is unavoidable if you want the Service to work.",
         },
         {
           type: "ul",
@@ -165,7 +169,7 @@ export const privacyEn = {
             "Cortecs is our primary AI provider: it generates chat replies, and it also creates the numeric embeddings that power character memory.",
             "Mistral AI is the fallback provider for chat replies and for embeddings, used when Cortecs fails or is not configured. We also send text to Mistral AI directly for background tasks: extracting memory notes, writing conversation summaries, drafting character persona details, and judging conversation tone.",
             "Cortecs is an inference platform that runs third-party open models on our instructions, while Mistral AI develops and hosts its own. The provider we name is the company that receives the data; the particular model it runs is a configuration choice and may change.",
-            "If you use Bring Your Own Key, your chat replies are instead generated by the third-party endpoint you configured. That provider’s own privacy terms then govern what it does with your content, and we have no control over or visibility into its retention. Embeddings and the background tasks above continue to use the providers we name here.",
+            "If you use Bring Your Own Key, your chat replies — including photos you send, when your configured model can view images — are instead generated by the third-party endpoint you configured. That provider’s own privacy terms then govern what it does with your content, and we have no control over or visibility into its retention. Embeddings and the background tasks above continue to use the providers we name here. Photos sent with Bring Your Own Key are still screened by us before they are stored, as described in section 8.",
             "Our prohibited-content rules and our billing continue to apply when you use your own key.",
           ],
         },
@@ -203,8 +207,12 @@ export const privacyEn = {
     },
     {
       id: "8",
-      heading: "8. Images: generation, reference images, storage and access",
+      heading: "8. Images: generation, photos you send, storage and access",
       blocks: [
+        {
+          type: "p",
+          text: "Photos you send in chat. Before a photo you send is stored, an automated child-safety screening runs on our servers: a downscaled copy of the image, without metadata, is sent to our current safety-screening provider (Mistral AI) for classification against our child-safety policy. Only the image is sent for this screening — never your message text or caption. Photos the screening blocks, and photos that cannot be screened at all, are refused and never stored. The screening exists to prevent child nudity and child sexual content; it is not a general content filter, and adult content is not screened out.",
+        },
         {
           type: "p",
           text: "Image generation. When you request an image we send the generated prompt text — built from the character’s attributes and the instructions you add — to fal.ai, which runs the image model we use. If fal.ai is unavailable, Stability AI may be used instead. We do not send your name, email or account identifier with these requests.",
@@ -219,7 +227,7 @@ export const privacyEn = {
         },
         {
           type: "p",
-          text: "Storage. Uploaded and generated images are stored in a Railway S3-compatible bucket. The bucket is configured to be private: objects carry no public-read permission, and every link we hand out is a time-limited signed URL, valid for about one hour by default. Railway encrypts the stored data at rest at the storage layer. We do not add a separate per-image or application-level encryption layer on top of that, so we do not claim your images are individually encrypted by us.",
+          text: "Storage. Photos you send in chat are encrypted with our own application-level encryption — each photo with its own key — before they are written to a Railway S3-compatible bucket, on top of the storage layer's at-rest encryption. Uploaded reference images and generated images rely on the storage provider's encryption only. The bucket is configured to be private: objects carry no public-read permission, and every link we hand out is a time-limited signed URL. So while we do not claim to individually encrypt generated and gallery images, chat photos are individually encrypted by us.",
         },
         {
           type: "p",
@@ -233,7 +241,7 @@ export const privacyEn = {
       blocks: [
         {
           type: "p",
-          text: "We apply application-level encryption to the most sensitive text in our database. Message content, conversation summaries and memory notes are encrypted before they are written, as are stored email addresses, phone numbers and any Bring Your Own Key credential.",
+          text: "We apply application-level encryption to the most sensitive text in our database. Message content, conversation summaries and memory notes are encrypted before they are written, as are stored email addresses, phone numbers, any Bring Your Own Key credential, and the photo files you send in chat. The same limits apply: the keys are held by our servers, and this is not end-to-end encryption.",
         },
         {
           type: "p",
@@ -248,7 +256,7 @@ export const privacyEn = {
         },
         {
           type: "p",
-          text: "Some information is not encrypted at the application level, including character attributes, message timestamps and status, token and cost records, and any custom system prompt you supply.",
+          text: "Some information is not encrypted at the application level, including character attributes, message timestamps and status, token and cost records, generated and gallery image files, and any custom system prompt you supply.",
         },
         {
           type: "p",
@@ -269,6 +277,7 @@ export const privacyEn = {
           items: [
             "You. Your conversations, private characters and private images are visible to you in your account, and are not shown to other users.",
             "Authorised UwenzAi personnel. Administrators can access account records and, where necessary, user content — for example to investigate a report, handle a support ticket, respond to a security incident, or comply with a legal obligation. Access is limited to staff who need it for those purposes.",
+            "Safety records, in summary form only. Administrators reviewing a safety issue see the category, severity and count of recorded safety events — never the text of the messages that triggered them. The exception is a message you report yourself: when you report a message, our support team receives the text of that message and your reason so that they can review it.",
             "Our service providers. The infrastructure, AI and payment providers listed in our provider disclosure process the data needed to deliver the feature you used, under contract and on our instructions.",
             "Other users, only where you choose it. If you publish a character or mark a gallery image public, it becomes visible to others. Your conversations are never made public by us.",
             "Authorities, where the law requires it. We may disclose information if we are legally obliged to, or to protect our rights, users or the public.",
@@ -350,6 +359,7 @@ export const privacyEn = {
             "Verification and password-recovery codes expire quickly, typically within minutes, and are refused after that.",
             "Purchase, billing and consent records are kept for as long as we need them to meet accounting, tax and legal obligations, and to defend against disputes.",
             "Support tickets and content reports are kept while they are open and for a reasonable period afterwards, so that repeat problems can be handled.",
+            "Safety records are kept for as long as we need them to detect repeat violations across your sessions, to review enforcement decisions, and to meet legal obligations. Older records stop counting toward automated enforcement after a fixed window (currently 180 days).",
           ],
         },
         {
@@ -402,6 +412,7 @@ export const privacyEn = {
             "Copies may persist for a limited period in encrypted database backups and in operational logs before they age out in the ordinary course.",
             "Content already sent to an AI provider to generate a reply or an image is subject to that provider’s own retention. We request minimal retention where a provider supports it, but we cannot delete data from their systems on your behalf.",
             "We may retain limited records where we need them to comply with the law, prevent fraud or abuse, or resolve a dispute.",
+            "Safety records — rule category, severity and outcome metadata, never your message text — may be retained where needed to keep the Service safe, prevent repeat abuse, and comply with legal obligations, including reporting obligations relating to child safety.",
           ],
         },
         {
@@ -453,7 +464,7 @@ export const privacyEn = {
           items: [
             "Traffic between your device and our servers is encrypted in transit.",
             "Sensitive database fields, and the credentials described above, are encrypted at the application level.",
-            "Images are held in a private bucket, reachable only through short-lived signed links, and encrypted at rest by our hosting provider.",
+            "Images are held in a private bucket, reachable only through short-lived signed links, and encrypted at rest by our hosting provider; photos you send in chat are additionally encrypted with our own keys before they reach the bucket.",
             "Passwords are stored as salted hashes, never in readable form.",
             "We use HttpOnly session cookies, CSRF protection, rate limiting, account lockout after repeated failed sign-ins, and bot protection on sensitive forms.",
             "Administrative access is limited to staff who need it.",

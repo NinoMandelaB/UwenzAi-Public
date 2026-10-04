@@ -14,6 +14,7 @@ from capp.views.conversation_views import (
     api_mark_conversation_read,
     api_unread_summary,
     api_conversation_settings,
+    api_get_attachment,
 )
 
 urlpatterns = [
@@ -27,6 +28,12 @@ urlpatterns = [
     path("<uuid:conversation_id>/read/", api_mark_conversation_read, name="mark-conversation-read"),
     # Send a message in a conversation (POST)
     path("<uuid:conversation_id>/messages/", api_send_message, name="send-message"),
+    # Serve one user-sent photo attachment: decrypt + stream (GET)
+    path(
+        "<uuid:conversation_id>/attachments/<uuid:attachment_id>/",
+        api_get_attachment,
+        name="get-attachment",
+    ),
     # Generate an AI image of the character in the conversation (POST)
     path(
         "<uuid:conversation_id>/generate-image/",

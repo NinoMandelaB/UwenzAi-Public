@@ -16,6 +16,7 @@ from unittest import mock
 
 from django.conf import settings
 from django.core.cache import cache
+from django.core.cache.backends.locmem import LocMemCache
 from django.test import Client, TestCase, override_settings
 from django.utils import timezone
 
@@ -41,6 +42,7 @@ from capp.models import (
     UsageCharge,
 )
 from capp.tests import RECAPTCHA_OK, _make_character, _make_user
+from capp.throttles import GuestLegacyMigrationThrottle
 from paystack_app.models import PaystackTransaction
 
 COOKIE = settings.GUEST_CREDENTIAL_COOKIE_NAME
@@ -956,9 +958,16 @@ class LegacyGuestMigrationTests(GuestTestMixin, TestCase):
         rate = settings.REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"]["guest_legacy_migration"]
         allowed = int(rate.split("/")[0])
 
-        statuses = []
-        for _ in range(allowed + 1):
-            statuses.append(self._migrate(client=Client(), legacy_id=str(uuid.uuid4())).status_code)
+        # CI runs ``manage.py test --parallel`` against a shared Redis cache that
+        # other workers keep clearing, so accumulating real hits there is flaky:
+        # a clear between requests resets the window and the limit never trips.
+        # Count the window in a throwaway per-test cache instead.
+        throttle_cache = LocMemCache("legacy-migration-throttle-test", {})
+
+        with mock.patch.object(GuestLegacyMigrationThrottle, "cache", throttle_cache):
+            statuses = []
+            for _ in range(allowed + 1):
+                statuses.append(self._migrate(client=Client(), legacy_id=str(uuid.uuid4())).status_code)
 
         self.assertEqual(statuses[-1], 429)
         self.assertEqual(statuses.count(429), 1)

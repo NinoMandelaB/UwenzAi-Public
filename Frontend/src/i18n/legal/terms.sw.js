@@ -200,12 +200,16 @@ export const termsSw = {
           type: "p",
           text: "6.6. Matumizi Yanayokubalika ya Utafutaji wa Wavuti. Hairuhusiwi kutumia vipengele vya utafutaji wa wavuti au ufunguzi wa kurasa kutafuta, kupata, au kusambaza maudhui haramu, kukiuka haki za wengine, kukwepa vizuizi vya kiufundi au vya kisheria vya upatikanaji, au kuchunguza, kuskani, au kushambulia mifumo ya wahusika wengine. Tunaweza kuzuia, kusimamisha, au kuzima vipengele hivi kwa mtumiaji au mazungumzo wakati wowote, ikiwa ni pamoja na kwa madhumuni ya kuzingatia masharti ya matumizi yanayokubalika ya mtoa huduma wetu wa utafutaji.",
         },
+        {
+          type: "p",
+          text: "6.7. Jinsi sheria hizi zinavyotekelezwa. Tunatumia uchunguzi wa kiotomatiki wa usalama kwenye ujumbe na maombi ya picha. Kwa sasa, uchunguzi wa ujumbe wa mazungumzo unarekodi tu: ujumbe unapoonekana kuvunja vifungu 6.1 au 6.2, tunatengeneza rekodi ya usalama, lakini hatuzuii ujumbe huo wala hatuwekei akaunti yako vikwazo kiotomatiki. Wasimamizi wetu wanaweza kukagua rekodi za usalama, ambazo zinaonyesha tu aina na kiwango cha ukiukaji unaowezekana na kamwe si maandishi ya ujumbe wako, na msimamizi ndiye anayeamua kama hatua yoyote ichukuliwe dhidi ya akaunti, kwa mfano onyo, kufunga kwa usalama, kusimamisha au kupiga marufuku. Maombi ya picha na picha huchunguzwa tofauti na hukataliwa kiotomatiki, kama ilivyoelezwa katika kifungu cha 7. Akaunti iliyofungwa bado inaweza kuingia kuona hali yake na kuwasiliana na usaidizi kwa rufaa, lakini haiwezi kuzungumza au kutengeneza picha. Wakaguzi hawasomi historia ya ujumbe wako ili kufanya maamuzi haya. Kilichohifadhiwa kwa lengo hili kimeelezwa katika Sera ya Faragha.",
+        },
       ],
     },
     {
       id: "7",
       heading:
-        "7. Uzalishaji wa picha: kinachoruhusiwa na kilichopigwa marufuku kabisa",
+        "7. Picha: uzalishaji, picha unazotuma, na kilichopigwa marufuku kabisa",
       blocks: [
         {
           type: "p",
@@ -225,15 +229,19 @@ export const termsSw = {
         },
         {
           type: "p",
-          text: "7.3. Jinsi hii inatekelezwa. Kila ombi la picha huchunguzwa kiotomatiki kwenye seva zetu kabla ya kutumwa kwa mtoa huduma yeyote wa picha na kabla ya cheche zozote kutozwa. Maombi yanayolingana na mada iliyopigwa marufuku hukataliwa, hakuna cheche zinazotozwa kwa hayo, na kukataliwa huandikwa. Majaribio ya kurudia au ya kukusudia kupata maudhui yaliyopigwa marufuku yanaweza kusababisha kusimamishwa au kufungwa mara moja chini ya kifungu cha 14, na tunaweza kuripoti maombi haramu kwa mamlaka.",
+          text: "7.3. Picha unazotuma kwenye mazungumzo. Marufuku ya kifungu cha 7.2 zinasimamia unachoruhusiwa kuomba tuzalishe. Kanuni tofauti inasimamia picha unazopakia na kutuma kwa mwandani wako: hupaswi kutuma picha inayoonyesha maudhui ya unyonyaji wa kijinsia wa watoto, uchi wa mtoto au mchanga aliyeathiriwa kijinsia, maudhui ya kibinafsi yasiyoridhisiwa, au maudhui ambayo huna haki ya kushiriki, na kila picha unayotuma lazima pia ifuate kifungu cha 6. Picha unazotuma huchunguzwa kiotomatiki kabla ya kuhifadhiwa; picha zinazokataliwa au zisizoweza kuchunguzwa zinakataliwa na hazihifadhiwi kabisa, na hakuna cheche zinazotozwa kwa zile. Picha za kawaida za watoto waliovaa nguo kamili — kama picha ya familia — hazipigwa marufuku na kanuni hii: uchunguzi ulikuwepo ili kuzuia uchi wa watoto na maudhui ya kingono yanayohusisha watoto, si kuchuja picha zako za kila siku.",
         },
         {
           type: "p",
-          text: "7.4. Mipaka ya uchunguzi wa kiotomatiki. Uchunguzi wetu ni kichujio cha uhakika kinachofanya kazi kwa maneno yaliyo katika ombi lako. Ni ulinzi wenye nguvu, lakini si kamili: hakiwezi kutambua kwa uhakika kila usemi mwingine, tamathali ya usemi, au mada iliyopigwa marufuku inayodokezwa na muktadha pekee. Ukweli kwamba ombi hakukataliwa haumaanishi kwamba liliruhusiwa. Unaendelea kuwajibika kufuata kifungu cha 7.2, na jaribio lolote la kupanga maneno ya ombi ili kukwepa uchunguzi ni lenyewe uvunjaji wa Masharti haya.",
+          text: "7.4. Jinsi hii inatekelezwa. Kila ombi la picha huchunguzwa kiotomatiki kwenye seva zetu kabla ya kutumwa kwa mtoa huduma yeyote wa picha na kabla ya cheche zozote kutozwa. Maombi yanayolingana na mada iliyopigwa marufuku hukataliwa, hakuna cheche zinazotozwa kwa hayo, na kukataliwa huandikwa. Picha unazotuma kwenye mazungumzo huchunguzwa kwa njia ile ile kabla ya kuhifadhiwa. Majaribio ya kurudia au ya kukusudia kupata maudhui yaliyopigwa marufuku yanaweza kusababisha kusimamishwa au kufungwa mara moja chini ya kifungu cha 14, na tunaweza kuripoti maombi haramu kwa mamlaka.",
         },
         {
           type: "p",
-          text: "7.5. Hakuna dhamana ya matokeo. Uzalishaji wa picha unategemea watoa huduma wa nje na unaweza kushindwa, kuchelewa kupita kiasi, au kurudisha matokeo yasiyolingana na ombi lako. Uzalishaji uliokataliwa, uliofeli, au usioridhisha hauwapi wewe haki ya kurudishiwa fedha, salio, badala, au fidia, isipokuwa pale sheria inayotumika inahitaji. Pale ombi linakataliwa na uchunguzi wetu wa maudhui, cheche hazitozwa.",
+          text: "7.5. Mipaka ya uchunguzi wa kiotomatiki. Uchunguzi wetu wa maombi ni kichujio cha uhakika kinachofanya kazi kwa maneno yaliyo katika ombi lako; uchunguzi wetu wa picha ni kichambuzi cha picha cha kiotomatiki. Vyote viwili ni ulinzi wenye nguvu, lakini si kamili: haviwezi kutambua kwa uhakika kila usemi mwingine, tamathali ya usemi, mada iliyopigwa marufuku inayodokezwa na muktadha pekee, au picha iliyobadilishwa kuepuka uchunguzi. Ukweli kwamba ombi au picha haikukataliwa haumaanishi kwamba iliruhusiwa. Unaendelea kuwajibika kufuata vifungu vya 7.2 na 7.3, na jaribio lolote la kupanga maneno ya ombi au kubadilisha picha ili kukwepa uchunguzi ni lenyewe uvunjaji wa Masharti haya.",
+        },
+        {
+          type: "p",
+          text: "7.6. Hakuna dhamana ya matokeo. Uzalishaji wa picha unategemea watoa huduma wa nje na unaweza kushindwa, kuchelewa kupita kiasi, au kurudisha matokeo yasiyolingana na ombi lako. Uzalishaji uliokataliwa, uliofeli, au usioridhisha hauwapi wewe haki ya kurudishiwa fedha, salio, badala, au fidia, isipokuwa pale sheria inayotumika inahitaji. Pale ombi linakataliwa na uchunguzi wetu wa maudhui, cheche hazitozwa.",
         },
       ],
     },
@@ -503,6 +511,10 @@ export const termsSw = {
         {
           type: "p",
           text: "14.3. Vifungu ambavyo kwa asili yao vinapaswa kuendelea kuwepo baada ya kufungwa (ikijumuisha lakini bila kikomo haki miliki, leseni katika kifungu cha 8 kwa kiwango ambacho tunaendelea kuhifadhi maudhui, kanusho, mipaka ya dhima, fidia, na sheria inayoongoza) yataendelea kutumika.",
+        },
+        {
+          type: "p",
+          text: "14.4. Kufunga kwa usalama. Msimamizi anaweza kufunga akaunti yako kwa ukiukaji unaorudiwa au mkubwa wa kifungu cha 6, kama ilivyoelezwa katika kifungu 6.7. Kufunga kwa usalama si kuondoa akaunti: huendelea hadi msimamizi aiangalie akaunti yako, na unaweza kuwasilisha rufaa kupitia usaidizi.",
         },
       ],
     },

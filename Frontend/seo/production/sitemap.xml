@@ -54,6 +54,13 @@
     <priority>0.6</priority>
   </url>
 
+  <!-- Developer API documentation -->
+  <url>
+    <loc>https://uwenzai.com/uwenzai-dev/docs/</loc>
+    <changefreq>weekly</changefreq>
+    <priority>0.6</priority>
+  </url>
+
   <!-- Auth pages -->
   <url>
     <loc>https://uwenzai.com/login</loc>

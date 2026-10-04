@@ -34,6 +34,7 @@ Kwa watengenezaji wa programu, UwenzAi inatoa lango la API linalolingana na Open
 - [Privacy Policy](https://uwenzai.com/privacy): What data is collected, how conversations and memory facts are stored, and user rights
 - [Responsible Use Guide](https://uwenzai.com/responsible-use): Community standards, content boundaries, and BYOK policy
 - [Subprocessor Disclosure](https://uwenzai.com/subprocessors): Third-party infrastructure and processors used to run the platform
+- [Developer API Documentation](https://uwenzai.com/uwenzai-dev/docs/): Bilingual (English/Kiswahili) API reference for the OpenAI-compatible gateway — authentication, endpoints, pricing in Sparks, error codes, and rate limits
 
 ## Product
 

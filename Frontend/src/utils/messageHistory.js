@@ -17,6 +17,9 @@ export function normalizeHistoryMessage(raw) {
     sender_type: raw.sender_type,
     content: raw.content,
     image_url: raw.image_url || null,
+    // User-sent photo attachments: [{ attachment_id, url, content_type }]
+    // with short-lived signed URLs (fresh per history response).
+    attachments: Array.isArray(raw.attachments) ? raw.attachments : [],
     created_at: raw.created_at,
     reply_to: raw.reply_to || null,
     code: raw.code || undefined,

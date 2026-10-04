@@ -23,15 +23,17 @@ The platform is built and maintained by **UwenzAi Limited**, based in Nairobi, K
 - **Proactive chat** — companions can be configured to send a follow-up message after a period of inactivity, keeping the conversation alive.
 - **Agentic reminders** — characters can schedule, edit and deliver reminders themselves through a `create_reminder` tool, with a Celery Beat delivery pipeline and per-user limits.
 - **In-chat memory editor** — review and edit what a character remembers about you, directly from the chat.
+- **Photo messages (opt-in)** — users can attach a photo to a message when the character runs on a vision-capable model. Photos have their metadata stripped, are screened before they are stored (uploads are refused when no screening provider is configured), are encrypted per photo at the application level, and are served through short-lived signed links. The feature is disabled by default (`PHOTO_UPLOADS_ENABLED`).
 - **Advanced feature toggles** — per-user, backend-enforced switches for optional chat features (deep thinking, web search, proactive messages), default off.
-- **UwenzAi-Dev (Agent Gateway)** — an OpenAI-compatible inference API for developers: mint API keys (shown once, stored as verification hashes), optionally cap each key with a monthly Sparks budget, and call six configurable providers — Cortecs, Mistral AI, Fikra, Inceptron, AKI.IO, OVHcloud — with automatic routing to the cheapest provider, all metered through the same Sparks balance with scoped idempotency for usage accounting.
+- **UwenzAi-Dev (Agent Gateway)** — an OpenAI-compatible inference API for developers: mint API keys (shown once, stored as verification hashes), optionally cap each key with a monthly Sparks budget, and call multiple configurable providers with automatic routing to the cheapest provider, all metered through the same Sparks balance with scoped idempotency for usage accounting. Bilingual developer documentation ships with the frontend, and the gateway is explicitly experimental.
 - **Multi-provider AI backend** — both chat generation and memory embeddings are routed through Cortecs first, with automatic fallback to Mistral, keeping the platform resilient to any single provider's downtime.
 - **Bilingual UI** — the frontend is fully localized in **English** and **Kiswahili**, with automatic language detection for incoming messages.
 - **Guest mode** — visitors can chat immediately without creating an account, using a limited free allowance of Sparks credits tied to a local session ID.
-- **Sparks credits** — a simple, transparent usage-based credit system covers message pairs, character generation/edits, and image generation, with bonus credits for creators whose public characters get approved.
+- **Sparks credits** — a simple, transparent usage-based credit system covers message pairs, character generation/edits, and image generation, with bonus credits for creators whose public characters get approved. Packages are charged in KES; approximate USD/EUR conversions are shown for information only.
 - **Bring Your Own Key (BYOK)** — users can supply their own LLM API key for a drastically reduced per-message credit cost.
 - **Real-time updates** — Sparks balance and chat messages are pushed live over WebSockets (Django Channels), with REST fallbacks for reliability.
 - **Trust & safety** — message/content moderation, character review workflow before public listing, account lockout protection, reCAPTCHA on auth flows, and encryption of sensitive user data (email, phone, message content).
+- **Cross-session safety ledger** — a text-safety policy records serious-harm signals per account across sessions, with corroborated locking, care-oriented handling of self-harm and survivor language, and metadata-only summaries for administrators (no message text). It runs in recording-only ("shadow") mode by default; blocking and locking are a deliberate deployment setting (`SAFETY_LEDGER_MODE`), and an administrator decides on any account action.
 - **Community characters** — users can publish characters publicly for others to chat with, subject to moderator review.
 
 ### Tech Stack
@@ -42,7 +44,7 @@ The platform is built and maintained by **UwenzAi Limited**, based in Nairobi, K
 - Celery for background tasks, split across isolated `general` / `images` queues, plus Celery Beat for reminder delivery and daily agent-catalog sync
 - PostgreSQL with the `pgvector` extension for semantic memory
 - Agent Gateway: OpenAI-compatible multi-provider inference API with Sparks metering, per-key budgets and idempotent usage accounting (`capp/classes/agent_gateway/`)
-- Media in a private S3-compatible object storage bucket shared by the web and worker services
+- Media in a private S3-compatible object storage bucket shared by the web and worker services; user photos are additionally encrypted with AES-256-GCM before storage
 - Dependencies compiled with `pip-compile` from `requirements.in`
 - JWT auth (`djangorestframework-simplejwt`) + Google OAuth
 - Uvicorn (ASGI) for production serving
@@ -125,15 +127,17 @@ Jukwaa hili linajengwa na kudumishwa na **UwenzAi Limited**, kampuni yenye makaz
 - **Mazungumzo shirikishi (proactive chat)** — wahusika wanaweza kusanidiwa kutuma ujumbe wa kufuatilia baada ya muda wa kutokuwepo, kuendeleza mazungumzo hai.
 - **Vikumbusho vya kiamri (agentic reminders)** — wahusika wenyewe wanaweza kupanga, kuhariri na kutuma vikumbusho kupitia zana ya `create_reminder`, kwa mfumo wa Celery Beat wa kusambaza na mipaka kwa kila mtumiaji.
 - **Kihariri cha kumbukumbu ndani ya mazungumzo** — kagua na uhariri kile mhusika anakikumbuka kuhusu wewe, moja kwa moja kutoka kwenye mazungumzo.
+- **Ujumbe wa picha (kwa hiari)** — watumiaji wanaweza kuambatisha picha kwenye ujumbe pale mhusika anapotumia modeli yenye uwezo wa kuona picha. Picha huondolewa taarifa zilizofichwa ndani yake, hukaguliwa kabla ya kuhifadhiwa (upakiaji hukataliwa ikiwa hakuna mtoa huduma wa ukaguzi aliyesanidiwa), husimbwa kwa kila picha katika kiwango cha programu, na hutolewa kupitia viungo vya muda mfupi vilivyosainiwa. Kipengele hiki kimezimwa kwa chaguo-msingi (`PHOTO_UPLOADS_ENABLED`).
 - **Swichi za vipengele vya ziada** — swichi za kila mtumiaji zinazotekelezwa upande wa seva kwa vipengele vya hiari vya mazungumzo (kufikiri kwa kina, utafuti wa tovuti, ujumbe wa kuongoza), zikiwa zimezimwa kwa chaguo-msingi.
-- **UwenzAi-Dev (Lango la Wataalamu / Agent Gateway)** — API ya uamuzi inayofanana na ya OpenAI kwa waendelezaji: tengeneza funguo za API (zinaonyeshwa mara moja, huhifadhiwa kama alama za uthibitisho), weka kikomo cha bajeti ya kila mwezi ya Cheche kwa kila funguo kwa hiari, na itumie kwa watoa huduma sita wanaosanidiwa — Cortecs, Mistral AI, Fikra, Inceptron, AKI.IO, OVHcloud — ikiwa na uelekezaji wa kiotomatiki kwa mtoa huduma wa bei nafuu zaidi, vyote vikipimwa kwa salio ileile ya Cheche kwa kutumia uhakiki wa kitambulisho wa shughuli (idempotency).
+- **UwenzAi-Dev (Lango la Wataalamu / Agent Gateway)** — API ya uamuzi inayofanana na ya OpenAI kwa waendelezaji: tengeneza funguo za API (zinaonyeshwa mara moja, huhifadhiwa kama alama za uthibitisho), weka kikomo cha bajeti ya kila mwezi ya Cheche kwa kila funguo kwa hiari, na itumie kwa watoa huduma wengi wanaosanidiwa, ikiwa na uelekezaji wa kiotomatiki kwa mtoa huduma wa bei nafuu zaidi, vyote vikipimwa kwa salio ileile ya Cheche kwa kutumia uhakiki wa kitambulisho wa shughuli (idempotency). Nyaraka za waendelezaji kwa lugha mbili zinakuja na frontend, na lango hili ni la majaribio kwa uwazi.
 - **Mfumo wa AI wa watoa huduma wengi** — uzalishaji wa majibu ya mazungumzo na uwakilishi wa kihesabu wa kumbukumbu vyote hupitishwa kwa Cortecs kwanza, vikiwa na urejeshaji wa kiotomatiki kwa Mistral, hivyo jukwaa linakuwa thabiti hata ikiwa mtoa huduma mmoja ana tatizo.
 - **Kiolesura cha lugha mbili** — programu ya mtumiaji imetafsiriwa kikamilifu kwa **Kiingereza** na **Kiswahili**, ikiwa na utambuzi wa kiotomatiki wa lugha kwa ujumbe unaoingia.
 - **Hali ya mgeni (guest mode)** — wageni wanaweza kuzungumza mara moja bila kuunda akaunti, wakitumia kiwango kidogo cha bure cha Cheche kilichounganishwa na kitambulisho cha kipindi cha kivinjari.
-- **Mfumo wa Cheche** — mfumo rahisi na wazi wa "credit" za matumizi unaogharamia jozi za ujumbe, uundaji/uhariri wa wahusika, na uzalishaji wa picha, ukiwa na Cheche za ziada kwa waundaji ambao wahusika wao wa umma wanakubaliwa.
+- **Mfumo wa Cheche** — mfumo rahisi na wazi wa "credit" za matumizi unaogharamia jozi za ujumbe, uundaji/uhariri wa wahusika, na uzalishaji wa picha, ukiwa na Cheche za ziada kwa waundaji ambao wahusika wao wa umma wanakubaliwa. Vifurushi hutozwa kwa KES; makadirio ya USD/EUR huonyeshwa kwa taarifa tu.
 - **Tumia Ufunguo Wako Mwenyewe (BYOK)** — watumiaji wanaweza kutumia ufunguo wao wa API wa LLM kwa gharama iliyopunguzwa sana kwa kila ujumbe.
 - **Masasisho ya wakati halisi** — salio la Cheche na ujumbe wa mazungumzo hutumwa moja kwa moja kupitia WebSockets (Django Channels), ikiwa na njia mbadala ya REST kwa uhakika.
 - **Usalama na uadilifu** — udhibiti wa ujumbe/maudhui, mchakato wa ukaguzi wa wahusika kabla ya kuorodheshwa hadharani, ulinzi wa kufungwa kwa akaunti, reCAPTCHA kwenye mifumo ya kuingia, na usimbaji fiche wa taarifa nyeti za mtumiaji (barua pepe, namba ya simu, maudhui ya ujumbe).
+- **Leja ya usalama kati ya vipindi** — sera ya usalama wa maandishi hurekodi ishara za madhara makubwa kwa kila akaunti katika vipindi vyote, ikiwa na kufunga kunakothibitishwa na ishara zaidi ya moja, ushughulikiaji unaojali wa lugha ya kujidhuru na ya manusura, na muhtasari wa metadata pekee kwa wasimamizi (bila maandishi ya ujumbe). Kwa chaguo-msingi hufanya kazi kwa hali ya kurekodi tu ("shadow"); kuzuia na kufunga ni mpangilio wa makusudi wa uwekaji mtandaoni (`SAFETY_LEDGER_MODE`), na msimamizi ndiye anayeamua hatua yoyote kwa akaunti.
 - **Wahusika wa jamii** — watumiaji wanaweza kuchapisha wahusika hadharani ili wengine wazungumze nao, baada ya ukaguzi wa wasimamizi.
 
 ### Muundo wa Kiteknolojia
@@ -144,6 +148,7 @@ Jukwaa hili linajengwa na kudumishwa na **UwenzAi Limited**, kampuni yenye makaz
 - Celery kwa kazi za nyuma, pamoja na Celery Beat kwa kusambaza vikumbusho na usawazishaji wa kila siku wa orodha ya mifano
 - PostgreSQL yenye programu-jalizi ya `pgvector` kwa kumbukumbu ya kisemantiki
 - Lango la Wataalamu (Agent Gateway): API ya uamuzi inayofanana na ya OpenAI kwa watoa huduma wengi, ikiwa na upimaji wa Cheche, bajeti kwa kila funguo, na uhasibu wa matumizi wenye uhakiki wa kitambulisho (`capp/classes/agent_gateway/`)
+- Hifadhi ya vyombo vya habari katika ndoo ya kibinafsi inayooana na S3; picha za watumiaji husimbwa pia kwa AES-256-GCM kabla ya kuhifadhiwa
 - Uthibitisho wa JWT (`djangorestframework-simplejwt`) + Google OAuth
 - Uvicorn (ASGI) kwa uendeshaji wa uzalishaji
 - Muunganiko wa AI/LLM: uelekezaji wa Cortecs kwa mazungumzo na uwakilishi wa kihesabu, akiba ya Mistral (`mistral-common`), mteja unaofanana na OpenAI, `tiktoken`

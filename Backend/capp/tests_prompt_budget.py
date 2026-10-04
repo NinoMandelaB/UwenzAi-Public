@@ -27,7 +27,7 @@ class PromptBudgetTests(SimpleTestCase):
         self.safety = {"role": "system", "content": "=== SAFETY CHECK (System) ===\nMANDATORY SAFETY"}
         self.user = {"role": "user", "content": "=== USER MESSAGE (User) ===\nMY CURRENT TURN"}
 
-    def prompt(self, summary="summary", history="history"):
+    def prompt(self, summary="summary", history="history", user_override=None):
         system = _SectionedPrompt(
             [
                 "=== PLATFORM RULES (System) ===\nmandatory platform",
@@ -44,7 +44,7 @@ class PromptBudgetTests(SimpleTestCase):
             {"role": "user", "content": history},
             {"role": "assistant", "content": history},
             self.safety,
-            self.user,
+            user_override if user_override is not None else self.user,
         ]
 
     def test_oversized_optional_summary_cannot_displace_mandatory_sections(self):
@@ -139,6 +139,42 @@ class PromptBudgetTests(SimpleTestCase):
         ]
         self.assertGreater(TokenUtils.count_message_tokens(messages), 500)
 
+    def test_token_count_estimates_image_parts_not_base64_bytes(self):
+        """Multimodal parts must not be counted as their raw base64 length.
+
+        A data-URL image serialises to hundreds of thousands of characters the
+        provider never stores as tokens; counting them would evict the whole
+        history from the budget. The estimate is a fixed per-image cost.
+        """
+        messages = [
+            {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "look"},
+                    {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + "A" * 500000}},
+                ],
+            },
+        ]
+        counted = TokenUtils.count_message_tokens(messages)
+        # Far below the raw base64 length, above text-only framing.
+        self.assertLess(counted, 2000)
+        self.assertGreater(counted, TokenUtils._IMAGE_TOKEN_ESTIMATE)
+
+    def test_budget_keeps_latest_photo_message_indivisible(self):
+        """A photo turn fits the budget even though the image adds a fixed cost."""
+        user = {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "=== USER MESSAGE (User) ===\nsee you soon"},
+                {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AAAA"}},
+            ],
+        }
+        messages = self.prompt(user_override=user)
+        budget = TokenUtils.count_message_tokens(messages)
+        result = PromptBuilder.enforce_budget(messages, max_context_tokens=budget)
+        self.assertEqual(result[-1], user)
+
     def test_offered_tool_schemas_share_the_complete_budget(self):
         tools = [{"type": "function", "function": {"name": "example", "description": "large " * 1000}}]
         with self.assertRaises(PromptBudgetExceeded):
@@ -194,3 +230,80 @@ class ActualPromptAssemblyTests(TestCase):
         self.assertTrue(any("TAIL SAFETY" in m["content"] for m in result))
         for marker in ("PLATFORM RULES", "CHARACTER CARD", "NSFW FLAG", "LANGUAGE", "FORMATTING RULES"):
             self.assertIn(f"=== {marker} (System) ===", result[0]["content"])
+
+    def test_byok_override_replaces_platform_rules_only(self):
+        """A BYOK custom system prompt swaps the PLATFORM RULES section and
+        nothing else: the character card (personality), NSFW, language and
+        formatting sections — plus the separate safety message — all survive,
+        and the sectioned structure stays intact for budget eviction."""
+        env = {"SAFETY_SANDWICH": "TAIL SAFETY", "GENERAL_SYSTEM_PROMPT": "CORE RULES"}
+        with mock.patch.dict("os.environ", env):
+            result = PromptBuilder.build_messages(
+                self.conversation,
+                self.message,
+                max_context_tokens=10000,
+                platform_rules_override="CUSTOM BYOK RULES",
+            )
+        system = result[0]["content"]
+        self.assertIn("CUSTOM BYOK RULES", system)
+        self.assertNotIn("CORE RULES", system)  # env-var rules are fully replaced
+        for marker in ("CHARACTER CARD", "NSFW FLAG", "LANGUAGE", "FORMATTING RULES"):
+            self.assertIn(f"=== {marker} (System) ===", system)
+        self.assertIn("friendly and warm", system)  # character personality survives
+        self.assertTrue(any(m["content"].startswith("=== SAFETY CHECK (System) ===") for m in result))
+        self.assertIsInstance(result[0]["content"], _SectionedPrompt)
+
+    def test_byok_override_preserves_relationship_memory_and_summary(self):
+        """The BYOK override must never drop the user-specific context
+        sections: relationship status, memory facts and the conversation
+        summary all survive a custom system prompt."""
+        from capp.models import MemoryFact, RelationshipState
+
+        RelationshipState.objects.create(
+            user=self.user,
+            character=self.character,
+            familiarity_score=70,
+            affinity_score=40,
+            trust_score=30,
+            interaction_count=12,
+            tone_state=RelationshipState.ToneChoices.WARM,
+            relationship_notes="user shared their birthday\nuser mentioned a dog",
+        )
+        MemoryFact.objects.create(
+            user=self.user,
+            character=self.character,
+            fact_text="The user's favourite meal is pilau.",
+            fact_type=MemoryFact.FactType.PREFERENCE,
+            importance_score=9,
+        )
+        ConversationSummary.objects.create(
+            conversation=self.conversation,
+            summary_text="Earlier the user discussed moving to Mombasa.",
+            is_current=True,
+        )
+        env = {"SAFETY_SANDWICH": "TAIL SAFETY", "GENERAL_SYSTEM_PROMPT": "CORE RULES"}
+        with mock.patch.dict("os.environ", env):
+            result = PromptBuilder.build_messages(
+                self.conversation,
+                self.message,
+                max_context_tokens=10000,
+                platform_rules_override="CUSTOM BYOK RULES",
+            )
+        system = result[0]["content"]
+        self.assertIn("CUSTOM BYOK RULES", system)
+        self.assertIn("=== RELATIONSHIP WITH USER (System) ===", system)
+        self.assertIn("dog", system)  # seeded relationship note survives
+        self.assertIn("=== MEMORY (System) ===", system)
+        self.assertIn("pilau", system)  # seeded memory fact survives
+        self.assertIn("=== PREVIOUS CONVERSATIONS SUMMARY (System) ===", system)
+        self.assertIn("Mombasa", system)  # seeded summary survives
+
+    def test_byok_oversized_override_fails_closed_before_any_provider(self):
+        env = {"SAFETY_SANDWICH": "TAIL SAFETY", "GENERAL_SYSTEM_PROMPT": "CORE RULES"}
+        with mock.patch.dict("os.environ", env), self.assertRaises(PromptBudgetExceeded):
+            PromptBuilder.build_messages(
+                self.conversation,
+                self.message,
+                max_context_tokens=1000,
+                platform_rules_override="X" * 20000,
+            )

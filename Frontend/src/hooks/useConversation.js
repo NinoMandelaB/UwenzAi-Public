@@ -1,13 +1,19 @@
 // src/hooks/useConversation.js
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { validUserMessage } from "../utils/textLimits";
+import {
+  characterCount,
+  USER_MESSAGE_LIMIT,
+  validUserMessage,
+} from "../utils/textLimits";
 import { useChatSocket } from "./useChatSocket";
 import { useMessageHistory } from "./useMessageHistory";
 import { clearOperationId, reuseOperationId } from "../utils/idempotency";
 import { appendLiveMessage } from "../utils/messageHistory";
 import { localizeSendError } from "../utils/sendErrorMapper";
 import { useLanguage } from "../context/LanguageContext";
+import { useAuth } from "../context/AuthContext";
+import { validatePhotoFile } from "../utils/photoUpload";
 import { useMarkConversationRead } from "./useMarkConversationRead";
 import {
   sendMessage as sendMessageApi,
@@ -30,6 +36,7 @@ export function useConversation(
   isAuthLoading = false,
 ) {
   const { t } = useLanguage();
+  const { user } = useAuth();
   const [connecting, setConnecting] = useState(true);
   const [error, setError] = useState(null);
   const [isSending, setIsSending] = useState(false);
@@ -143,10 +150,21 @@ export function useConversation(
 
   // ---------- Send message ----------
   const sendUserMessage = useCallback(
-    async (content) => {
-      if (!conversationId || !validUserMessage(content)) return false;
+    async (content, image = null) => {
+      const hasImage = image instanceof File;
+      if (!conversationId) return false;
+      // With a photo the caption may be empty, but never over-length.
+      const captionOk = hasImage
+        ? characterCount(content) <= USER_MESSAGE_LIMIT
+        : validUserMessage(content);
+      if (!captionOk) return false;
 
-      const operationId = reuseOperationId(sendOperationRef, content);
+      // The action key must cover the image too: retrying the same photo send
+      // reuses the same key so the backend can replay it, never double-charge.
+      const actionKey = hasImage
+        ? `photo:${image.name}:${image.size}:${image.lastModified}:${content}`
+        : content;
+      const operationId = reuseOperationId(sendOperationRef, actionKey);
 
       setError(null);
       setIsSending(true);
@@ -154,17 +172,54 @@ export function useConversation(
       const optimisticMsg = {
         sender_type: "user",
         content,
+        // Local preview while the request is in flight; replaced by the
+        // server-signed URL on success and by history reloads.
+        attachments: hasImage
+          ? [
+              {
+                attachment_id: null,
+                url: URL.createObjectURL(image),
+                content_type: image.type,
+              },
+            ]
+          : [],
         created_at: new Date().toISOString(),
       };
       setMessages((prev) => [...prev, optimisticMsg]);
 
       try {
-        await sendMessageApi(conversationId, { content }, operationId);
+        const result = await sendMessageApi(
+          conversationId,
+          hasImage ? { content, image } : { content },
+          operationId,
+        );
         clearOperationId(sendOperationRef);
+        const serverAttachments = result?.data?.attachments;
+        if (
+          hasImage &&
+          Array.isArray(serverAttachments) &&
+          serverAttachments.length > 0
+        ) {
+          URL.revokeObjectURL(optimisticMsg.attachments[0]?.url);
+          setMessages((prev) =>
+            prev.map((m) =>
+              m === optimisticMsg
+                ? {
+                    ...m,
+                    attachments: serverAttachments,
+                    message_id: result?.data?.message_id || m.message_id,
+                  }
+                : m,
+            ),
+          );
+        }
         return true;
       } catch (err) {
         console.error("useConversation sendUserMessage error:", err);
         setMessages((prev) => prev.filter((m) => m !== optimisticMsg));
+        if (optimisticMsg.attachments[0]?.url?.startsWith("blob:")) {
+          URL.revokeObjectURL(optimisticMsg.attachments[0].url);
+        }
         // The key is deliberately kept on failure: this may have been a
         // timeout on a request the server accepted and charged, so retrying
         // the same text must present the same key, not pay twice.
@@ -271,6 +326,32 @@ export function useConversation(
     setMessages((prev) => prev.filter((m) => m.message_id !== messageId));
   }, []);
 
+  // ---------- Pending photo attach state ----------
+  const [pendingImage, setPendingImage] = useState(null);
+
+  // Guardrails before an upload is even attempted: the byte and pixel
+  // limits come from auth/me (user.photo_max_*), so the user gets an
+  // immediate warning with the exact maximum instead of a failed send.
+  // The backend re-checks everything; this is UX, not enforcement.
+  const attachImage = useCallback(
+    async (file) => {
+      if (!(file instanceof File)) return;
+      if (!file.type.startsWith("image/")) return;
+      setError(null);
+      const check = await validatePhotoFile(file, {
+        maxBytes: user?.photo_max_bytes,
+        maxMegapixels: user?.photo_max_megapixels,
+      });
+      if (!check.ok) {
+        setError(t(`errors.${check.code}`, { max: check.max }));
+        return;
+      }
+      setPendingImage(file);
+    },
+    [t, user],
+  );
+  const clearPendingImage = useCallback(() => setPendingImage(null), []);
+
   return {
     messages,
     character,
@@ -287,6 +368,9 @@ export function useConversation(
     clearMessages,
     deleteMessage,
     isCharacterActive,
+    pendingImage,
+    attachImage,
+    clearPendingImage,
     hasMoreHistory,
     isLoadingOlder,
     olderHistoryError,

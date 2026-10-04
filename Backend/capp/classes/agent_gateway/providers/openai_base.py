@@ -262,6 +262,14 @@ class OpenAICompatibleProvider:
             self._upsert_catalog_to_db(fetched)
         return len(fetched)
 
+    def _chat_completions_url(self, model: str) -> str:
+        """Chat-completions endpoint for ``model``.
+
+        Providers whose upstream serves different models under different base
+        paths override this per model.
+        """
+        return "{}/chat/completions".format(self._base_url.rstrip("/"))
+
     def chat_completion(
         self,
         *,
@@ -273,7 +281,7 @@ class OpenAICompatibleProvider:
         if not self._api_key:
             raise RuntimeError("{} provider is not configured".format(self.name))
 
-        url = "{}/chat/completions".format(self._base_url.rstrip("/"))
+        url = self._chat_completions_url(model)
 
         payload = {
             "model": model,
@@ -286,13 +294,21 @@ class OpenAICompatibleProvider:
         if "stream" in payload:
             del payload["stream"]
             logger.info("Agent Gateway: streaming disabled for reliable billing")
+        if "stream_options" in payload:
+            # Normalized away at the gateway boundary; kept here as a belt-and-
+            # braces guard because upstreams 400 on stream_options without stream.
+            del payload["stream_options"]
 
         try:
             response = httpx.post(
                 url,
                 headers=self._get_headers(),
                 json=payload,
-                timeout=60.0,
+                # Non-streamed generations complete inside one HTTP call, so the
+                # read budget must cover large agent outputs: 8k tokens at ~35
+                # tok/s is ~4 minutes. 60s cut those off mid-generation (502,
+                # refunded, agent retries forever). Connect stays fast-fail.
+                timeout=httpx.Timeout(300.0, connect=10.0),
             )
             response.raise_for_status()
             data = response.json()
@@ -301,11 +317,27 @@ class OpenAICompatibleProvider:
             choices = data.get("choices", [])
             text = ""
             finish_reason = None
+            tool_calls = None
             if choices:
                 first_choice = choices[0]
                 message = first_choice.get("message", {})
-                text = message.get("content", "")
+                text = message.get("content") or ""
                 finish_reason = first_choice.get("finish_reason")
+                # Relay structured tool calls verbatim, synthesizing an id when
+                # the upstream omits one — some gateways return id-less calls,
+                # and a client that receives finish_reason=tool_calls without
+                # any calls stalls its agent loop forever.
+                upstream_tool_calls = message.get("tool_calls")
+                if isinstance(upstream_tool_calls, list) and upstream_tool_calls:
+                    relayed = []
+                    for i, call in enumerate(upstream_tool_calls):
+                        if not isinstance(call, dict):
+                            continue
+                        call = dict(call)
+                        if not call.get("id"):
+                            call["id"] = "call_{}".format(i)
+                        relayed.append(call)
+                    tool_calls = relayed or None
 
             return ProviderResult(
                 text=text,
@@ -313,6 +345,7 @@ class OpenAICompatibleProvider:
                 status="success",
                 finish_reason=finish_reason,
                 model=model,
+                tool_calls=tool_calls,
             )
         except httpx.HTTPStatusError as e:
             status_code = e.response.status_code
@@ -327,6 +360,7 @@ class OpenAICompatibleProvider:
                 usage={"prompt_tokens": 0, "completion_tokens": 0},
                 status="upstream_error",
                 error_message=error_message,
+                upstream_status_code=status_code,
                 finish_reason=None,
                 model=model,
             )

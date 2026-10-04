@@ -55,6 +55,7 @@ import AgeGate from "./components/AgeGate";
 import NotFound from "./pages/NotFound";
 import ProtectedRoute from "./components/ProtectedRoute";
 import PublicOnlyRoute from "./components/PublicOnlyRoute";
+import CanonicalLink from "./components/CanonicalLink";
 
 export default function App() {
   return (
@@ -71,6 +72,7 @@ export default function App() {
                     and legal pages) renders before the gate is answered.
                     Authenticated users are skipped — age is confirmed at
                     sign-up. */}
+                <CanonicalLink />
                 <AgeGate>
                   <Routes>
                     {/* Public only routes (guests only) */}

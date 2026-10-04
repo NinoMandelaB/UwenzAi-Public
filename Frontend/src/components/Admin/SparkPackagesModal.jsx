@@ -79,6 +79,11 @@ function PackageList({ packages, onEdit, onDelete, t }) {
               {Number(pkg.discount_percent).toFixed(1)}%
             </span>
 
+            <span className="text-gray-500">{t("admin.vatPercent")}</span>
+            <span className="text-right tabular-nums text-gray-700">
+              {Number(pkg.vat_percent).toFixed(1)}%
+            </span>
+
             <span className="text-gray-500">{t("admin.finalPrice")}</span>
             <span className="text-right tabular-nums font-medium text-gray-900">
               KES {Number(pkg.final_price_kes).toFixed(2)}
@@ -184,6 +189,7 @@ const emptyForm = {
   base_spark_amount: "",
   base_price_kes: "",
   discount_percent: "0",
+  vat_percent: "0",
   final_price_kes: "",
   is_active: true,
 };
@@ -200,6 +206,7 @@ function SparkPackageForm({ initial, onSave, onCancel, saving, t }) {
         base_spark_amount: initial.base_spark_amount?.toString() || "",
         base_price_kes: initial.base_price_kes?.toString() || "",
         discount_percent: initial.discount_percent?.toString() || "0",
+        vat_percent: initial.vat_percent?.toString() || "0",
         final_price_kes: initial.final_price_kes?.toString() || "",
         is_active: initial.is_active ?? true,
       });
@@ -218,15 +225,28 @@ function SparkPackageForm({ initial, onSave, onCancel, saving, t }) {
     setForm((prev) => {
       const updated = { ...prev, [name]: value };
 
-      if (name === "base_price_kes" || name === "discount_percent") {
+      if (
+        name === "base_price_kes" ||
+        name === "discount_percent" ||
+        name === "vat_percent"
+      ) {
         const base = parseFloat(
           name === "base_price_kes" ? value : prev.base_price_kes,
         );
         const disc = parseFloat(
           name === "discount_percent" ? value : prev.discount_percent,
         );
-        const final =
+        const vat = parseFloat(
+          name === "vat_percent" ? value : prev.vat_percent,
+        );
+        const discounted =
           isNaN(base) || isNaN(disc) ? 0 : base - (base * disc) / 100;
+        // VAT is applied on top of the discounted price; the final price
+        // includes it. The backend recomputes this authoritatively.
+        const final =
+          isNaN(discounted) || isNaN(vat)
+            ? 0
+            : discounted + (discounted * vat) / 100;
         updated.final_price_kes = final.toFixed(2);
       }
 
@@ -241,6 +261,7 @@ function SparkPackageForm({ initial, onSave, onCancel, saving, t }) {
       base_spark_amount: parseInt(form.base_spark_amount || "0", 10),
       base_price_kes: parseFloat(form.base_price_kes || "0"),
       discount_percent: parseFloat(form.discount_percent || "0"),
+      vat_percent: parseFloat(form.vat_percent || "0"),
       final_price_kes: parseFloat(form.final_price_kes || "0"),
     });
   };
@@ -313,7 +334,19 @@ function SparkPackageForm({ initial, onSave, onCancel, saving, t }) {
         />
 
         <label className="text-xs font-medium text-gray-600 sm:text-sm">
-          {t("admin.finalPrice")} (KES)
+          {t("admin.vatPercent")} %
+        </label>
+        <SafeNumericInput
+          name="vat_percent"
+          value={form.vat_percent}
+          onChange={handleChange}
+          allowDecimal
+          placeholder={t("admin.vatPercentPlaceholder")}
+          className={inputClass}
+        />
+
+        <label className="text-xs font-medium text-gray-600 sm:text-sm">
+          {t("admin.finalPrice")} (KES, {t("admin.inclVat")})
         </label>
         <SafeNumericInput
           name="final_price_kes"

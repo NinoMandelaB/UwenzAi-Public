@@ -99,6 +99,39 @@ WEBPUSH_ALLOWED_ORIGINS = tuple(
 WEBPUSH_TIMEOUT_SECONDS = max(1.0, min(float(os.getenv("WEBPUSH_TIMEOUT_SECONDS", "5")), 15.0))
 WEBPUSH_MAX_SUBSCRIPTIONS_PER_USER = max(1, min(int(os.getenv("WEBPUSH_MAX_SUBSCRIPTIONS_PER_USER", "10")), 20))
 
+# ---------------------------------------------------------------------------
+# Cross-session safety ledger (text moderation)
+# ---------------------------------------------------------------------------
+# See capp/classes/moderation/safety_ledger.py and text_safety_policy.py.
+# Severity weights: critical=10 (locks immediately), high=3, medium=2, low=1.
+# The lock threshold is a weighted score, not a flat event count, so the
+# starting product rule "about ten violations" only holds for the lowest
+# severities while serious categories escalate much sooner.
+SAFETY_LOCK_SCORE_THRESHOLD = max(1, int(os.getenv("SAFETY_LOCK_SCORE_THRESHOLD", "10")))
+# Events older than this many days no longer count toward the score (rows
+# are retained for audit beyond the window).
+SAFETY_EVENT_DECAY_DAYS = max(1, int(os.getenv("SAFETY_EVENT_DECAY_DAYS", "180")))
+# Re-sends of the same message inside this window deduplicate instead of
+# stacking a new event, so spamming one violation cannot manufacture a lock.
+SAFETY_DEDUP_WINDOW_MINUTES = max(1, int(os.getenv("SAFETY_DEDUP_WINDOW_MINUTES", "60")))
+# Deployment mode for the ledger: "off" (evaluate nothing), "shadow"
+# (evaluate and record, never block/lock — used to measure the false-positive
+# rate before enforcing), "enforce" (block, warn, lock). Defaults to
+# "shadow": enforcement is promoted deliberately by setting the env var,
+# never by deploying. Shadow events never count toward any later punishment.
+SAFETY_LEDGER_MODE = os.getenv("SAFETY_LEDGER_MODE", "shadow").strip().lower()
+if SAFETY_LEDGER_MODE not in ("off", "shadow", "enforce"):
+    raise ImproperlyConfigured(f"SAFETY_LEDGER_MODE must be one of off/shadow/enforce, got {SAFETY_LEDGER_MODE!r}.")
+# When this many unreversed advisory model-refusal flags (the companion model
+# itself refusing a request, see capp/classes/moderation/model_refusal.py)
+# accumulate inside the decay window, the admin safety summary sets
+# suggest_block=True so the panel shows a system suggestion to block the
+# account. Refusals are advisory only — they never score, never block and
+# never lock; an administrator always decides. Mirrors the "about ten
+# violations" scale of the lock threshold because refusals are noisier
+# signals than deterministic classifier violations.
+SAFETY_MODEL_REFUSAL_SUGGEST_THRESHOLD = max(1, int(os.getenv("SAFETY_MODEL_REFUSAL_SUGGEST_THRESHOLD", "10")))
+
 STABILITY_API_KEY = os.getenv("STABILITY_API_KEY")
 STABILITY_API_URL = os.getenv("STABILITY_API_URL", "https://api.stability.ai/v2beta/stable-image/generate/core")
 STABILITY_MODEL = os.getenv("STABILITY_MODEL", "sd3.5-large-turbo")
@@ -177,6 +210,71 @@ MISTRAL_MODEL = os.getenv("MISTRAL_MODEL")
 MISTRAL_EMBED_MODEL = os.getenv("MISTRAL_EMBED_MODEL")
 MISTRAL_TOKENIZER_MODEL = os.getenv("MISTRAL_TOKENIZER_MODEL")
 
+# Comma-separated model names that accept image input parts. Exact
+# (case-insensitive) matches; combined with the built-in pattern list in
+# capp/classes/ai/model_vision.py. Set this when pinning a model the pattern
+# list does not know (e.g. a new vision model via Cortecs).
+VISION_MODEL_ALLOWLIST = os.getenv("VISION_MODEL_ALLOWLIST", "")
+
+# ------------------------------------------------------------------------------
+# User-sent photo attachments (chat)
+# ------------------------------------------------------------------------------
+# Photo sending is OPT-IN and requires a screening provider in production:
+# without one, uploads are refused (photo_uploads_disabled) rather than
+# stored unscreened. In DEBUG the moderation layer allows so local dev and
+# CI work without a provider key.
+PHOTO_UPLOADS_ENABLED = env_bool("PHOTO_UPLOADS_ENABLED", False)
+PHOTO_MAX_BYTES = int(os.getenv("PHOTO_MAX_BYTES", str(10 * 1024 * 1024)))
+# Pixel cap for uploaded photos, enforced from the image HEADER before the
+# pixels are decoded: a tiny file can declare a huge canvas (decompression
+# bomb) and the decode itself is what exhausts memory. 25 Mpx is far above any
+# phone camera output and is also set as Pillow's global decode limit as a
+# backstop.
+PHOTO_MAX_PIXELS = int(os.getenv("PHOTO_MAX_PIXELS", str(25 * 1000 * 1000)))
+PHOTO_MAX_DIMENSION = int(os.getenv("PHOTO_MAX_DIMENSION", "2048"))
+# How many recent images may enter one prompt (current + history).
+PHOTO_MAX_IMAGES_IN_PROMPT = int(os.getenv("PHOTO_MAX_IMAGES_IN_PROMPT", "4"))
+# How many trailing history messages may carry their images into the prompt.
+PHOTO_HISTORY_MESSAGES_WITH_IMAGES = int(os.getenv("PHOTO_HISTORY_MESSAGES_WITH_IMAGES", "6"))
+# Conservative per-image token estimate used for prompt budgeting. Images
+# are sent with detail "low" (512x512, roughly 384 provider tokens each on
+# DeepSeek V4.1-Flash); 512 leaves headroom without over-trimming history.
+PHOTO_IMAGE_TOKEN_ESTIMATE = int(os.getenv("PHOTO_IMAGE_TOKEN_ESTIMATE", "512"))
+
+# Versioned master keys for photo envelope encryption (AES-256-GCM).
+# JSON: {"v1": "<base64 32-byte key>"}. Encrypt with CURRENT_VERSION,
+# decrypt with the version recorded on each row; rotation = add a version
+# and move CURRENT_VERSION. Master material lives ONLY here (Railway env).
+IMAGE_ENCRYPTION_KEYS = json.loads(os.getenv("IMAGE_ENCRYPTION_KEYS", "{}") or "{}")
+IMAGE_ENCRYPTION_CURRENT_VERSION = os.getenv("IMAGE_ENCRYPTION_CURRENT_VERSION", "v1")
+
+# Photo moderation. Two pluggable providers:
+#   "mistral_vlm" (RECOMMENDED) — a cheap vision model on the existing
+#     Mistral La Plateforme integration (default Ministral 3 3B);
+#     classifies the pixels against the child-safety policy.
+#     No known-CSAM hash matching — see photo_moderation.py limitations.
+#   "hive" — optional stronger provider (Hive CSAM Detection API, Thorn
+#     technology) with known-CSAM hash matching; kept as the upgrade path.
+# Any other / unset value = no provider (production refuses uploads).
+IMAGE_MODERATION_PROVIDER = os.getenv("IMAGE_MODERATION_PROVIDER", "")
+# mistral_vlm settings: model, and a tight timeout so an unresponsive
+# moderation call fails closed quickly instead of stalling the send.
+IMAGE_MODERATION_VLM_MODEL = os.getenv("IMAGE_MODERATION_VLM_MODEL", "ministral-3b-2512")
+IMAGE_MODERATION_VLM_TIMEOUT_SECONDS = float(os.getenv("IMAGE_MODERATION_VLM_TIMEOUT_SECONDS", "15"))
+# Moderation input bound: uploads are downscaled to this max edge before the
+# screening call (bounding tokens/latency; child-nudity detection does not
+# need full resolution). Storage keeps its own 2048px bound. Audit sha256
+# still hashes the EXIF-stripped master.
+PHOTO_MODERATION_MAX_DIMENSION = int(os.getenv("PHOTO_MODERATION_MAX_DIMENSION", "1024"))
+IMAGE_MODERATION_CSAM_THRESHOLD = float(os.getenv("IMAGE_MODERATION_CSAM_THRESHOLD", "0.5"))
+HIVE_API_KEY = os.getenv("HIVE_API_KEY", "")
+HIVE_API_URL = os.getenv("HIVE_API_URL", "https://api.thehive.ai/api/v2/task/sync")
+HIVE_TIMEOUT_SECONDS = float(os.getenv("HIVE_TIMEOUT_SECONDS", "10"))
+
+# Short-lived HMAC-signed attachment URLs (img tags cannot send JWTs).
+PHOTO_URL_TTL_SECONDS = int(os.getenv("PHOTO_URL_TTL_SECONDS", "900"))
+PHOTO_URL_SIGNING_SECRET = os.getenv("PHOTO_URL_SIGNING_SECRET", "")
+
 # ------------------------------------------------------------------------------
 # Agent Gateway (dedicated provider credentials — NOT the companion-app keys)
 # ------------------------------------------------------------------------------
@@ -210,42 +308,35 @@ OVH_AI_UWENZAI_AGENT_API_KEY = os.getenv("OVH_AI_UWENZAI_AGENT_API_KEY")
 OVH_AI_UWENZAI_AGENT_BASE_URL = os.getenv(
     "OVH_AI_UWENZAI_AGENT_BASE_URL", "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
 )
-# Pricing: markup on upstream costs, applied per provider.
-# AGENT_MARKUP_PERCENT is the default for providers without an override.
-# Cortecs keeps 12.5% (5% pass-through + 5% UwenzAi margin + 2.5% FX safety
-# buffer); the other providers run 8%.
-AGENT_MARKUP_PERCENT = float(os.getenv("AGENT_MARKUP_PERCENT", "12.5"))
-CORTECS_UWENZAI_AGENT_MARKUP_PERCENT = float(os.getenv("CORTECS_UWENZAI_AGENT_MARKUP_PERCENT", "12.5"))
-MISTRAL_UWENZAI_AGENT_MARKUP_PERCENT = float(os.getenv("MISTRAL_UWENZAI_AGENT_MARKUP_PERCENT", "8"))
-FIKRA_UWENZAI_AGENT_MARKUP_PERCENT = float(os.getenv("FIKRA_UWENZAI_AGENT_MARKUP_PERCENT", "8"))
-INCEPTRON_UWENZAI_AGENT_MARKUP_PERCENT = float(os.getenv("INCEPTRON_UWENZAI_AGENT_MARKUP_PERCENT", "8"))
-AKI_UWENZAI_AGENT_MARKUP_PERCENT = float(os.getenv("AKI_UWENZAI_AGENT_MARKUP_PERCENT", "8"))
-OVH_AI_UWENZAI_AGENT_MARKUP_PERCENT = float(os.getenv("OVH_AI_UWENZAI_AGENT_MARKUP_PERCENT", "8"))
-# Mistral's /v1/models endpoint lists models without prices. This map supplies
-# USD prices per 1M tokens (input, output) for models the operator wants in the
-# catalog; models absent from the map stay skipped. Sources: mistral.ai pricing
-# pages, reviewed 2026-09-14. Override wholesale via the JSON env var of the
-# same name if Mistral changes prices before the next review.
-_MISTRAL_UWENZAI_AGENT_MODEL_PRICES_DEFAULT = {
-    "mistral-large-latest": ("0.50", "1.50"),
-    "mistral-large-2512": ("0.50", "1.50"),
-    "mistral-medium-latest": ("1.50", "7.50"),
-    "mistral-medium-3-5": ("1.50", "7.50"),
-    "mistral-medium-3.5": ("1.50", "7.50"),
-    "mistral-medium-3": ("0.40", "2.00"),
-    "mistral-small-latest": ("0.15", "0.60"),
-    "mistral-small-2603": ("0.15", "0.60"),
-    "ministral-3b-latest": ("0.10", "0.10"),
-    "ministral-3b-2512": ("0.10", "0.10"),
-    "ministral-8b-latest": ("0.15", "0.15"),
-    "ministral-8b-2512": ("0.15", "0.15"),
-    "ministral-14b-latest": ("0.20", "0.20"),
-    "ministral-14b-2512": ("0.20", "0.20"),
-    "codestral-latest": ("0.30", "0.90"),
-    "codestral-2508": ("0.30", "0.90"),
-    "magistral-small-latest": ("0.50", "1.50"),
-    "magistral-medium-latest": ("2.00", "5.00"),
-}
+# Pricing: markup on upstream costs, applied per provider. The public source
+# ships no commercial defaults: set AGENT_MARKUP_PERCENT (global fallback) and,
+# optionally, a per-provider <PROVIDER>_UWENZAI_AGENT_MARKUP_PERCENT in the
+# deployment environment. Unset values mean no markup.
+AGENT_MARKUP_PERCENT = float(os.getenv("AGENT_MARKUP_PERCENT", "0"))
+
+
+def _optional_float_env(name):
+    """Return the float value of an environment variable, or None when unset/invalid."""
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
+CORTECS_UWENZAI_AGENT_MARKUP_PERCENT = _optional_float_env("CORTECS_UWENZAI_AGENT_MARKUP_PERCENT")
+MISTRAL_UWENZAI_AGENT_MARKUP_PERCENT = _optional_float_env("MISTRAL_UWENZAI_AGENT_MARKUP_PERCENT")
+FIKRA_UWENZAI_AGENT_MARKUP_PERCENT = _optional_float_env("FIKRA_UWENZAI_AGENT_MARKUP_PERCENT")
+INCEPTRON_UWENZAI_AGENT_MARKUP_PERCENT = _optional_float_env("INCEPTRON_UWENZAI_AGENT_MARKUP_PERCENT")
+AKI_UWENZAI_AGENT_MARKUP_PERCENT = _optional_float_env("AKI_UWENZAI_AGENT_MARKUP_PERCENT")
+OVH_AI_UWENZAI_AGENT_MARKUP_PERCENT = _optional_float_env("OVH_AI_UWENZAI_AGENT_MARKUP_PERCENT")
+TENSORX_UWENZAI_AGENT_MARKUP_PERCENT = _optional_float_env("TENSORX_UWENZAI_AGENT_MARKUP_PERCENT")
+# TensorX (dedicated key) — EU-sovereign inference (Dublin/Helsinki),
+# OpenAI-compatible at https://api.tensorx.ai/v1.
+TENSORX_UWENZAI_AGENT_API_KEY = os.getenv("TENSORX_UWENZAI_AGENT_API_KEY")
+TENSORX_UWENZAI_AGENT_BASE_URL = os.getenv("TENSORX_UWENZAI_AGENT_BASE_URL", "https://api.tensorx.ai/v1")
 
 
 def _env_json(name, default):
@@ -258,46 +349,22 @@ def _env_json(name, default):
         return default
 
 
-MISTRAL_UWENZAI_AGENT_MODEL_PRICES = _env_json(
-    "MISTRAL_UWENZAI_AGENT_MODEL_PRICES", _MISTRAL_UWENZAI_AGENT_MODEL_PRICES_DEFAULT
-)
-# AKI's /openai/v1/models endpoint likewise lists models without prices (plain
-# OpenAI shape). EUR prices per 1M tokens (input, output) from aki.io's pricing
-# page, reviewed 2026-09-14. Chat variants share the base model's price. The
-# Llama models are EOL per AKI (30.09.26) and can be dropped from the map then.
-# Override wholesale via the JSON env var of the same name.
-_AKI_UWENZAI_AGENT_MODEL_PRICES_DEFAULT = {
-    "apertus-chat-70b": ("1.25", "2.00"),
-    "deepseek-v4-flash-0731-284b": ("0.20", "0.50"),
-    "gemma4-26b": ("0.10", "0.50"),
-    "gemma4-chat-26b": ("0.10", "0.50"),
-    "glm5.3-754b": ("1.00", "3.50"),
-    "gpt-oss-120b": ("0.15", "0.55"),
-    "llama3-chat-8b": ("0.15", "0.15"),
-    "llama3-chat-70b": ("0.65", "0.65"),
-    "mistral4-119b": ("0.20", "0.60"),
-    "qwen3.6-35b": ("0.15", "0.50"),
-    "qwen3.6-chat-35b": ("0.15", "0.50"),
-    "qwen3.8-27b": ("0.30", "2.20"),
-}
-AKI_UWENZAI_AGENT_MODEL_PRICES = _env_json("AKI_UWENZAI_AGENT_MODEL_PRICES", _AKI_UWENZAI_AGENT_MODEL_PRICES_DEFAULT)
-# Fikra's /v1/models now publishes per-model pricing programmatically
-# (announcement 2026-09; unit USD_PER_1M_TOKENS, flat input = output).
-# This map is the fallback for models that come back unpriced upstream,
-# with the announced USD prices per 1M tokens (input, output), reviewed
-# 2026-09-15. Override wholesale via the JSON env var of the same name.
-_FIKRA_UWENZAI_AGENT_MODEL_PRICES_DEFAULT = {
-    "fikra-flash": ("0.50", "0.50"),
-    "fikra-fast-8b": ("0.50", "0.50"),
-    "fikra-pro-20b": ("2.00", "2.00"),
-    "fikra-pro-120b": ("3.00", "3.00"),
-    "fikra-qwen-max": ("5.00", "5.00"),
-    "fikra-auto": ("2.00", "2.00"),
-    "fikra-auto-pro": ("5.00", "5.00"),
-}
-FIKRA_UWENZAI_AGENT_MODEL_PRICES = _env_json(
-    "FIKRA_UWENZAI_AGENT_MODEL_PRICES", _FIKRA_UWENZAI_AGENT_MODEL_PRICES_DEFAULT
-)
+# Mistral model prices: operator-supplied via the MISTRAL_UWENZAI_AGENT_MODEL_PRICES JSON env var,
+# {"model-id": ["input_per_1m", "output_per_1m"], ...} in USD per 1M tokens. The public
+# source ships no price table; models absent from the map stay out of the catalog.
+MISTRAL_UWENZAI_AGENT_MODEL_PRICES = _env_json("MISTRAL_UWENZAI_AGENT_MODEL_PRICES", {})
+# AKI model prices: operator-supplied via the AKI_UWENZAI_AGENT_MODEL_PRICES JSON env var,
+# {"model-id": ["input_per_1m", "output_per_1m"], ...} in EUR per 1M tokens. The public
+# source ships no price table; models absent from the map stay out of the catalog.
+AKI_UWENZAI_AGENT_MODEL_PRICES = _env_json("AKI_UWENZAI_AGENT_MODEL_PRICES", {})
+# Fikra model prices: operator-supplied via the FIKRA_UWENZAI_AGENT_MODEL_PRICES JSON env var,
+# {"model-id": ["input_per_1m", "output_per_1m"], ...} in USD per 1M tokens. The public
+# source ships no price table; models absent from the map stay out of the catalog.
+FIKRA_UWENZAI_AGENT_MODEL_PRICES = _env_json("FIKRA_UWENZAI_AGENT_MODEL_PRICES", {})
+# TensorX model prices: operator-supplied via the TENSORX_UWENZAI_AGENT_MODEL_PRICES JSON env var,
+# {"model-id": ["input_per_1m", "output_per_1m"], ...} in USD per 1M tokens. The public
+# source ships no price table; models absent from the map stay out of the catalog.
+TENSORX_UWENZAI_AGENT_MODEL_PRICES = _env_json("TENSORX_UWENZAI_AGENT_MODEL_PRICES", {})
 # FX rate for EUR to KES conversion (Cortecs/AKI use EUR, review regularly)
 AGENT_FX_EUR_KES = float(os.getenv("AGENT_FX_EUR_KES", "145"))
 # FX rate for USD to KES conversion (Mistral/Fikra/Inceptron/OVH use USD, review regularly)
@@ -996,6 +1063,12 @@ FILE_UPLOAD_MAX_MEMORY_SIZE = 104857600
 # 12,000 astral Unicode characters JSON-escaped take 144,000 bytes. Keep room
 # for metadata while bounding JSON parsing/ASGI buffering independently of files.
 JSON_REQUEST_MAX_BYTES = 196608
+
+# Multipart budget for the chat message send route (one photo per message,
+# PHOTO_MAX_BYTES, plus the caption form field and multipart framing).
+# The messages route must accept photo uploads, but must NOT inherit the
+# generic 100 MB multipart budget (media-type spoof guard in capp.request_limits).
+MESSAGE_MULTIPART_MAX_BYTES = PHOTO_MAX_BYTES + JSON_REQUEST_MAX_BYTES + 65536
 BYOK_PRIVATE_ORIGINS = env_origins("BYOK_PRIVATE_ORIGINS")
 AUTH_CODE_HMAC_KEY = os.getenv("AUTH_CODE_HMAC_KEY") or SECRET_KEY
 

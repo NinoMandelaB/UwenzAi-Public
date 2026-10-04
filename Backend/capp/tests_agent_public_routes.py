@@ -71,6 +71,20 @@ class AgentBaseSettingsTests(SimpleTestCase):
                 self.assertEqual(self.read_base_setting(AGENT_BASE_URL=custom), custom)
 
 
+def _stream_body(response) -> str:
+    """Collect a (possibly async-iterator) streaming response body."""
+    import asyncio
+
+    content = response.streaming_content
+    if hasattr(content, "__aiter__"):
+
+        async def collect():
+            return b"".join([part async for part in content])
+
+        return asyncio.run(collect()).decode()
+    return b"".join(content).decode()
+
+
 class AgentPublicRouteTests(TestCase):
     def setUp(self):
         cache.clear()
@@ -227,6 +241,175 @@ class AgentPublicRouteTests(TestCase):
                 self.assertEqual(args["params"]["temperature"], 0.25)
             self.assertEqual(execute.call_count, 4)
         self.assertFalse(AgentUsageLog.objects.exists())
+        self.assertFalse(BillingReservation.objects.exists())
+
+    def test_stream_true_returns_openai_sse_chunk_stream(self):
+        """stream=true wraps the completed (non-streamed) result in OpenAI-shaped
+        SSE chunks — role chunk, one content chunk, final chunk with
+        finish_reason + usage, then [DONE]. Streaming-only agent clients must
+        not see an empty stream."""
+        import json as _json
+
+        result = {
+            "id": "uwenzai-fikra-pro-20b",
+            "object": "chat.completion",
+            "created": 1789000000,
+            "model": "fikra-pro-20b",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "Habari!"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12},
+        }
+        with service_urls(True), mock.patch.object(
+            AgentProxyService, "execute_request", return_value=result
+        ) as execute:
+            response = self.external.post("/api/v1/chat/completions", {**self.payload, "stream": True}, format="json")
+            self.assertEqual(response.status_code, 200, getattr(response, "content", b""))
+            self.assertEqual(response["Content-Type"], "text/event-stream")
+            self.assertIn("no-cache", response["Cache-Control"])
+            body = _stream_body(response)
+        events = [line[6:] for line in body.strip().split("\n\n") if line.startswith("data: ")]
+        self.assertEqual(events[-1], "[DONE]")
+        chunks = [_json.loads(e) for e in events[:-1]]
+        self.assertTrue(all(c["object"] == "chat.completion.chunk" for c in chunks))
+        self.assertEqual(chunks[0]["choices"][0]["delta"], {"role": "assistant"})
+        self.assertIn("Habari!", chunks[1]["choices"][0]["delta"]["content"])
+        final = chunks[-1]
+        self.assertEqual(final["choices"][0]["finish_reason"], "stop")
+        self.assertEqual(final["usage"]["total_tokens"], 12)
+        # The upstream dispatch stays exactly the non-streaming call: one
+        # execution (the provider layer strips `stream` before the upstream
+        # POST, as covered by the gateway tests), billing unchanged.
+        self.assertEqual(execute.call_count, 1)
+
+    def test_stream_request_errors_stay_json_with_http_status(self):
+        """Pre-stream failures (upstream error, bad request) keep the JSON error
+        body and HTTP status — the OpenAI behavior every SSE client expects."""
+        error = {
+            "error": {
+                "status": "upstream_error",
+                "refund_confirmed": True,
+                "message": "Upstream failed",
+            }
+        }
+        with service_urls(True), mock.patch.object(AgentProxyService, "execute_request", return_value=error):
+            response = self.external.post("/api/v1/chat/completions", {**self.payload, "stream": True}, format="json")
+        self.assertEqual(response.status_code, 502)
+        self.assertNotEqual(response["Content-Type"], "text/event-stream")
+        self.assertEqual(response.json()["error"]["status"], "upstream_error")
+
+    def test_stream_options_is_accepted_and_never_reaches_the_provider(self):
+        """Agents (Cline/Kilo Code-family) send stream_options: {include_usage:
+        true} with every streaming request; it must not 400, and it must be
+        stripped before the provider call (the gateway always includes usage
+        in the final SSE chunk, so the flag is honored by construction)."""
+        result = {
+            "id": "uwenzai-fikra-pro-20b",
+            "object": "chat.completion",
+            "created": 1789000000,
+            "model": "fikra-pro-20b",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "Sawa!"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+        }
+        with service_urls(True), mock.patch.object(
+            AgentProxyService, "execute_request", return_value=result
+        ) as execute:
+            response = self.external.post(
+                "/api/v1/chat/completions",
+                {
+                    **self.payload,
+                    "stream": True,
+                    "stream_options": {"include_usage": True},
+                },
+                format="json",
+            )
+            self.assertEqual(response.status_code, 200, getattr(response, "content", b""))
+            self.assertEqual(response["Content-Type"], "text/event-stream")
+            self.assertIn("Sawa!", _stream_body(response))
+        # Accepted (no 400) — validate_request strips stream_options before
+        # the provider call (asserted in the gateway validate_request tests).
+        execute.assert_called_once()
+
+    def test_tool_calling_round_trip_json_and_sse(self):
+        """Full agent loop: tools in, tool_calls back (JSON + SSE), tool results
+        accepted on the next call. The gateway relays tools; the client executes."""
+        tool = {
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "description": "Read a file from the workspace",
+                "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},
+            },
+        }
+        result = {
+            "id": "uwenzai-deepseek-v4.1-flash",
+            "object": "chat.completion",
+            "created": 1789000000,
+            "model": "deepseek-v4.1-flash",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "read_file", "arguments": '{"path": "package.json"}'},
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+            "usage": {"prompt_tokens": 40, "completion_tokens": 12, "total_tokens": 52},
+        }
+        with service_urls(True), mock.patch.object(
+            AgentProxyService, "execute_request", return_value=result
+        ) as execute:
+            payload = {**self.payload, "tools": [tool], "tool_choice": "auto"}
+            response = self.external.post("/api/v1/chat/completions", payload, format="json")
+            self.assertEqual(response.status_code, 200, response.data)
+            message = response.data["choices"][0]["message"]
+            self.assertEqual(message["tool_calls"][0]["function"]["name"], "read_file")
+            self.assertEqual(response.data["choices"][0]["finish_reason"], "tool_calls")
+            self.assertEqual(execute.call_args.kwargs["params"]["tools"], [tool])
+
+            # SSE form: delta.tool_calls with index, then finish_reason=tool_calls.
+            response = self.external.post("/api/v1/chat/completions", {**payload, "stream": True}, format="json")
+            self.assertEqual(response.status_code, 200, getattr(response, "content", b""))
+            body = _stream_body(response)
+            self.assertIn("tool_calls", body)
+            self.assertIn("call_1", body)
+
+            # The replayed assistant message and tool result validate on retry.
+            follow_up = {
+                **self.payload,
+                "tools": [tool],
+                "messages": [
+                    {"role": "user", "content": "overview of the project"},
+                    {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [result["choices"][0]["message"]["tool_calls"][0]],
+                    },
+                    {"role": "tool", "tool_call_id": "call_1", "content": '{"name": "my-app"}'},
+                ],
+            }
+            response = self.external.post("/api/v1/chat/completions", follow_up, format="json")
+            self.assertEqual(response.status_code, 200, getattr(response, "data", getattr(response, "content", b"")))
+
+    def test_malformed_tools_rejected_before_billing(self):
+        """Malformed tool schemas must 400 during validation, before any
+        reservation or provider call. _execute_locked is the paid path."""
+        with service_urls(True), mock.patch.object(AgentProxyService, "_execute_locked") as paid:
+            response = self.external.post(
+                "/api/v1/chat/completions",
+                {**self.payload, "tools": [{"type": "function", "function": {}}]},
+                format="json",
+            )
+        self.assert_direct_private_response(response, 400)
+        self.assertEqual(response.json()["error"]["status"], "invalid_request")
+        paid.assert_not_called()
         self.assertFalse(BillingReservation.objects.exists())
 
     def test_aliases_preserve_billing_error_http_status_and_cache_contract(self):

@@ -23,6 +23,7 @@ class MistralClient:
         temperature: float = 0.7,
         model: Optional[str] = None,
         reasoning_effort: Optional[str] = None,
+        timeout: float = 60,
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -33,6 +34,9 @@ class MistralClient:
             max_tokens: Maximum tokens to generate.
             temperature: Sampling temperature.
             model: Override default model.
+            timeout: Per-request timeout in seconds. Short, latency-critical
+                callers (e.g. photo moderation, which fails closed) pass a
+                tighter bound than the chat default.
             reasoning_effort: the conversation's Fast/Deep toggle value
                 ("fast"/"deep"). Mapped to Mistral's `reasoning_effort`
                 request parameter via
@@ -89,7 +93,8 @@ class MistralClient:
                 api_url,
                 headers=headers,
                 json=payload,
-                timeout=60,  # Generous timeout for AI generation
+                timeout=timeout,  # Generous default for AI generation;
+                # latency-critical callers (photo moderation) pass their own.
             )
 
             # Raise for HTTP errors (4xx, 5xx)

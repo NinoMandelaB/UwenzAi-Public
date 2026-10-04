@@ -16,6 +16,15 @@ IMAGE_GENERATION_COST = 450
 CHARACTER_PHOTO_OFFER_COST = 395  # discounted: character-initiated photo the user accepts
 BYOK_MESSAGE_PAIR_COST = 5
 
+# A user message with a photo attachment costs the SAME as a text message
+# pair (product decision 2026-10): photo sending is a messaging feature,
+# VLM input tokens for one image are negligible at Flash rates, and a simple
+# price avoids discouraging the core "look at my outfit" use case. The
+# constant is isolated so a future PR can raise it (moderation + storage are
+# real per-photo costs) without touching the reservation flow.
+IMAGE_MESSAGE_PAIR_COST = MESSAGE_PAIR_COST
+IMAGE_BYOK_MESSAGE_PAIR_COST = BYOK_MESSAGE_PAIR_COST
+
 # Open product decision (see PR description): a search-assisted message pair
 # does not currently carry a surcharge. The existing Spark reservation is
 # made *before* the AI call, at a point where it is not yet known whether the

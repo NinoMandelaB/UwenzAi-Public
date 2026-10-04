@@ -22,7 +22,10 @@ class TaskPromptBudgetTests(ReminderRegressionBase, TestCase):
         super().setUp()
         FeaturePreferences.update(self.user, {"reminders": True, "websearch": True})
         self.prompt = [
-            {"role": "system", "content": "Platform rules."},
+            {
+                "role": "system",
+                "content": "Platform rules. === CHARACTER CARD (System) === persona",
+            },
             {"role": "system", "content": "=== SAFETY CHECK (System) ===\nSafety tail."},
             {"role": "user", "content": "THE COMPLETE CURRENT USER TURN"},
         ]
@@ -86,12 +89,30 @@ class TaskPromptBudgetTests(ReminderRegressionBase, TestCase):
             self.assertEqual(budget.call_args.kwargs["model"], config.model_name if config else settings.CORTECS_MODEL)
             self.assertEqual(budget.call_args.kwargs["max_context_tokens"], 10000)
             if config:
-                self.assertEqual(kwargs["messages"][0]["content"], "BYOK CUSTOM SYSTEM")
+                # The override is scoped to the PLATFORM RULES section inside
+                # build_messages; it must never wholesale-replace the assembled
+                # system prompt (the character card must survive it).
+                self.assertEqual(self.build.call_args.kwargs["platform_rules_override"], "BYOK CUSTOM SYSTEM")
+                self.assertIn("CHARACTER CARD", kwargs["messages"][0]["content"])
+            else:
+                self.assertIsNone(self.build.call_args.kwargs["platform_rules_override"])
 
-    def test_oversized_byok_replacement_refunds_without_sending(self):
+    def test_oversized_byok_override_refunds_without_sending(self):
         config = self.byok()
         config.system_prompt = "X" * 20000
         config.save(update_fields=["system_prompt"])
+        # The real builder folds the giant override into the PLATFORM RULES
+        # section of the assembled system prompt; simulate that build result
+        # so the outbound budget guard is exercised end-to-end.
+        self.build.return_value = [
+            {
+                "role": "system",
+                "content": (
+                    "=== PLATFORM RULES (System) ===\n" + "X" * 20000 + "\n=== CHARACTER CARD (System) ===\npersona"
+                ),
+            },
+            *self.prompt[1:],
+        ]
         source = self.source()
         with mock.patch.object(tasks.BYOKService, "chat_completion") as chat:
             self.run_task(source)

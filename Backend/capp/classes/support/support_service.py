@@ -97,6 +97,86 @@ class SupportService:
             logger.exception("Error retrieving ticket")
             return {"status": "fail", "data": "server_error"}
 
+    # ─────────────────────────────────────────────────────────────
+    # Admin-initiated outreach (see capp/views/admin_views.py::admin_message_user)
+    # ─────────────────────────────────────────────────────────────
+    DEFAULT_OUTREACH_TITLE = "Message from the UwenzAi team"
+
+    @classmethod
+    def create_admin_outreach_ticket(
+        cls,
+        admin_user: CustomUser,
+        target_user: CustomUser,
+        message: str,
+        title: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Open a support ticket ON BEHALF OF a user, written by an admin.
+
+        For high-priority safety situations (care events, critical/high
+        severity) an administrator needs to reach the user directly instead
+        of waiting for them to open a ticket. The ticket is created_by the
+        TARGET user, so it lands in their existing Support inbox (unread
+        badge included) and they can reply through the normal flow; the first
+        message's sender is the admin, rendered as the support team.
+
+        Status starts IN_PROGRESS (an admin has already acted, mirroring
+        reply_to_ticket's admin-reply transition) and the ticket is assigned
+        to the sending admin. The durable audit trail is the ticket itself:
+        metadata records who initiated it, and the first message carries the
+        admin as its sender.
+        """
+        try:
+            if not cls._is_admin(admin_user):
+                return {"status": "fail", "data": "permission_denied"}
+            if target_user is None or target_user.is_deleted:
+                return {"status": "fail", "data": "user_not_found"}
+
+            message = (message or "").strip()
+            if not message:
+                return {"status": "fail", "data": "message_required"}
+            title = (title or "").strip() or cls.DEFAULT_OUTREACH_TITLE
+
+            with transaction.atomic():
+                ticket = SupportTicket.objects.create(
+                    title=title,
+                    description=message,
+                    status=SupportTicket.Status.IN_PROGRESS,
+                    priority=SupportTicket.Priority.HIGH,
+                    created_by=target_user,
+                    assigned_to=admin_user,
+                    metadata={
+                        "initiated_by_admin": True,
+                        "initiated_by_admin_id": str(admin_user.user_id),
+                    },
+                )
+                TicketMessage.objects.create(
+                    ticket=ticket,
+                    sender=admin_user,
+                    content=message,
+                    parent=None,
+                )
+                # Mark the ticket read for the sending admin so their own
+                # outreach message does not show up as unread for them.
+                TicketView.objects.update_or_create(
+                    user=admin_user,
+                    ticket=ticket,
+                    defaults={"last_viewed_at": timezone.now()},
+                )
+
+            logger.info(
+                "Admin outreach ticket %s created by %s for %s",
+                ticket.ticket_id,
+                admin_user.username,
+                target_user.username,
+            )
+            return {
+                "status": "success",
+                "data": {"ticket": cls._serialize_ticket(ticket, include_messages=False, user=admin_user)},
+            }
+        except Exception:
+            logger.exception("Error creating admin outreach ticket")
+            return {"status": "fail", "data": "server_error"}
+
     @classmethod
     def list_tickets(cls, user: CustomUser, filters: Optional[Dict] = None) -> Dict[str, Any]:
         try:

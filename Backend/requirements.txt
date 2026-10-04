@@ -16,8 +16,9 @@ amqp==5.3.1
     # via kombu
 annotated-types==0.7.0
     # via pydantic
-anyio==4.13.0
+anyio==4.14.2
     # via
+    #   -r requirements.in
     #   httpx
     #   openai
     #   watchfiles
@@ -153,6 +154,7 @@ httptools==0.7.1
     # via uvicorn
 httpx==0.28.1
     # via
+    #   -r requirements.in
     #   fal-client
     #   openai
 httpx-sse==0.4.3
@@ -255,7 +257,7 @@ pyflakes==3.2.0
     # via
     #   autoflake
     #   flake8
-pyjwt==2.13.0
+pyjwt==2.15.1
     # via
     #   -r requirements.in
     #   djangorestframework-simplejwt
@@ -336,10 +338,14 @@ trafilatura==2.2.0
     # via -r requirements.in
 typing-extensions==4.15.0
     # via
+    #   aiohttp
+    #   aiosignal
+    #   anyio
     #   mistral-common
     #   openai
     #   pydantic
     #   pydantic-core
+    #   referencing
     #   typing-inspection
 typing-inspection==0.4.2
     # via pydantic
@@ -349,7 +355,7 @@ tzlocal==5.3.1
     # via
     #   celery
     #   dateparser
-urllib3==2.7.0
+urllib3==2.8.0
     # via
     #   -r requirements.in
     #   botocore

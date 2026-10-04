@@ -26,8 +26,8 @@ export const subprocessorsEn = {
           rows: [
             [
               "Railway",
-              "Application hosting, PostgreSQL database, Redis cache and background queues, and the S3-compatible bucket that stores uploaded and generated images.",
-              "All account and service data, including your content. Stored data is encrypted at rest at the storage layer; image objects are private and reachable only through short-lived signed links.",
+              "Application hosting, PostgreSQL database, Redis cache and background queues, and the S3-compatible bucket that stores uploaded and generated images and the photos you send in chat.",
+              "All account and service data, including your content. Stored data is encrypted at rest at the storage layer; image objects are private and reachable only through short-lived signed links. Photo files you send in chat are additionally encrypted with our own keys before they reach the bucket, so the storage provider holds them as ciphertext.",
             ],
           ],
         },
@@ -35,7 +35,7 @@ export const subprocessorsEn = {
     },
     {
       id: "2",
-      heading: "2. AI text generation and embeddings",
+      heading: "2. AI chat replies and embeddings",
       blocks: [
         {
           type: "table",
@@ -43,18 +43,18 @@ export const subprocessorsEn = {
           rows: [
             [
               "Cortecs",
-              "Primary provider for both kinds of AI text processing we do: generating chat replies, and creating the numeric embeddings that power character memory.",
-              "For replies, the conversation context: your messages, the character definition, and relevant summaries and memory notes. For embeddings, the text of the memory note being stored or the text being matched against it. No payment data.",
+              "Primary provider for both kinds of AI text processing we do: generating chat replies, and creating the numeric embeddings that power character memory. When a chat message includes a photo and the active model can view images, the photo is sent to Cortecs as part of the reply request.",
+              "For replies, the conversation context: your messages, the photos you send when the active model can view them, the character definition, and relevant summaries and memory notes. For embeddings, the text of the memory note being stored or the text being matched against it. No payment data.",
             ],
             [
               "Mistral AI",
-              "Fallback provider for chat replies and for embeddings, used when Cortecs fails or is not configured. Also called directly for background text tasks: extracting memory notes, writing conversation summaries, drafting character persona details, and judging conversation tone.",
-              "The same conversation context and memory note text as above, depending on which task is running.",
+              "Fallback provider for chat replies and for embeddings, used when Cortecs fails or is not configured. Also called directly for background text tasks: extracting memory notes, writing conversation summaries, drafting character persona details, and judging conversation tone. Also our current provider for the automated child-safety screening of photos sent in chat: a downscaled, metadata-free copy of the photo is sent for classification before the photo is stored. Only the image is sent for that screening — never your message text.",
+              "The same conversation context and memory note text as above, depending on which task is running, and — for photo screening — the downscaled image copy described here.",
             ],
             [
               "Your own AI provider (Bring Your Own Key)",
-              "Used for chat replies instead of the providers above only if you configure your own endpoint and API key. Embeddings and the background tasks continue to use the providers above.",
-              "Your conversation context is sent to the endpoint you chose. That provider’s own terms apply and we have no control over its retention.",
+              "Used for chat replies instead of the providers above only if you configure your own endpoint and API key. When your configured model can view images, photos you send are included in the requests to your endpoint. Embeddings and the background tasks continue to use the providers above, and photos you send are still screened by us before storage (see the Mistral AI row).",
+              "Your conversation context — including photos you send, when your model can view them — is sent to the endpoint you chose. That provider’s own terms apply and we have no control over its retention.",
             ],
           ],
         },
@@ -169,7 +169,7 @@ export const subprocessorsEn = {
         },
         {
           type: "p",
-          text: "The initial gateway provider set is Cortecs, Mistral AI, Fikra, Inceptron, AKI.IO and OVHcloud. A provider is available only when configured and offered in the gateway catalog. Depending on the selected provider/model, the provider processing your request receives your submitted messages, any history included in the request, and the settings needed to produce the reply. Listing a provider here does not mean every request is sent to that provider.",
+          text: "The initial gateway provider set is Cortecs, Mistral AI, Fikra, Inceptron, AKI.IO, OVHcloud and TensorX. A provider is available only when configured and offered in the gateway catalog. Depending on the selected provider/model, the provider processing your request receives your submitted messages, any history included in the request, and the settings needed to produce the reply. Listing a provider here does not mean every request is sent to that provider.",
         },
         {
           type: "p",
@@ -192,6 +192,20 @@ export const subprocessorsEn = {
         {
           type: "p",
           text: "Questions about any provider on this list: [info@uwenzai.com](mailto:info@uwenzai.com).",
+        },
+      ],
+    },
+    {
+      id: "10",
+      heading: "10. Scope of this list",
+      blocks: [
+        {
+          type: "p",
+          text: "Sections 1 to 7 describe the providers that operate the Service as a whole, including the companion app and the account, search and payment features around it. Section 8 describes the providers behind the separate UwenzAi-Dev developer offering. A provider added to the UwenzAi-Dev gateway is not thereby used for the companion app.",
+        },
+        {
+          type: "p",
+          text: "For the companion app, the AI providers that receive conversation content — your messages, character definitions, memory notes and the numeric embeddings that power character memory — are based in the European Union: Cortecs in Austria and Mistral AI in France. Companion conversation content that we send on your behalf is therefore processed only by EU-based AI providers; the sole exception is a Bring Your Own Key endpoint, if you configure one yourself. Providers headquartered outside the EU never receive companion conversation content: the non-EU AI provider Fikra (Kenya) is used exclusively for the UwenzAi-Dev developer gateway described in section 8, and non-EU providers that support other functions (for example image generation, payments, sign-in or email delivery) operate under the transfer safeguards described in section 11 of the [Privacy Policy](/privacy).",
         },
       ],
     },

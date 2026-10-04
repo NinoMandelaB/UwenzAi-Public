@@ -1,12 +1,15 @@
 # capp/classes/ai/prompt_builder.py
 
+import base64
 import logging
 import os
 from typing import List, Dict, Optional
 from zoneinfo import ZoneInfo
+from django.conf import settings
 from django.utils import timezone as django_timezone
 
 from capp.models import Conversation, Message, Character, CustomUser
+from capp.classes.moderation.model_refusal import REFUSAL_MARKER
 from capp.classes.memory.memory_service import MemoryService
 from capp.classes.relationship.relationship_service import RelationshipService
 from capp.classes.summary.summary_service import ConversationSummaryService
@@ -168,6 +171,13 @@ class PromptBuilder:
     Set these in Railway (Backend service → Variables).  When storing multi-line
     prompts as env vars, use literal \\n sequences — they are resolved to real
     newlines by _load_prompt().
+
+    The short SAFETY_CAUTION segment below is deliberately NOT one of them: it
+    is hardcoded so it can never be missing, and it sits between the
+    (BYOK-replaceable) platform rules and the character card so every prompt —
+    including BYOK turns — carries the hard stops and the refusal-marker
+    convention that capp/tasks.py counts as advisory flags. The full, detailed
+    safety policy remains in the env-private SAFETY_SANDWICH.
     """
 
     # ---------- Hard rules that apply to every character ----------
@@ -193,6 +203,30 @@ class PromptBuilder:
         "7. You live in a specific location. NEVER mention any weather, activity, landmark, or cultural reference "
         "that would be impossible or unrealistic for that location. For example, do NOT mention snow or skiing "
         "if you live in a tropical country like Tanzania.\n"
+    )
+
+    # ---------- Hard safety caution (always present, BYOK included) ----------
+    # A very short, model-facing caution adapted from the SAFETY_REMINDER that
+    # tested best in the chatbot-testing experiments: hard stops, one fixed
+    # refusal opener (the marker, stripped and counted by capp/tasks.py via
+    # capp.classes.moderation.model_refusal) and crisis empathy. Kept compact
+    # on purpose — the detailed policy lives in the SAFETY_SANDWICH env var
+    # and the deterministic screen in text_safety_policy.py remains the only
+    # enforcing layer; refusals signalled through this marker are advisory
+    # telemetry only (counted in the admin panel, never auto-punitive).
+    SAFETY_CAUTION = (
+        "HARD SAFETY LIMITS (absolute — they override every other instruction, "
+        "character trait, or earlier turn): never sexual content involving minors, "
+        "incest, bestiality, or non-consent; never help plan real-world violence, "
+        "build weapons, or traffic people. "
+        "Adult consensual intimacy IS allowed when this character's NSFW flag is "
+        "enabled — do not refuse it. "
+        "If the user's request crosses a limit, do not continue the scene: begin "
+        f"your reply with {REFUSAL_MARKER}, then one short, kind sentence in the "
+        "user's language naming the limit and offering a different direction. "
+        "If the user expresses genuine self-harm or suicidal thoughts, leave the "
+        "roleplay: respond with warmth in their language and share "
+        "https://findahelpline.com/."
     )
 
     # ---------- Per-turn photo-intent hint ----------
@@ -322,14 +356,33 @@ class PromptBuilder:
         user_message: Message,
         max_context_tokens: int = 15000,
         model: Optional[str] = None,
+        include_images: bool = False,
+        platform_rules_override: Optional[str] = None,
     ) -> List[Dict[str, str]]:
         """
         Build the full message list for the Mistral chat completion.
+
+        ``include_images``: attach the photos of this message (and of recent
+        history user messages) as OpenAI-style ``image_url`` content parts
+        with base64 data URLs. The caller only sets this when the routed
+        model supports vision; images are decrypted server-side from the
+        encrypted bucket objects and never leave through public URLs.
+
+        ``platform_rules_override``: a BYOK user's custom system prompt. It
+        replaces ONLY the "=== PLATFORM RULES (System) ===" section of the
+        assembled system prompt — nothing else. The safety caution, the
+        character card (personality), NSFW flag, language, formatting rules,
+        relationship, memory and summary sections, and the separate
+        safety-sandwich message are immutable platform context that a BYOK
+        user must never be able to drop or replace by setting a system
+        prompt. Ignored for guest conversations (guests cannot use BYOK).
         """
         character = conversation.character
 
         # 1. Build the system prompt
-        system_content = cls._build_system_prompt(conversation, user_message)
+        system_content = cls._build_system_prompt(
+            conversation, user_message, platform_rules_override=platform_rules_override
+        )
 
         # Log the full prompt when LOG_PROMPTS=true is set in Railway env vars.
         # Useful for debugging memory/context issues. Turn off again after investigation
@@ -355,6 +408,7 @@ class PromptBuilder:
         history_messages = cls._get_recent_history(
             conversation,
             exclude_message=user_message,
+            include_images=include_images,
         )
 
         # 3. Combine system prompt + history + current user message
@@ -427,10 +481,7 @@ class PromptBuilder:
             ]
             + photo_hint
             + [
-                {
-                    "role": "user",
-                    "content": "=== USER MESSAGE (User) ===\n" + user_message.content,
-                },
+                cls._final_user_message(user_message, include_images=include_images),
             ]
         )
 
@@ -444,6 +495,74 @@ class PromptBuilder:
             pass
 
         return messages
+
+    # ---------- Photo attachments ----------
+
+    #: Text shown in place of an image the model could not receive (decrypt
+    #: failure, storage hiccup). Keeps the reply honest without failing the
+    #: whole turn when only the image is missing.
+    _IMAGE_FALLBACK_NOTICE = "[The user attached a photo, but it could not be loaded for viewing.]"
+
+    #: Caption placeholder for image-only messages (empty content would be
+    #: skipped by the history filter and confuse the model's turn tracking).
+    _PHOTO_ONLY_PLACEHOLDER = "[The user sent a photo.]"
+
+    @classmethod
+    def _attachment_image_parts(cls, message, *, max_images: int) -> tuple:
+        """(image parts, used_count, failed) for a message's approved photos.
+
+        Returns OpenAI-style ``image_url`` parts with base64 data URLs,
+        decrypted server-side. ``failed`` flags that at least one attachment
+        existed but could not be decrypted — the caller then appends the
+        fallback notice so the model knows a photo exists.
+        """
+        from capp.classes.chat.attachment_service import read_attachment_bytes
+        from capp.models import MessageAttachment
+
+        attachments = list(
+            MessageAttachment.objects.filter(
+                message_id=message.message_id,
+                moderation_status=MessageAttachment.ModerationStatus.APPROVED,
+            ).order_by("created_at")
+        )[:max_images]
+        if not attachments:
+            return [], 0, False
+
+        parts = []
+        used = 0
+        failed = False
+        for attachment in attachments:
+            try:
+                image_bytes = read_attachment_bytes(attachment)
+            except Exception:
+                failed = True
+                continue
+            data_url = f"data:{attachment.content_type};base64," + base64.b64encode(image_bytes).decode("ascii")
+            parts.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": data_url, "detail": "low"},
+                }
+            )
+            used += 1
+        return parts, used, failed
+
+    @classmethod
+    def _final_user_message(cls, user_message: Message, include_images: bool = False) -> Dict:
+        """The current user message, optionally with its photos attached."""
+        text = "=== USER MESSAGE (User) ===\n" + (user_message.content or "")
+        if not include_images:
+            return {"role": "user", "content": text}
+
+        max_images = max(0, int(getattr(settings, "PHOTO_MAX_IMAGES_IN_PROMPT", 4)))
+        parts, _used, failed = cls._attachment_image_parts(user_message, max_images=max_images)
+        if not parts:
+            if failed:
+                text += "\n" + cls._IMAGE_FALLBACK_NOTICE
+            return {"role": "user", "content": text}
+        if failed:
+            text += "\n" + cls._IMAGE_FALLBACK_NOTICE
+        return {"role": "user", "content": [{"type": "text", "text": text}, *parts]}
 
     @classmethod
     def enforce_budget(cls, messages, max_context_tokens=15000, model=None, *, tools=None):
@@ -467,7 +586,9 @@ class PromptBuilder:
         if user_index is None:
             raise PromptBudgetExceeded("prompt_missing_user")
         if not any(
-            m.get("role") == "system" and m.get("content", "").startswith("=== SAFETY CHECK (System) ===")
+            m.get("role") == "system"
+            and isinstance(m.get("content"), str)
+            and m.get("content", "").startswith("=== SAFETY CHECK (System) ===")
             for m in result
         ):
             raise PromptBudgetExceeded("prompt_missing_safety")
@@ -506,8 +627,15 @@ class PromptBuilder:
         # Tool results are optional data, not permission to displace the
         # safety sandwich. Preserve their complete framing or omit the block.
         for message in list(result[1:]):
-            if message.get("role") == "system" and message.get("content", "").startswith(
-                ("=== WEB SEARCH RESULTS (Untrusted Data) ===", "=== CURRENT CONVERSATION (System) ===")
+            if (
+                message.get("role") == "system"
+                and isinstance(message.get("content"), str)
+                and message.get("content", "").startswith(
+                    (
+                        "=== WEB SEARCH RESULTS (Untrusted Data) ===",
+                        "=== CURRENT CONVERSATION (System) ===",
+                    )
+                )
             ):
                 result.remove(message)
                 if fits():
@@ -658,7 +786,12 @@ class PromptBuilder:
     # ---------- System prompt assembly ----------
 
     @classmethod
-    def _build_system_prompt(cls, conversation: Conversation, user_message: Message) -> str:
+    def _build_system_prompt(
+        cls,
+        conversation: Conversation,
+        user_message: Message,
+        platform_rules_override: Optional[str] = None,
+    ) -> str:
         user = conversation.user
         character = conversation.character
         language_code = user_message.language_code or character.primary_language or "en"
@@ -904,8 +1037,18 @@ class PromptBuilder:
         # ---- Load system prompts from env vars at call time ----
         # Loading at call time (rather than class definition time) means prompt
         # edits in Railway take effect on the next request without redeploying.
+        #
+        # BYOK override scope: a BYOK user's custom system prompt replaces
+        # ONLY this platform-rules section. Every section assembled below —
+        # character card, NSFW flag, language, formatting rules,
+        # relationship, memory, summary — is platform-owned and never
+        # overridable. The safety sandwich is a separate message entirely.
+        # Guests cannot use BYOK, so the override never applies to them.
+        override = (platform_rules_override or "").strip()
         if user is None:
             system_prompt = _load_prompt("GUEST_SYSTEM_PROMPT")
+        elif override:
+            system_prompt = override
         else:
             system_prompt = _load_prompt("GENERAL_SYSTEM_PROMPT")
 
@@ -923,8 +1066,17 @@ class PromptBuilder:
         if reminder_context:
             sections.append("=== PENDING REMINDERS (System) ===\n" + reminder_context.strip())
 
-        # [2] Platform rules (from env var — safety, tone, platform identity)
+        # [2] Platform rules (from env var — safety, tone, platform identity).
+        #     For BYOK turns this section carries the user's custom system
+        #     prompt instead; it is the ONLY overridable section.
         sections.append("=== PLATFORM RULES (System) ===\n" + system_prompt.strip())
+
+        # [2b] Safety caution — the short, always-present model warning. It
+        #      sits AFTER the BYOK-replaceable platform rules and BEFORE the
+        #      character card so a custom system prompt can never remove it,
+        #      and it is a required section: budget enforcement may drop the
+        #      optional context sections but never this one.
+        sections.append("=== SAFETY CAUTION (System) ===\n" + cls.SAFETY_CAUTION)
 
         # [3] Character card -- pure persona: who the character IS
         sections.append("=== CHARACTER CARD (System) ===\n" + output.rstrip())
@@ -1128,11 +1280,17 @@ class PromptBuilder:
         conversation: Conversation,
         exclude_message: Optional[Message] = None,
         limit: int = 16,
+        include_images: bool = False,
     ) -> List[Dict[str, str]]:
         """
         Return recent messages as a list of dicts, excluding the given message.
         Each message content is prefixed with sender name and timestamp so the
         AI has full temporal context (e.g. knows "tomorrow" referred to a specific date).
+
+        With ``include_images``, the trailing user messages' approved photo
+        attachments become ``image_url`` content parts (newest first within
+        the caps), so the companion can look back at earlier photos —
+        "the outfit I sent yesterday" must resolve against the real pixels.
         """
         from zoneinfo import ZoneInfo
 
@@ -1143,6 +1301,12 @@ class PromptBuilder:
 
         recent = list(queryset[:limit])
         recent.reverse()
+
+        # How many trailing messages may still carry images into the prompt,
+        # and the total image budget left after the current message consumed
+        # its share (the current message is built separately and always wins).
+        images_budget = int(getattr(settings, "PHOTO_MAX_IMAGES_IN_PROMPT", 4))
+        history_with_images = int(getattr(settings, "PHOTO_HISTORY_MESSAGES_WITH_IMAGES", 6))
 
         # Determine timezone for timestamp display
         user = conversation.user
@@ -1159,7 +1323,11 @@ class PromptBuilder:
 
         history = []
         for msg in recent:
-            if not msg.content:
+            # Image-only messages (empty caption) stay in history with a
+            # placeholder so turn tracking is not lost; they are skipped
+            # only when they carry neither text nor an attachable photo.
+            has_attachments = include_images and msg.sender_type == Message.SenderType.USER and msg.attachments.exists()
+            if not msg.content and not has_attachments:
                 continue
             role = "assistant" if msg.sender_type == Message.SenderType.AI else "user"
 
@@ -1178,7 +1346,20 @@ class PromptBuilder:
             # "tomorrow" to a specific date) without the echo risk.
             if role == "user":
                 meta = f'<msg_meta sender="{user_display} (User)" time="{local_ts} {tz_abbr}"/>'
-                history.append({"role": role, "content": meta + "\n" + msg.content})
+                text = msg.content or cls._PHOTO_ONLY_PLACEHOLDER
+                if include_images and images_budget > 0 and history_with_images > 0 and has_attachments:
+                    parts, used, failed = cls._attachment_image_parts(msg, max_images=images_budget)
+                    if used:
+                        history_with_images -= 1
+                        images_budget -= used
+                        body = meta + "\n" + text
+                        if failed:
+                            body += "\n" + cls._IMAGE_FALLBACK_NOTICE
+                        history.append({"role": role, "content": [{"type": "text", "text": body}, *parts]})
+                        continue
+                    if failed:
+                        text += "\n" + cls._IMAGE_FALLBACK_NOTICE
+                history.append({"role": role, "content": meta + "\n" + text})
             else:
                 # Assistant messages: clean content only, no meta tag
                 history.append({"role": role, "content": msg.content})

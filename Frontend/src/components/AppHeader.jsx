@@ -21,6 +21,7 @@ import { useAuth } from "../context/AuthContext";
 import { useLanguage } from "../context/LanguageContext";
 import { useSparkPoolBalance } from "../hooks/useSparkPoolBalance";
 import { getUnreadCount } from "../services/supportService";
+import uwenzaiLogo from "../assets/images/logo.png";
 
 export default function AppHeader({ compact = false, className = "" }) {
   const navigate = useNavigate();
@@ -130,9 +131,7 @@ export default function AppHeader({ compact = false, className = "" }) {
     >
       <div className="mx-auto flex items-center justify-between px-4 py-4 max-w-md lg:max-w-none">
         <div className="flex items-center gap-4">
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-tr from-indigo-600 to-violet-500 text-white shadow-lg">
-            <Sparkles size={24} fill="currentColor" />
-          </div>
+          <img src={uwenzaiLogo} alt="UwenzAi" className="h-12 w-auto" />
           <div className="flex flex-col">
             <h1 className="theme-text mb-1 text-[16px] leading-none font-black tracking-tight">
               {t("common.alphaWarning")}
