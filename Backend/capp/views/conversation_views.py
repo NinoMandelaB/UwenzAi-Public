@@ -1140,12 +1140,13 @@ def api_generate_chat_image(request, conversation_id):
             status=400,
         )
 
-    # Prohibited-subject policy. Adult explicit prompts are allowed; images
-    # involving children, animals or deceased people are not. Screened here —
-    # before any message is stored, any task is dispatched, or any spark is
-    # spent — across the user's prompt AND the character metadata that also
-    # reaches the image provider. The service and the provider helpers re-assert
-    # the same policy so a direct API or Celery call cannot bypass it.
+    # Prohibited-subject policy. Adult explicit prompts are allowed; images of
+    # children or deceased people, and sexual content involving animals, are
+    # not. Screened here — before any message is stored, any task is
+    # dispatched, or any spark is spent — across the user's prompt AND the
+    # character metadata that also reaches the image provider. The service and
+    # the provider helpers re-assert the same policy so a direct API or Celery
+    # call cannot bypass it.
     violation = ImagePromptPolicy.find_violation(
         prompt,
         *CharacterService.image_policy_texts(conversation.character),

@@ -115,6 +115,12 @@ export const revokeAgentKey = (keyId, options) =>
     ...options,
     method: "DELETE",
   });
+export const updateAgentKeyBudget = (keyId, budget, options) =>
+  request(`/keys/${encodeURIComponent(keyId)}/budget/`, {
+    ...options,
+    method: "PATCH",
+    body: { monthly_spark_budget: budget },
+  });
 export const getAgentUsage = (options) => request("/usage/", options);
 export const getConsent = (options) => request("/consent/", options);
 export const confirmConsent = (options) =>

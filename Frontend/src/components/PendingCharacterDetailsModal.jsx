@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { useLanguage } from "../context/LanguageContext";
 import placeholderAvatar from "../assets/images/avatars/placeholder.png";
+import { CLOTHING_LABELS_EN } from "../config/clothingStyles";
 
 function DetailRow({ label, value, icon: Icon }) {
   if (!value && value !== 0) return null;
@@ -175,16 +176,7 @@ const RELATIONSHIP_DISPLAY = {
   flirty: "Flirty",
   romantic: "Romantic",
 };
-const CLOTHING_DISPLAY = {
-  casual: "Casual",
-  formal: "Formal",
-  sporty: "Sporty",
-  elegant: "Elegant",
-  streetwear: "Streetwear",
-  bohemian: "Bohemian",
-  gothic: "Gothic",
-  preppy: "Preppy",
-};
+const CLOTHING_DISPLAY = CLOTHING_LABELS_EN;
 
 export default function PendingCharacterDetailsModal({
   isOpen,

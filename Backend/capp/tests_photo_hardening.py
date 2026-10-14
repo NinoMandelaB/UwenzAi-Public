@@ -155,10 +155,8 @@ class PhotoBlockLedgerTests(TestCase):
             status=Conversation.StatusChoices.ACTIVE,
         )
 
-    def _block(self, sha256="a" * 64):
-        blocked = photo_moderation.ModerationDecision(
-            action="block", provider="mistral", categories=["csam_classifier"]
-        )
+    def _block(self, sha256="a" * 64, categories=("csam_classifier",)):
+        blocked = photo_moderation.ModerationDecision(action="block", provider="mistral", categories=list(categories))
         attachment_service.record_screening_failure(
             owner=self.user,
             conversation=self.conversation,
@@ -297,6 +295,42 @@ class PhotoBlockLedgerTests(TestCase):
         summary = response.json()["data"]["summary"]
         self.assertEqual(summary["photo_block_count"], 1)
         self.assertEqual(summary["category_counts"].get("photo_child_safety"), 1)
+
+    @override_settings(SAFETY_LEDGER_MODE="shadow")
+    def test_gore_death_and_bestiality_uploads_get_their_own_category(self):
+        """Audit H6: a non-child photo block is not recorded as child safety."""
+        for sha256, category, expected in (
+            ("1" * 64, "gore", "photo_gore"),
+            ("2" * 64, "death", "photo_death"),
+            ("3" * 64, "bestiality", "photo_bestiality"),
+        ):
+            self._block(sha256=sha256, categories=[category])
+            self.assertEqual(SafetyEvent.objects.get(fingerprint=sha256).category, expected)
+        self.assertFalse(SafetyEvent.objects.filter(category="photo_child_safety").exists())
+
+    @override_settings(SAFETY_LEDGER_MODE="shadow")
+    def test_child_safety_wins_when_a_photo_is_blocked_for_several_reasons(self):
+        self._block(categories=["gore", "minor_nudity"])
+        self.assertEqual(SafetyEvent.objects.get().category, "photo_child_safety")
+
+    @override_settings(SAFETY_LEDGER_MODE="enforce")
+    def test_admin_photo_block_count_includes_every_block_reason(self):
+        from capp.models import SparkPool
+
+        SparkPool.objects.create(user=self.user, sparks=100, token_balance=0, is_active=True)
+        admin = _make_user("photoblockadmin2", email="photoblockadmin2@example.com", verified=True, is_staff=True)
+        self._block(sha256="1" * 64)
+        self._block(sha256="2" * 64, categories=["death"])
+        client = Client()
+        access = str(RefreshToken.for_user(admin).access_token)
+        response = client.get(
+            f"/api/v1/admin/users/{self.user.user_id}/safety/",
+            HTTP_AUTHORIZATION=f"Bearer {access}",
+        )
+        self.assertEqual(response.status_code, 200)
+        summary = response.json()["data"]["summary"]
+        self.assertEqual(summary["photo_block_count"], 2)
+        self.assertEqual(summary["category_counts"].get("photo_death"), 1)
 
 
 class PhotoClientConfigTests(TestCase):

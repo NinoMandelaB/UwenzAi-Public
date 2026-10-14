@@ -1,6 +1,10 @@
 import { useWizard } from "../../context/WizardContext";
 import { useLanguage } from "../../context/LanguageContext";
 import PageCard from "../PageCard";
+import {
+  EVERYDAY_CLOTHING_STYLES,
+  TRADITIONAL_CLOTHING_STYLES,
+} from "../../config/clothingStyles";
 
 const RELATIONSHIP_STYLES = [
   {
@@ -47,16 +51,41 @@ const RELATIONSHIP_STYLES = [
   },
 ];
 
-const CLOTHING_STYLES = [
-  { value: "casual", labelKey: "wizard.clothingCasual", emoji: "👕" },
-  { value: "formal", labelKey: "wizard.clothingFormal", emoji: "👔" },
-  { value: "sporty", labelKey: "wizard.clothingSporty", emoji: "👟" },
-  { value: "elegant", labelKey: "wizard.clothingElegant", emoji: "👗" },
-  { value: "streetwear", labelKey: "wizard.clothingStreetwear", emoji: "🧢" },
-  { value: "bohemian", labelKey: "wizard.clothingBohemian", emoji: "🌸" },
-  { value: "gothic", labelKey: "wizard.clothingGothic", emoji: "🦇" },
-  { value: "preppy", labelKey: "wizard.clothingPreppy", emoji: "📚" },
-];
+function ClothingStyleGrid({ styles, selected, onSelect, t }) {
+  return (
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      {styles.map((style) => {
+        const isSelected = selected === style.value;
+        return (
+          <button
+            key={style.value}
+            type="button"
+            onClick={() => onSelect(style.value)}
+            className="flex flex-col items-center gap-2 rounded-xl border p-4 transition hover:border-cyan-400/50"
+            style={{
+              borderColor: isSelected
+                ? "var(--color-accent)"
+                : "var(--color-border)",
+              backgroundColor: isSelected
+                ? "var(--color-accent-soft)"
+                : "var(--color-card)",
+            }}
+          >
+            <span className="text-2xl">{style.emoji}</span>
+            <span
+              className="text-center text-sm font-medium"
+              style={{
+                color: isSelected ? "var(--color-accent)" : "var(--color-text)",
+              }}
+            >
+              {t(style.labelKey)}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 export default function StepRelationship() {
   const { state, updateState } = useWizard();
@@ -138,44 +167,26 @@ export default function StepRelationship() {
         </div>
       </div>
 
-      {/* Clothing Style */}
+      {/* Clothing Style — everyday styles, then traditional East African ones */}
       <div className="space-y-3">
         <label className="text-sm font-medium theme-text">
           {t("wizard.clothingStyle")}
         </label>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          {CLOTHING_STYLES.map((style) => {
-            const isSelected = state.clothing_style === style.value;
-            return (
-              <button
-                key={style.value}
-                type="button"
-                onClick={() => updateState({ clothing_style: style.value })}
-                className="flex flex-col items-center gap-2 rounded-xl border p-4 transition hover:border-cyan-400/50"
-                style={{
-                  borderColor: isSelected
-                    ? "var(--color-accent)"
-                    : "var(--color-border)",
-                  backgroundColor: isSelected
-                    ? "var(--color-accent-soft)"
-                    : "var(--color-card)",
-                }}
-              >
-                <span className="text-2xl">{style.emoji}</span>
-                <span
-                  className="text-sm font-medium"
-                  style={{
-                    color: isSelected
-                      ? "var(--color-accent)"
-                      : "var(--color-text)",
-                  }}
-                >
-                  {t(style.labelKey)}
-                </span>
-              </button>
-            );
-          })}
-        </div>
+        <ClothingStyleGrid
+          styles={EVERYDAY_CLOTHING_STYLES}
+          selected={state.clothing_style}
+          onSelect={(value) => updateState({ clothing_style: value })}
+          t={t}
+        />
+        <p className="pt-2 text-xs font-medium uppercase tracking-wide theme-text-muted">
+          {t("wizard.clothingGroupTraditional")}
+        </p>
+        <ClothingStyleGrid
+          styles={TRADITIONAL_CLOTHING_STYLES}
+          selected={state.clothing_style}
+          onSelect={(value) => updateState({ clothing_style: value })}
+          t={t}
+        />
       </div>
     </PageCard>
   );

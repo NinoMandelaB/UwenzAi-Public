@@ -8,6 +8,7 @@ import logging
 from datetime import date
 from typing import Any
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.db import models
@@ -17,6 +18,7 @@ from capp.models import AgentAPIKey, AgentUsageLog, CustomUser, BillingReservati
 from capp.classes.agent_gateway.auth import generate_api_key, hash_api_key, get_key_hint
 
 logger = logging.getLogger(__name__)
+
 
 User = get_user_model()
 
@@ -32,6 +34,27 @@ class AgentKeyService:
     - Getting key details
     - Checking key budgets
     """
+
+    @staticmethod
+    def parse_monthly_budget(raw: Any) -> tuple[int | None, str | None]:
+        """Validate a monthly_spark_budget value (shared by create and budget update).
+
+        Returns ``(budget, error)``: ``budget`` is None for no limit (either
+        the value was omitted or null was passed explicitly), ``error`` is a
+        human-readable message when the value is invalid.
+        """
+        if raw is None:
+            return None, None
+        if isinstance(raw, bool) or not isinstance(raw, (int, str)):
+            return None, "monthly_spark_budget must be an integer."
+        try:
+            budget = int(raw)
+        except (ValueError, TypeError):
+            return None, "monthly_spark_budget must be an integer."
+        max_budget = getattr(settings, "AGENT_KEY_MAX_MONTHLY_BUDGET", 1_000_000)
+        if budget < 1 or budget > max_budget:
+            return None, f"monthly_spark_budget must be between 1 and {max_budget} sparks."
+        return budget, None
 
     @staticmethod
     def create_key(
@@ -122,6 +145,7 @@ class AgentKeyService:
                     "expires_at": key.expires_at.isoformat() if key.expires_at else None,
                     "monthly_spark_budget": key.monthly_spark_budget,
                     "is_expired": key.is_expired(),
+                    "revoked_at": key.revoked_at.isoformat() if key.revoked_at else None,
                 }
             )
 
@@ -164,7 +188,11 @@ class AgentKeyService:
             return False
 
         key.is_active = False
-        key.save(update_fields=["is_active", "updated_at"])
+        # Keep the first revocation timestamp: the retention task measures
+        # from it, and repeated revoke calls must not extend a key's life.
+        if key.revoked_at is None:
+            key.revoked_at = timezone.now()
+        key.save(update_fields=["is_active", "revoked_at", "updated_at"])
 
         logger.info(
             "Agent Gateway: revoked key %s for user %s",
@@ -189,15 +217,15 @@ class AgentKeyService:
         if key.monthly_spark_budget is None:
             return True  # No budget limit
 
-        # Calculate sparks used this month
-        today = timezone.now().date()
-        first_of_month = date(today.year, today.month, 1)
+        # Calculate sparks used this month (timezone-aware month start;
+        # naive datetimes trigger RuntimeWarnings against the aware column)
+        from capp.classes.agent_gateway.usage_service import month_start
 
         # Get usage for this key this month
         usage = (
             AgentUsageLog.objects.filter(
                 key=key,
-                created_at__gte=first_of_month,
+                created_at__gte=month_start(),
             ).aggregate(
                 total=models.Sum("sparks_charged")
             )["total"]

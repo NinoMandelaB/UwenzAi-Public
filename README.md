@@ -7,6 +7,14 @@
 
 ---
 
+> **No commercial use — in any way.**
+> This repository is published for review, learning and other non-commercial use only. You may not use this code, or anything built from it, for commercial purposes in any form: no selling or licensing it, no hosting it as a paid, subscription or ad-supported service, no using it to provide paid or monetized services to others, and no building a product that competes with or replicates UwenzAi. The only way to use it commercially is a separate written agreement with UwenzAi Limited. The binding terms, including the conversion of each version to AGPL-3.0 seven years after its release, are in the [`LICENSE`](./LICENSE).
+>
+> **Hakuna matumizi ya kibiashara — kwa njia yoyote ile.**
+> Hazina hii imechapishwa kwa ukaguzi, kujifunza na matumizi mengine yasiyo ya kibiashara pekee. Huruhusiwi kutumia msimbo huu, wala chochote kilichojengwa kutokana nao, kwa madhumuni ya kibiashara kwa namna yoyote: huruhusiwi kuuuza au kuutolea leseni, kuuendesha kama huduma ya kulipia, ya usajili au inayotegemea matangazo, kuutumia kutoa huduma za kulipia au zenye faida kwa wengine, wala kujenga bidhaa inayoshindana na UwenzAi au kuiga huduma zake. Njia pekee ya kuutumia kibiashara ni mkataba tofauti wa maandishi na UwenzAi Limited. Masharti yanayofunga, pamoja na kubadilika kwa kila toleo kuwa AGPL-3.0 miaka saba baada ya kutolewa kwake, yamo kwenye [`LICENSE`](./LICENSE).
+
+---
+
 <a id="english"></a>
 ## English
 
@@ -24,6 +32,7 @@ The platform is built and maintained by **UwenzAi Limited**, based in Nairobi, K
 - **Agentic reminders** — characters can schedule, edit and deliver reminders themselves through a `create_reminder` tool, with a Celery Beat delivery pipeline and per-user limits.
 - **In-chat memory editor** — review and edit what a character remembers about you, directly from the chat.
 - **Photo messages (opt-in)** — users can attach a photo to a message when the character runs on a vision-capable model. Photos have their metadata stripped, are screened before they are stored (uploads are refused when no screening provider is configured), are encrypted per photo at the application level, and are served through short-lived signed links. The feature is disabled by default (`PHOTO_UPLOADS_ENABLED`).
+- **Screening of AI-generated images** — every generated character image (avatar and gallery) runs through the same fail-closed screening as uploaded photos before it is stored or shown. A blocked image or a screening outage is refused with a full refund, and repeated blocks become visible to administrator review. The screening checks for nudity or sexual content involving minors, sexual content involving animals, gore or extreme harm (including cruelty to animals), and dead or dying people; food, fishing and hunting scenes are allowed.
 - **Advanced feature toggles** — per-user, backend-enforced switches for optional chat features (deep thinking, web search, proactive messages), default off.
 - **UwenzAi-Dev (Agent Gateway)** — an OpenAI-compatible inference API for developers: mint API keys (shown once, stored as verification hashes), optionally cap each key with a monthly Sparks budget, and call multiple configurable providers with automatic routing to the cheapest provider, all metered through the same Sparks balance with scoped idempotency for usage accounting. Bilingual developer documentation ships with the frontend, and the gateway is explicitly experimental.
 - **Multi-provider AI backend** — both chat generation and memory embeddings are routed through Cortecs first, with automatic fallback to Mistral, keeping the platform resilient to any single provider's downtime.
@@ -35,6 +44,11 @@ The platform is built and maintained by **UwenzAi Limited**, based in Nairobi, K
 - **Trust & safety** — message/content moderation, character review workflow before public listing, account lockout protection, reCAPTCHA on auth flows, and encryption of sensitive user data (email, phone, message content).
 - **Cross-session safety ledger** — a text-safety policy records serious-harm signals per account across sessions, with corroborated locking, care-oriented handling of self-harm and survivor language, and metadata-only summaries for administrators (no message text). It runs in recording-only ("shadow") mode by default; blocking and locking are a deliberate deployment setting (`SAFETY_LEDGER_MODE`), and an administrator decides on any account action.
 - **Community characters** — users can publish characters publicly for others to chat with, subject to moderator review.
+- **Android app with Google Play Billing** — the Android app (a Trusted Web Activity around the PWA) buys Sparks through Google Play Billing, with server-side purchase verification, refund reconciliation and recovery of interrupted purchases.
+- **Signup promo codes** — single-use codes that add extra Sparks at registration, one per account, managed by administrators.
+- **Audience overview for administrators** — a per-person view of visits across accounts and guest sessions, described in the privacy policy.
+- **Support outreach with push** — administrators can open a support ticket with a user; the user gets a content-free push notification where notifications are enabled.
+- **Gateway key management** — per-key usage split by source, editable monthly budgets, automatic clean-up of revoked keys, and alerts when a provider lists a new model without a price.
 
 ### Tech Stack
 
@@ -128,6 +142,7 @@ Jukwaa hili linajengwa na kudumishwa na **UwenzAi Limited**, kampuni yenye makaz
 - **Vikumbusho vya kiamri (agentic reminders)** — wahusika wenyewe wanaweza kupanga, kuhariri na kutuma vikumbusho kupitia zana ya `create_reminder`, kwa mfumo wa Celery Beat wa kusambaza na mipaka kwa kila mtumiaji.
 - **Kihariri cha kumbukumbu ndani ya mazungumzo** — kagua na uhariri kile mhusika anakikumbuka kuhusu wewe, moja kwa moja kutoka kwenye mazungumzo.
 - **Ujumbe wa picha (kwa hiari)** — watumiaji wanaweza kuambatisha picha kwenye ujumbe pale mhusika anapotumia modeli yenye uwezo wa kuona picha. Picha huondolewa taarifa zilizofichwa ndani yake, hukaguliwa kabla ya kuhifadhiwa (upakiaji hukataliwa ikiwa hakuna mtoa huduma wa ukaguzi aliyesanidiwa), husimbwa kwa kila picha katika kiwango cha programu, na hutolewa kupitia viungo vya muda mfupi vilivyosainiwa. Kipengele hiki kimezimwa kwa chaguo-msingi (`PHOTO_UPLOADS_ENABLED`).
+- **Ukaguzi wa picha zinazozalishwa na AI** — kila picha ya mhusika inayozalishwa (avatar na matunzio) hupitia ukaguzi uleule unaofunga kwa usalama (fail-closed) kama picha zinazopakiwa, kabla ya kuhifadhiwa au kuonyeshwa. Picha iliyozuiwa au hitilafu ya ukaguzi hukataliwa na Cheche hurejeshwa kikamilifu, na kuzuiwa mara kwa mara huonekana kwenye ukaguzi wa wasimamizi. Ukaguzi huangalia uchi au maudhui ya ngono yanayohusu watoto, maudhui ya ngono yanayohusu wanyama, umwagaji damu au madhara makubwa (pamoja na ukatili kwa wanyama), na watu waliokufa au wanaokufa; picha za chakula, uvuvi na uwindaji zinaruhusiwa.
 - **Swichi za vipengele vya ziada** — swichi za kila mtumiaji zinazotekelezwa upande wa seva kwa vipengele vya hiari vya mazungumzo (kufikiri kwa kina, utafuti wa tovuti, ujumbe wa kuongoza), zikiwa zimezimwa kwa chaguo-msingi.
 - **UwenzAi-Dev (Lango la Wataalamu / Agent Gateway)** — API ya uamuzi inayofanana na ya OpenAI kwa waendelezaji: tengeneza funguo za API (zinaonyeshwa mara moja, huhifadhiwa kama alama za uthibitisho), weka kikomo cha bajeti ya kila mwezi ya Cheche kwa kila funguo kwa hiari, na itumie kwa watoa huduma wengi wanaosanidiwa, ikiwa na uelekezaji wa kiotomatiki kwa mtoa huduma wa bei nafuu zaidi, vyote vikipimwa kwa salio ileile ya Cheche kwa kutumia uhakiki wa kitambulisho wa shughuli (idempotency). Nyaraka za waendelezaji kwa lugha mbili zinakuja na frontend, na lango hili ni la majaribio kwa uwazi.
 - **Mfumo wa AI wa watoa huduma wengi** — uzalishaji wa majibu ya mazungumzo na uwakilishi wa kihesabu wa kumbukumbu vyote hupitishwa kwa Cortecs kwanza, vikiwa na urejeshaji wa kiotomatiki kwa Mistral, hivyo jukwaa linakuwa thabiti hata ikiwa mtoa huduma mmoja ana tatizo.
@@ -139,6 +154,11 @@ Jukwaa hili linajengwa na kudumishwa na **UwenzAi Limited**, kampuni yenye makaz
 - **Usalama na uadilifu** — udhibiti wa ujumbe/maudhui, mchakato wa ukaguzi wa wahusika kabla ya kuorodheshwa hadharani, ulinzi wa kufungwa kwa akaunti, reCAPTCHA kwenye mifumo ya kuingia, na usimbaji fiche wa taarifa nyeti za mtumiaji (barua pepe, namba ya simu, maudhui ya ujumbe).
 - **Leja ya usalama kati ya vipindi** — sera ya usalama wa maandishi hurekodi ishara za madhara makubwa kwa kila akaunti katika vipindi vyote, ikiwa na kufunga kunakothibitishwa na ishara zaidi ya moja, ushughulikiaji unaojali wa lugha ya kujidhuru na ya manusura, na muhtasari wa metadata pekee kwa wasimamizi (bila maandishi ya ujumbe). Kwa chaguo-msingi hufanya kazi kwa hali ya kurekodi tu ("shadow"); kuzuia na kufunga ni mpangilio wa makusudi wa uwekaji mtandaoni (`SAFETY_LEDGER_MODE`), na msimamizi ndiye anayeamua hatua yoyote kwa akaunti.
 - **Wahusika wa jamii** — watumiaji wanaweza kuchapisha wahusika hadharani ili wengine wazungumze nao, baada ya ukaguzi wa wasimamizi.
+- **Programu ya Android yenye Google Play Billing** — programu ya Android (Trusted Web Activity inayozunguka PWA) hununua Cheche kupitia Google Play Billing, ikiwa na uthibitisho wa ununuzi upande wa seva, upatanisho wa marejesho ya pesa na urejeshaji wa ununuzi uliokatizwa.
+- **Misimbo ya ofa wakati wa kujisajili** — misimbo ya matumizi mara moja inayoongeza Cheche za ziada wakati wa usajili, mmoja kwa kila akaunti, inayosimamiwa na wasimamizi.
+- **Muhtasari wa hadhira kwa wasimamizi** — mwonekano wa kila mtu wa ziara katika akaunti na vipindi vya wageni, ulioelezwa kwenye sera ya faragha.
+- **Mawasiliano ya msaada yenye arifa** — wasimamizi wanaweza kufungua tiketi ya msaada na mtumiaji; mtumiaji hupokea arifa ya push isiyo na maudhui pale arifa zimewashwa.
+- **Usimamizi wa funguo za lango** — matumizi ya kila ufunguo yaliyogawanywa kwa chanzo, bajeti za mwezi zinazoweza kubadilishwa, kuondolewa kiotomatiki kwa funguo zilizobatilishwa, na tahadhari mtoa huduma anapoorodhesha modeli mpya isiyo na bei.
 
 ### Muundo wa Kiteknolojia
 

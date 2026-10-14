@@ -21,9 +21,24 @@ from capp.classes.agent_gateway.providers.metadata import catalog_metadata
 from capp.classes.agent_gateway.providers.base import (
     ModelInfo,
     ProviderResult,
+    normalize_message_content,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_capabilities(raw: Any):
+    """Normalize provider capability payloads to a list of enabled feature names.
+
+    Mistral's /v1/models reports capabilities as a dict of booleans
+    (``{"completion_chat": true, "vision": false, ...}``); most
+    OpenAI-compatible providers return a plain list of enabled feature names.
+    Disabled and malformed entries are dropped so only verified labels reach
+    the catalog (``catalog_metadata`` performs the final validation).
+    """
+    if isinstance(raw, dict):
+        return [str(name) for name, enabled in raw.items() if enabled]
+    return raw if isinstance(raw, list) else None
 
 
 class OpenAICompatibleProvider:
@@ -36,6 +51,10 @@ class OpenAICompatibleProvider:
     _currency = "USD"
     _models_cache_key = "agent_gateway_models"
     _models_cache_ttl = 1800  # 30 minutes
+    # Models the upstream serves but this provider skipped (unpriced and no
+    # operator-map entry). Replaced with a fresh list on every catalog fetch;
+    # read by catalog_sync to flag NEW models the operator needs to price.
+    _skipped_models: list[str] = []
     # Operator-maintained prices per 1M tokens (input, output) for providers
     # whose /models endpoint lists models without pricing. Empty by default;
     # populated by subclasses from settings.
@@ -75,6 +94,11 @@ class OpenAICompatibleProvider:
                 return None
 
             result = []
+            # Models the upstream serves but this catalog cannot price (no
+            # API pricing and no operator-map entry). Recorded per fetch so
+            # catalog_sync can surface NEW ones — a model released upstream
+            # but absent from a price map would otherwise disappear silently.
+            self._skipped_models = []
             for m in models_data:
                 model_id = m.get("id")
                 if not model_id:
@@ -108,6 +132,7 @@ class OpenAICompatibleProvider:
                 # If still unpriced, skip (don't create zero-price entries)
                 if input_price is None or output_price is None:
                     logger.warning("Agent Gateway: skipping unpriced %s model %s", self.name, model_id)
+                    self._skipped_models.append(model_id)
                     continue
 
                 result.append(
@@ -121,10 +146,15 @@ class OpenAICompatibleProvider:
                         # other providers use context_size or max_context.
                         "max_context": m.get("context_size")
                         or m.get("max_context")
-                        or (m.get("max_model_len") or None),
+                        or (m.get("max_model_len") or None)
+                        or m.get("max_context_length"),
                         "description": m.get("description"),
                         "max_output_tokens": m.get("max_output_tokens"),
-                        "supported_features": m.get("supported_features"),
+                        # Mistral publishes capabilities as a boolean dict
+                        # (plus max_context_length above); other providers
+                        # report a plain supported_features list.
+                        "supported_features": _normalize_capabilities(m.get("capabilities"))
+                        or m.get("supported_features"),
                     }
                 )
             return result
@@ -316,12 +346,16 @@ class OpenAICompatibleProvider:
             usage = data.get("usage", {})
             choices = data.get("choices", [])
             text = ""
+            reasoning = None
             finish_reason = None
             tool_calls = None
             if choices:
                 first_choice = choices[0]
                 message = first_choice.get("message", {})
-                text = message.get("content") or ""
+                # Reasoning models (e.g. mistral-large-4) and citation-aware
+                # upstreams return content as a list of typed chunks; the
+                # relayed response must keep content a plain string.
+                text, reasoning = normalize_message_content(message.get("content"))
                 finish_reason = first_choice.get("finish_reason")
                 # Relay structured tool calls verbatim, synthesizing an id when
                 # the upstream omits one — some gateways return id-less calls,
@@ -345,6 +379,7 @@ class OpenAICompatibleProvider:
                 status="success",
                 finish_reason=finish_reason,
                 model=model,
+                reasoning=reasoning,
                 tool_calls=tool_calls,
             )
         except httpx.HTTPStatusError as e:

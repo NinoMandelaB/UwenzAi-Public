@@ -54,6 +54,12 @@ class MockMediaMixin:
             mock.patch.object(CharacterService, "_generate_fal_seedream_image", return_value=b"local-image-bytes")
         )
         self.fallback = self._patch(mock.patch.object(CharacterService, "_generate_ai_image", return_value=None))
+        # These tests exercise the erasure and approval flows, not the
+        # child-safety screen. The screen fails closed without a provider and
+        # also fails closed on the dummy `local-image-bytes` fal mock (not a
+        # real image), so it is bypassed here entirely (audit B3). Tests that
+        # do exercise the screen live in tests_generated_image_screening.
+        self.screen = self._patch(mock.patch.object(CharacterService, "_screen_generated_image", return_value=None))
         self._patch(mock.patch.object(CharacterService, "_get_character_reference_bytes", return_value=None))
         self.free_actor = self._patch(
             mock.patch("capp.classes.characters.character_service.is_free_actor", return_value=True)

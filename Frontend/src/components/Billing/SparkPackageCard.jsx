@@ -2,7 +2,12 @@
 import StatusBadge from "../StatusBadge";
 import { useLanguage } from "../../context/LanguageContext";
 
-export default function SparkPackageCard({ pkg, isSelected, onSelect }) {
+export default function SparkPackageCard({
+  pkg,
+  isSelected,
+  onSelect,
+  playPrice = null,
+}) {
   const { t } = useLanguage();
 
   return (
@@ -35,9 +40,12 @@ export default function SparkPackageCard({ pkg, isSelected, onSelect }) {
             className="text-sm font-semibold"
             style={{ color: "var(--color-accent)" }}
           >
-            KES {Number(pkg.final_price_kes).toFixed(2)}
+            {/* Inside the Android app the authoritative price is whatever
+                Google Play charges in the customer's region and currency;
+                the KES price must never be advertised alongside it. */}
+            {playPrice ?? `KES ${Number(pkg.final_price_kes).toFixed(2)}`}
           </p>
-          {(pkg.final_price_usd || pkg.final_price_eur) && (
+          {!playPrice && (pkg.final_price_usd || pkg.final_price_eur) && (
             <p
               className="text-xs theme-text-muted"
               title={t("spark_pool.approxConverted")}
@@ -52,7 +60,7 @@ export default function SparkPackageCard({ pkg, isSelected, onSelect }) {
           )}
         </div>
       </div>
-      {Number(pkg.vat_percent) > 0 && (
+      {!playPrice && Number(pkg.vat_percent) > 0 && (
         <p className="text-xs theme-text-muted -mt-1 mb-2">
           {t("spark_pool.vatIncluded").replace(
             "{vat}",

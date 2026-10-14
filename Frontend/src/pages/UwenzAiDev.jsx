@@ -15,6 +15,7 @@ import {
   RotateCcw,
   Send,
   ShieldCheck,
+  SlidersHorizontal,
   Square,
   Terminal,
   Trash2,
@@ -27,6 +28,7 @@ import {
   listAgentKeys,
   createAgentKey,
   revokeAgentKey,
+  updateAgentKeyBudget,
   getAgentUsage,
   getConsent,
   confirmConsent,
@@ -797,6 +799,9 @@ function KeyManager({
   const operation = useRef(null);
   const [creating, setCreating] = useState(false);
   const [label, setLabel] = useState("");
+  const [budget, setBudget] = useState("");
+  const [budgetEditId, setBudgetEditId] = useState(null);
+  const [budgetEditValue, setBudgetEditValue] = useState("");
   const [secret, setSecret] = useState("");
   const [showSecret, setShowSecret] = useState(false);
   const [action, setAction] = useState("");
@@ -817,6 +822,13 @@ function KeyManager({
       setActionError("keyLabelRequired");
       return;
     }
+    if (
+      budget &&
+      (!/^\d+$/.test(budget) || Number(budget) < 1 || Number(budget) > 1000000)
+    ) {
+      setActionError("budgetInvalid");
+      return;
+    }
     const task = scope();
     operation.current = task;
     setAction("create");
@@ -824,7 +836,13 @@ function KeyManager({
     setNotice("");
     try {
       const data = okData(
-        await createAgentKey({ label: label.trim() }, { signal: task.signal }),
+        await createAgentKey(
+          {
+            label: label.trim(),
+            ...(budget ? { monthly_spark_budget: Number(budget) } : {}),
+          },
+          { signal: task.signal },
+        ),
       );
       if (!data.full_key || !data.key_id) throw new Error("invalid_response");
       if (task.current()) {
@@ -832,12 +850,49 @@ function KeyManager({
         setShowSecret(false);
         setCreating(false);
         setLabel("");
+        setBudget("");
         setKeyId(String(data.key_id));
         setNotice("keyCreated");
         await reload();
       }
     } catch (err) {
       if (task.current()) setActionError(errorText(err, "createFailed"));
+    } finally {
+      if (task.current()) setAction("");
+      operation.current = null;
+      task.done();
+    }
+  }
+
+  async function saveBudget(keyIdValue) {
+    if (operation.current || budgetEditId === null) return;
+    const raw = budgetEditValue.trim();
+    if (
+      raw &&
+      (!/^\d+$/.test(raw) || Number(raw) < 1 || Number(raw) > 1000000)
+    ) {
+      setActionError("budgetInvalid");
+      return;
+    }
+    const task = scope();
+    operation.current = task;
+    setAction("budget");
+    setActionError("");
+    setNotice("");
+    try {
+      okData(
+        await updateAgentKeyBudget(keyIdValue, raw ? Number(raw) : null, {
+          signal: task.signal,
+        }),
+      );
+      if (task.current()) {
+        setBudgetEditId(null);
+        setBudgetEditValue("");
+        setNotice("budgetSaved");
+        await reload();
+      }
+    } catch (err) {
+      if (task.current()) setActionError(errorText(err, "budgetFailed"));
     } finally {
       if (task.current()) setAction("");
       operation.current = null;
@@ -905,6 +960,17 @@ function KeyManager({
               onChange={(e) => setLabel(e.target.value)}
               placeholder={tx("keyPlaceholder")}
               autoFocus
+              disabled={!!action}
+            />
+          </label>
+          <label className="dev-field">
+            <span>{tx("budgetLabel")}</span>
+            <input
+              value={budget}
+              inputMode="numeric"
+              maxLength={7}
+              onChange={(e) => setBudget(e.target.value.replace(/[^0-9]/g, ""))}
+              placeholder={tx("budgetPlaceholder")}
               disabled={!!action}
             />
           </label>
@@ -1007,6 +1073,26 @@ function KeyManager({
                   <button
                     type="button"
                     className="dev-button dev-icon-button"
+                    aria-label={`${tx("budgetEdit")} ${key.label || tx("unnamedKey")}`}
+                    title={tx("budgetEdit")}
+                    disabled={!!action}
+                    onClick={() => {
+                      setBudgetEditId(budgetEditId === key.id ? null : key.id);
+                      setBudgetEditValue(
+                        key.monthly_spark_budget != null
+                          ? String(key.monthly_spark_budget)
+                          : "",
+                      );
+                      setActionError("");
+                    }}
+                  >
+                    <SlidersHorizontal size={16} />
+                  </button>
+                )}
+                {key.is_active && (
+                  <button
+                    type="button"
+                    className="dev-button dev-icon-button"
                     aria-label={`${tx("revoke")} ${key.label || tx("unnamedKey")}`}
                     title={tx("revoke")}
                     disabled={!!action}
@@ -1041,6 +1127,53 @@ function KeyManager({
                     </button>
                   </div>
                 </div>
+              )}
+              {budgetEditId === key.id && (
+                <form
+                  className="dev-revoke-confirm dev-budget-edit"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    saveBudget(key.id);
+                  }}
+                >
+                  <p>{tx("budgetEdit")}</p>
+                  <label className="dev-field">
+                    <span>{tx("budgetLabel")}</span>
+                    <input
+                      value={budgetEditValue}
+                      inputMode="numeric"
+                      maxLength={7}
+                      onChange={(e) =>
+                        setBudgetEditValue(
+                          e.target.value.replace(/[^0-9]/g, ""),
+                        )
+                      }
+                      placeholder={tx("budgetPlaceholder")}
+                      disabled={!!action}
+                      autoFocus
+                    />
+                  </label>
+                  <div className="dev-actions">
+                    <button
+                      type="button"
+                      className="dev-button"
+                      disabled={!!action}
+                      onClick={() => {
+                        setBudgetEditId(null);
+                        setActionError("");
+                      }}
+                    >
+                      {tx("cancel")}
+                    </button>
+                    <button
+                      type="submit"
+                      className="dev-button dev-primary"
+                      disabled={!!action}
+                    >
+                      {tx(action === "budget" ? "saving" : "budgetSave")}
+                    </button>
+                  </div>
+                </form>
               )}
             </li>
           ))}
@@ -1487,6 +1620,7 @@ function Usage({ tx, language, data, last, busy, error, refresh, enabled }) {
         });
   const prefix = period === "month" ? "monthly" : "total";
   const rows = data?.by_model || [];
+  const keyRows = data?.by_key || [];
   const totals = data?.usage;
   const input = last?.usage?.prompt_tokens;
   const output = last?.usage?.completion_tokens;
@@ -1637,6 +1771,63 @@ function Usage({ tx, language, data, last, busy, error, refresh, enabled }) {
             </table>
           </div>
           {rows.length === 0 && <p className="dev-footnote">{tx("noUsage")}</p>}
+          {keyRows.length > 0 && (
+            <>
+              <div className="dev-usage-period">
+                <p className="dev-label">{tx("byKey")}</p>
+              </div>
+              <p className="dev-footnote">{tx("usageNote")}</p>
+              <div className="dev-table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>{tx("key")}</th>
+                      <th>{tx("source")}</th>
+                      <th>{tx("calls")}</th>
+                      <th>{tx("sparks")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {keyRows.map((row) => (
+                      <tr key={`${row.key_id || row.hint}-${row.source}`}>
+                        <td>
+                          <strong>
+                            {row.label || row.hint || tx("removedKey")}
+                          </strong>
+                          <span>
+                            {row.removed
+                              ? tx("removedKey")
+                              : row.is_active
+                                ? row.hint
+                                : tx("revoked")}
+                          </span>
+                        </td>
+                        <td>
+                          {row.source === "playground"
+                            ? tx("sourcePlayground")
+                            : tx("sourceApi")}
+                        </td>
+                        <td>
+                          {number(
+                            period === "month"
+                              ? row.monthly_calls
+                              : row.total_calls,
+                          )}
+                        </td>
+                        <td>
+                          {number(
+                            period === "month"
+                              ? row.monthly_sparks
+                              : row.total_sparks,
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
         </>
       )}
     </>

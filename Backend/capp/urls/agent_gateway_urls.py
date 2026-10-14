@@ -34,6 +34,11 @@ urlpatterns = [
     # These are for the UwenzAi-Dev page in the frontend
     path("keys/", AgentKeyViewSet.as_view({"get": "list", "post": "create"}), name="agent_keys"),
     path("keys/<uuid:pk>/", AgentKeyViewSet.as_view({"delete": "destroy"}), name="agent_key_delete"),
+    path(
+        "keys/<uuid:pk>/budget/",
+        AgentKeyViewSet.as_view({"patch": "budget"}),
+        name="agent_key_budget",
+    ),
     path("usage/", AgentUsageViewSet.as_view({"get": "list"}), name="agent_usage"),
     # Consent endpoint (Session auth)
     path("consent/", agent_gateway_consent, name="agent_gateway_consent"),

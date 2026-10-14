@@ -28,6 +28,7 @@ import {
 } from "../services/authService";
 import { API, STORAGE_KEYS } from "../config/constants";
 import { ensureGuestSession, resetGuestSession } from "../utils/session";
+import { recordVisit } from "../utils/visitTracking";
 import {
   reconcilePushSubscription,
   unsubscribePushLocally,
@@ -243,6 +244,26 @@ export function AuthProvider({ children }) {
       ensureGuestSession();
     }
   }, [isLoading, isAuthenticated]);
+
+  // Audience analytics: record this app open as a visit once the auth state is
+  // known (so an about-to-be-authenticated visitor is not misrecorded as a
+  // guest), and again whenever a background tab becomes visible. Fire and
+  // forget — see utils/visitTracking.js.
+  useEffect(() => {
+    if (isLoading) return undefined;
+    recordVisit();
+
+    function onVisibilityChange() {
+      if (document.visibilityState === "visible") {
+        recordVisit();
+      }
+    }
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [isLoading]);
 
   useEffect(() => {
     if (isLoading || !isAuthenticated || !user?.user_id || !accessToken) return;

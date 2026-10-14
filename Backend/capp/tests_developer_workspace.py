@@ -36,7 +36,8 @@ from capp.classes.agent_gateway.providers.mistral import MistralAgentProvider
 from capp.classes.agent_gateway.providers.openai_base import OpenAICompatibleProvider
 from capp.classes.agent_gateway.providers.registry import reset_registry
 from capp.classes.agent_gateway.proxy_service import AgentProxyService
-from capp.tasks import sync_agent_catalog
+from capp.classes.agent_gateway.usage_service import AgentUsageService
+from capp.tasks import cleanup_revoked_agent_keys, sync_agent_catalog
 from capp.models import (
     AgentAPIKey,
     AgentGatewayOperation,
@@ -741,6 +742,83 @@ class DeveloperWorkspaceTests(TestCase):
         self.assertEqual(row["monthly_output_tokens"], 7)
         self.assertEqual(row["monthly_calls"], 1)
 
+    def test_playground_usage_is_tagged_playground(self):
+        response = self.chat()
+        self.assertEqual(response.status_code, 200, response.data)
+        log = AgentUsageLog.objects.get()
+        self.assertEqual(log.source, AgentUsageLog.Source.PLAYGROUND)
+
+    def test_direct_api_usage_is_tagged_api(self):
+        result = AgentProxyService.execute_request(
+            key=self.key,
+            model="shared-model",
+            provider_name="cortecs",
+            messages=[{"role": "user", "content": "Private question"}],
+            params={"max_tokens": 256},
+        )
+        self.assertNotIn("error", result)
+        log = AgentUsageLog.objects.get()
+        self.assertEqual(log.source, AgentUsageLog.Source.API)
+
+    def test_usage_endpoint_reports_by_key_and_source(self):
+        self.assertEqual(self.chat().status_code, 200)
+        result = AgentProxyService.execute_request(
+            key=self.key,
+            model="shared-model",
+            provider_name="cortecs",
+            messages=[{"role": "user", "content": "Private question"}],
+            params={"max_tokens": 256},
+        )
+        self.assertNotIn("error", result)
+
+        data = self.client.get(BASE + "usage/").data["data"]
+        rows = data["by_key"]
+        self.assertEqual(len(rows), 2)
+        sources = {row["source"] for row in rows}
+        self.assertEqual(sources, {AgentUsageLog.Source.PLAYGROUND, AgentUsageLog.Source.API})
+        for row in rows:
+            self.assertEqual(row["key_id"], str(self.key.pk))
+            self.assertFalse(row["removed"])
+            self.assertTrue(row["is_active"])
+
+    def test_usage_by_key_treats_legacy_rows_as_api(self):
+        self.assertEqual(self.chat().status_code, 200)
+        # Rows written before the source field existed (NULL) display as API usage.
+        AgentUsageLog.objects.update(source=None)
+        rows = AgentUsageService.get_usage_by_key(str(self.user.user_id))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["source"], AgentUsageLog.Source.API)
+
+    def test_usage_by_key_merges_legacy_null_with_new_api_rows(self):
+        """NULL (pre-field) and 'api' rows for one key are ONE Direct API line,
+        not two rows that would collide in the UI with the same React key."""
+        self.assertEqual(self.chat().status_code, 200)
+        result = AgentProxyService.execute_request(
+            key=self.key,
+            model="shared-model",
+            provider_name="cortecs",
+            messages=[{"role": "user", "content": "Private question"}],
+            params={"max_tokens": 256},
+        )
+        self.assertNotIn("error", result)
+        # Simulate the deployed mix: the older API row predates the source field.
+        first_api_log = AgentUsageLog.objects.filter(source=AgentUsageLog.Source.API).order_by("created_at").first()
+        AgentUsageLog.objects.filter(pk=first_api_log.pk).update(source=None)
+        result = AgentProxyService.execute_request(
+            key=self.key,
+            model="shared-model",
+            provider_name="cortecs",
+            messages=[{"role": "user", "content": "Another question"}],
+            params={"max_tokens": 256},
+        )
+        self.assertNotIn("error", result)
+
+        rows = AgentUsageService.get_usage_by_key(str(self.user.user_id))
+        self.assertEqual(len(rows), 2)
+        api_row = next(row for row in rows if row["source"] == AgentUsageLog.Source.API)
+        self.assertEqual(api_row["total_calls"], 2)
+        self.assertIsNotNone(next(row for row in rows if row["source"] == AgentUsageLog.Source.PLAYGROUND))
+
     def test_sensitive_responses_are_private_no_store(self):
         responses = [
             self.client.get(BASE + "keys/"),
@@ -1329,6 +1407,76 @@ class CatalogSyncTests(TestCase):
         self.assertEqual(entry["task"], "capp.tasks.sync_agent_catalog")
         self.assertEqual(entry["options"]["queue"], "general")
 
+    def _mistral_models_http(self, model_ids):
+        """Mistral's real /v1/models shape: plain IDs, no pricing."""
+
+        def fake_get(url, headers=None, timeout=None, **kwargs):
+            class R:
+                def raise_for_status(self):
+                    pass
+
+                def json(self):
+                    return {"data": [{"id": model_id} for model_id in model_ids]}
+
+            return R()
+
+        return mock.patch(
+            "capp.classes.agent_gateway.providers.openai_base.httpx.get",
+            side_effect=fake_get,
+        )
+
+    # Fixture prices only: the public source ships no price table.
+    @override_settings(
+        MISTRAL_UWENZAI_AGENT_MODEL_PRICES={
+            "mistral-small-latest": ["1.10", "2.20"],
+            "mistral-large-4": ["2.00", "4.00"],
+        }
+    )
+    def test_sync_flags_new_unpriced_models_once(self):
+        """A model released upstream without an operator price must not vanish
+        silently: the first sync reports it as new, later syncs do not re-alert
+        (retention window), and it never reaches the billable catalog."""
+        patch_cortecs, _ = self._patched_fetches(cortecs=self._cortecs_catalog(), mistral=None)
+        with patch_cortecs:
+            with self._mistral_models_http(["mistral-small-latest", "mistral-brand-new-model"]):
+                summary = run_catalog_sync()
+        entry = summary["mistral"]
+        self.assertEqual(entry["status"], "ok")
+        self.assertEqual(entry["models"], 1)
+        self.assertEqual(entry["skipped_models"], ["mistral-brand-new-model"])
+        self.assertEqual(entry["new_skipped_models"], ["mistral-brand-new-model"])
+        self.assertTrue(AgentModelPrice.objects.filter(provider="mistral", model="mistral-small-latest").exists())
+        self.assertFalse(AgentModelPrice.objects.filter(provider="mistral", model="mistral-brand-new-model").exists())
+
+        # Second sync: the model is still skipped (still unpriced upstream) but
+        # no longer NEW — the operator alert fires exactly once.
+        with patch_cortecs:
+            with self._mistral_models_http(["mistral-small-latest", "mistral-brand-new-model"]):
+                summary = run_catalog_sync()
+        entry = summary["mistral"]
+        self.assertEqual(entry["skipped_models"], ["mistral-brand-new-model"])
+        self.assertNotIn("new_skipped_models", entry)
+
+    def test_sync_task_warns_about_new_unpriced_models(self):
+        """The daily task logs an explicit warning for new unpriced models."""
+        patch_cortecs, _ = self._patched_fetches(cortecs=self._cortecs_catalog(), mistral=None)
+        with patch_cortecs:
+            with self._mistral_models_http(["mistral-brand-new-model"]):
+                with self.assertLogs("capp.tasks", level="WARNING") as logs:
+                    summary = sync_agent_catalog()
+        self.assertTrue(any("mistral-brand-new-model" in line for line in logs.output))
+        self.assertEqual(summary["mistral"]["new_skipped_models"], ["mistral-brand-new-model"])
+
+    def test_management_command_lists_new_unpriced_models(self):
+        out = StringIO()
+        patch_cortecs, _ = self._patched_fetches(cortecs=self._cortecs_catalog(), mistral=None)
+        with patch_cortecs:
+            with self._mistral_models_http(["mistral-small-latest", "mistral-brand-new-model"]):
+                call_command("sync_agent_catalog", stdout=out)
+        output = out.getvalue()
+        self.assertIn("mistral-brand-new-model", output)
+        self.assertIn("without a price", output)
+
     def test_mistral_price_map_fills_unpriced_models(self):
         """Mistral's /models lists no prices; the settings map supplies them."""
 
@@ -1363,6 +1511,52 @@ class CatalogSyncTests(TestCase):
         self.assertEqual(rows["mistral-small-latest"].currency, "USD")
         self.assertEqual(rows["sync-mistral-priced"].input_price_per_1m, Decimal("0.10"))
         self.assertNotIn("glm-5-2", rows)
+
+    # Fixture prices only: the public source ships no price table.
+    @override_settings(
+        MISTRAL_UWENZAI_AGENT_MODEL_PRICES={
+            "mistral-small-latest": ["1.10", "2.20"],
+            "mistral-large-4": ["2.00", "4.00"],
+        }
+    )
+    def test_mistral_capabilities_dict_and_max_context_length(self):
+        """Mistral's /models reports capabilities as a boolean dict and context as max_context_length."""
+
+        class FakeResponse:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {
+                    "data": [
+                        {
+                            "id": "mistral-small-latest",
+                            "max_context_length": 96000,
+                            "capabilities": {
+                                "completion_chat": True,
+                                "completion_fim": False,
+                                "function_calling": True,
+                                "fine_tuning": False,
+                                "vision": True,
+                                "classification": False,
+                            },
+                        },
+                        # Every capability disabled -> no capability labels stored.
+                        {"id": "mistral-large-4", "capabilities": {"completion_chat": False}},
+                    ]
+                }
+
+        provider = MistralAgentProvider()
+        with mock.patch("httpx.get", return_value=FakeResponse()):
+            count = provider.refresh_catalog()
+        self.assertEqual(count, 2)
+        rows = {p.model: p for p in AgentModelPrice.objects.filter(provider="mistral")}
+        self.assertEqual(
+            rows["mistral-small-latest"].capabilities,
+            ["completion_chat", "function_calling", "vision"],
+        )
+        self.assertEqual(rows["mistral-small-latest"].max_context, 96000)
+        self.assertEqual(rows["mistral-large-4"].capabilities, [])
 
     def test_aki_price_map_and_max_model_len(self):
         """AKI's /models lists no prices and reports context as max_model_len."""
@@ -1505,6 +1699,187 @@ class KeyMonthlyBudgetTests(TestCase):
         self.assertFalse(AgentAPIKey.objects.exists())
         # The cap itself is accepted:
         self.assertEqual(self._create(monthly_spark_budget=1000).status_code, 200)
+
+    def _patch_budget(self, key_id, payload):
+        return self.client.patch(BASE + f"keys/{key_id}/budget/", payload, format="json")
+
+    def test_update_budget_via_patch(self):
+        key_id = self._create(monthly_spark_budget=500).data["data"]["key_id"]
+        response = self._patch_budget(key_id, {"monthly_spark_budget": 250})
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["data"]["monthly_spark_budget"], 250)
+        self.assertEqual(AgentAPIKey.objects.get(pk=key_id).monthly_spark_budget, 250)
+
+    def test_clear_budget_with_null(self):
+        key_id = self._create(monthly_spark_budget=500).data["data"]["key_id"]
+        response = self._patch_budget(key_id, {"monthly_spark_budget": None})
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertIsNone(response.data["data"]["monthly_spark_budget"])
+        self.assertIsNone(AgentAPIKey.objects.get(pk=key_id).monthly_spark_budget)
+
+    def test_patch_budget_requires_the_field(self):
+        key_id = self._create().data["data"]["key_id"]
+        response = self._patch_budget(key_id, {})
+        self.assertEqual(response.status_code, 400)
+
+    def test_patch_budget_rejects_bad_values(self):
+        key_id = self._create().data["data"]["key_id"]
+        for bad in (0, -5, "abc", "12.5", True, 1.5):
+            with self.subTest(bad=bad):
+                response = self._patch_budget(key_id, {"monthly_spark_budget": bad})
+                self.assertEqual(response.status_code, 400)
+                self.assertIsNone(AgentAPIKey.objects.get(pk=key_id).monthly_spark_budget)
+
+    def test_patch_budget_rejects_revoked_key(self):
+        key_id = self._create().data["data"]["key_id"]
+        self.assertTrue(AgentKeyService.revoke_key(self.user, key_id))
+        response = self._patch_budget(key_id, {"monthly_spark_budget": 100})
+        self.assertEqual(response.status_code, 400)
+        self.assertIsNone(AgentAPIKey.objects.get(pk=key_id).monthly_spark_budget)
+
+    def test_patch_budget_requires_ownership(self):
+        intruder = _make_user_with_sparks(1000, username="intruder", email="intruder@example.com")
+        key_id = self._create().data["data"]["key_id"]
+        other_client = APIClient()
+        other_client.credentials(HTTP_AUTHORIZATION=f"Bearer {AccessToken.for_user(intruder)}")
+        response = other_client.patch(BASE + f"keys/{key_id}/budget/", {"monthly_spark_budget": 100}, format="json")
+        self.assertEqual(response.status_code, 404)
+        self.assertIsNone(AgentAPIKey.objects.get(pk=key_id).monthly_spark_budget)
+
+
+class AgentKeyRetentionTests(TestCase):
+    """Revoked keys get a revocation timestamp and expire from the key list."""
+
+    def setUp(self):
+        cache.clear()
+        self.user = _make_user_with_sparks(10000)
+        self.client = APIClient()
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {AccessToken.for_user(self.user)}")
+        ComplianceConfirmationLog.objects.create(
+            user=self.user,
+            accepted=True,
+            confirmation_type=ComplianceConfirmationLog.ConfirmationType.AGENT_GATEWAY,
+            version=AGENT_GATEWAY_CONSENT_VERSION,
+        )
+        self.full_key, self.key = AgentKeyService.create_key(self.user, "Retention")
+
+    def test_revoke_records_timestamp_and_repeats_keep_it(self):
+        self.assertTrue(AgentKeyService.revoke_key(self.user, str(self.key.pk)))
+        self.key.refresh_from_db()
+        self.assertFalse(self.key.is_active)
+        self.assertIsNotNone(self.key.revoked_at)
+        # A repeated revoke after the window must not extend the key's life.
+        stale = timezone.now() - timedelta(days=90)
+        AgentAPIKey.objects.filter(pk=self.key.pk).update(revoked_at=stale)
+        self.assertTrue(AgentKeyService.revoke_key(self.user, str(self.key.pk)))
+        self.key.refresh_from_db()
+        self.assertLess(abs((self.key.revoked_at - stale).total_seconds()), 1)
+
+    def test_cleanup_deletes_only_stale_revoked_keys(self):
+        _, fresh_revoked = AgentKeyService.create_key(self.user, "Fresh revoked")
+        self.assertTrue(AgentKeyService.revoke_key(self.user, str(fresh_revoked.pk)))
+        _, stale_revoked = AgentKeyService.create_key(self.user, "Stale revoked")
+        self.assertTrue(AgentKeyService.revoke_key(self.user, str(stale_revoked.pk)))
+        AgentAPIKey.objects.filter(pk=stale_revoked.pk).update(revoked_at=timezone.now() - timedelta(days=40))
+        _, legacy_revoked = AgentKeyService.create_key(self.user, "Legacy revoked")
+        self.assertTrue(AgentKeyService.revoke_key(self.user, str(legacy_revoked.pk)))
+        AgentAPIKey.objects.filter(pk=legacy_revoked.pk).update(revoked_at=None)
+
+        deleted = cleanup_revoked_agent_keys()
+        self.assertEqual(deleted, 1)
+        remaining = set(AgentAPIKey.objects.filter(user=self.user).values_list("pk", flat=True))
+        self.assertIn(self.key.pk, remaining)  # active: never touched
+        self.assertIn(fresh_revoked.pk, remaining)
+        self.assertIn(legacy_revoked.pk, remaining)  # unknown date: never deleted
+        self.assertNotIn(stale_revoked.pk, remaining)
+
+    def test_usage_logs_survive_key_deletion(self):
+        AgentUsageLog.objects.create(
+            user=self.user,
+            key=self.key,
+            key_hint=self.key.key_hint,
+            provider="cortecs",
+            model="shared-model",
+            input_tokens=11,
+            output_tokens=7,
+            sparks_charged=3,
+            cost_native=0,
+        )
+        AgentAPIKey.objects.filter(pk=self.key.pk).update(
+            is_active=False, revoked_at=timezone.now() - timedelta(days=40)
+        )
+        deleted = cleanup_revoked_agent_keys()
+        self.assertEqual(deleted, 1)
+
+        log = AgentUsageLog.objects.get()
+        self.assertIsNone(log.key)
+        self.assertEqual(log.key_hint, self.key.key_hint)
+        self.assertEqual(log.user_id, self.user.user_id)
+        # Per-key usage reporting still shows the removed key (hint only).
+        rows = AgentUsageService.get_usage_by_key(str(self.user.user_id))
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]["removed"])
+        self.assertEqual(rows[0]["hint"], self.key.display_hint)
+        self.assertFalse(rows[0]["is_active"])
+
+    @override_settings(AGENT_KEY_REVOKED_RETENTION_DAYS=0)
+    def test_retention_can_be_disabled(self):
+        _, revoked = AgentKeyService.create_key(self.user, "Disabled retention")
+        self.assertTrue(AgentKeyService.revoke_key(self.user, str(revoked.pk)))
+        AgentAPIKey.objects.filter(pk=revoked.pk).update(revoked_at=timezone.now() - timedelta(days=365))
+        self.assertEqual(cleanup_revoked_agent_keys(), 0)
+        self.assertTrue(AgentAPIKey.objects.filter(pk=revoked.pk).exists())
+
+    def test_soft_delete_stamps_revoked_at_for_retention(self):
+        self.user.soft_delete()
+        self.key.refresh_from_db()
+        self.assertFalse(self.key.is_active)
+        self.assertIsNotNone(self.key.revoked_at)
+        # The retention task can now purge it after the window.
+        AgentAPIKey.objects.filter(pk=self.key.pk).update(revoked_at=timezone.now() - timedelta(days=40))
+        self.assertEqual(cleanup_revoked_agent_keys(), 1)
+
+    def test_account_erasure_stamps_revoked_at_for_retention(self):
+        from capp.classes.auth.account_erasure import erase_private_content
+
+        erase_private_content(self.user)
+        self.key.refresh_from_db()
+        self.assertFalse(self.key.is_active)
+        self.assertIsNotNone(self.key.revoked_at)
+        AgentAPIKey.objects.filter(pk=self.key.pk).update(revoked_at=timezone.now() - timedelta(days=40))
+        self.assertEqual(cleanup_revoked_agent_keys(), 1)
+
+    def _make_already_revoked_key(self, days_ago):
+        _, old_key = AgentKeyService.create_key(self.user, "Already revoked")
+        revoked_at = timezone.now() - timedelta(days=days_ago)
+        AgentAPIKey.objects.filter(pk=old_key.pk).update(is_active=False, revoked_at=revoked_at)
+        return old_key, revoked_at
+
+    def test_soft_delete_keeps_original_revoked_at_of_revoked_keys(self):
+        old_key, revoked_at = self._make_already_revoked_key(days_ago=29)
+        self.user.soft_delete()
+        old_key.refresh_from_db()
+        self.key.refresh_from_db()
+        # Already-revoked key keeps its timestamp, so its retention clock does not restart.
+        self.assertEqual(old_key.revoked_at, revoked_at)
+        # The still-active key is stamped now.
+        self.assertFalse(self.key.is_active)
+        self.assertGreater(self.key.revoked_at, revoked_at)
+
+    def test_account_erasure_keeps_original_revoked_at_of_revoked_keys(self):
+        from capp.classes.auth.account_erasure import erase_private_content
+
+        old_key, revoked_at = self._make_already_revoked_key(days_ago=35)
+        erase_private_content(self.user)
+        old_key.refresh_from_db()
+        self.key.refresh_from_db()
+        self.assertEqual(old_key.revoked_at, revoked_at)
+        self.assertFalse(self.key.is_active)
+        self.assertGreater(self.key.revoked_at, revoked_at)
+        # Only the key past the window is purged; the freshly stamped one stays.
+        self.assertEqual(cleanup_revoked_agent_keys(), 1)
+        self.assertFalse(AgentAPIKey.objects.filter(pk=old_key.pk).exists())
+        self.assertTrue(AgentAPIKey.objects.filter(pk=self.key.pk).exists())
 
 
 class GatewayConsentVersionCoordinationTests(SimpleTestCase):

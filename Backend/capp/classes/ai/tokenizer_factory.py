@@ -1,5 +1,8 @@
 # capp/classes/ai/tokenizer_factory.py
 import logging
+import threading
+from collections import OrderedDict
+
 from django.conf import settings
 import tiktoken
 
@@ -14,6 +17,35 @@ TIKTOKEN_MODEL_MAP = {
     "claude-3-haiku-20240307": "cl100k_base",
     "bge-m3": "cl100k_base",
 }
+
+# mistral-common only registers tokenizer files for models with released
+# weights, so public-preview and alias IDs (mistral-large-4,
+# mistral-large-latest, mistral-small-2603, ...) are missing from its registry.
+# The deprecated non-strict from_model() lookup resolves those IDs by substring
+# to the wrong family — mistral-large-4 silently received the 2023 v3
+# tokenizer — and emits a FutureWarning per call. Never use it: resolve
+# unregistered IDs to a deterministic registered tokenizer for the same
+# family instead:
+#   - the large family moved to the v7 tokenizer with mistral-large-2411 and
+#     continues on it (tekken v7) in later releases;
+#   - other unregistered Mistral IDs reuse the current small-family tekken
+#     tokenizer (mistral-small-2409) rather than the 2023 legacy vocab.
+_MISTRAL_FALLBACK_CHAIN = (("mistral-large", ("mistral-large-2411",)),)
+_MISTRAL_DEFAULT_FALLBACK = ("mistral-small-2409",)
+
+# Resolved tokenizers are read-only after construction, so they are cached to
+# avoid reloading the vocabulary on every message. Two properties matter:
+#   - Keyed by the REGISTRY id that actually produced the tokenizer
+#     (mistral-large-2411, mistral-small-2409, ...), never by the caller's
+#     model string. Aliases (mistral-large-latest, mistral-large-4, ...) share
+#     one instance, and arbitrary strings that merely contain "mistral" -
+#     BYOK model names and the playground model field are validated only for
+#     length before they are tokenized - cannot create entries.
+#   - Bounded (LRU). Each loaded tokenizer holds roughly 60 MiB, so the cache
+#     must not be able to grow with the number of distinct model ids in use.
+_TOKENIZER_CACHE_MAX = 4
+_tokenizer_cache: "OrderedDict[str, MistralTokenizerWrapper]" = OrderedDict()
+_tokenizer_cache_lock = threading.Lock()
 
 
 def get_tokenizer_for_model(model_name: str = None):
@@ -32,16 +64,7 @@ def get_tokenizer_for_model(model_name: str = None):
         try:
             from mistral_common.tokens.tokenizers.mistral import MistralTokenizer
 
-            try:
-                tokenizer = MistralTokenizer.from_model(model_name, strict=True)
-            except Exception:
-                logger.warning(
-                    "Mistral tokenizer strict mode failed for '%s', trying non‑strict",
-                    model_name,
-                )
-                tokenizer = MistralTokenizer.from_model(model_name, strict=False)
-            # Return a wrapper that has a simple `encode` interface
-            return MistralTokenizerWrapper(tokenizer)
+            return _resolve_mistral_tokenizer(MistralTokenizer, model_name, model_lower)
         except Exception:
             logger.exception("Failed to load Mistral tokenizer, falling back to tiktoken")
             # Fallback to tiktoken
@@ -53,6 +76,62 @@ def get_tokenizer_for_model(model_name: str = None):
     except Exception:
         enc = tiktoken.get_encoding("cl100k_base")
     return enc
+
+
+def _cached_registry_tokenizer(MistralTokenizer, registry_id: str):
+    """Return the cached wrapper for ``registry_id``, loading it on a miss.
+
+    Raises when ``registry_id`` is not in the mistral-common registry (the
+    strict lookup is an exact dictionary check, so a miss on an unknown name is
+    cheap and loads nothing).
+    """
+    with _tokenizer_cache_lock:
+        cached = _tokenizer_cache.get(registry_id)
+        if cached is not None:
+            _tokenizer_cache.move_to_end(registry_id)
+            return cached
+
+    # Load outside the lock: it takes about a second and must not stall cache hits.
+    wrapper = MistralTokenizerWrapper(MistralTokenizer.from_model(registry_id, strict=True))
+
+    with _tokenizer_cache_lock:
+        existing = _tokenizer_cache.get(registry_id)
+        if existing is not None:  # another thread loaded it first; keep one instance
+            _tokenizer_cache.move_to_end(registry_id)
+            return existing
+        _tokenizer_cache[registry_id] = wrapper
+        while len(_tokenizer_cache) > _TOKENIZER_CACHE_MAX:
+            _tokenizer_cache.popitem(last=False)
+    return wrapper
+
+
+def _resolve_mistral_tokenizer(MistralTokenizer, model_name: str, model_lower: str):
+    """Strict registry lookup with deterministic family fallbacks; never the deprecated non-strict path."""
+    try:
+        return _cached_registry_tokenizer(MistralTokenizer, model_name)
+    except Exception:
+        # Unregistered id (public preview or alias); resolve by family below.
+        pass
+
+    for prefix, candidates in _MISTRAL_FALLBACK_CHAIN:
+        if prefix in model_lower:
+            break
+    else:
+        candidates = _MISTRAL_DEFAULT_FALLBACK
+
+    for candidate in candidates:
+        try:
+            wrapper = _cached_registry_tokenizer(MistralTokenizer, candidate)
+        except Exception:
+            continue
+        logger.debug(
+            "Mistral tokenizer: '%s' is not in the mistral-common registry; using the '%s' family tokenizer",
+            model_name,
+            candidate,
+        )
+        return wrapper
+
+    raise RuntimeError(f"No registered Mistral fallback tokenizer for '{model_name}'")
 
 
 class MistralTokenizerWrapper:

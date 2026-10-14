@@ -268,7 +268,13 @@ def api_generate_gallery_image(request, character_id):
     """
     POST /api/v1/characters/<character_id>/gallery/generate/
     Generate an AI image and add to character's gallery.
-    Body: { prompt, caption, order, negative_prompt, aspect_ratio, style_preset, seed, extra_prompt }
+    Body: { prompt, caption, order, negative_prompt, aspect_ratio, style_preset, seed, extra_prompt,
+            publish_on_approval }
+
+    ``publish_on_approval`` is sent by the character setup and edit pages only,
+    for pictures that belong to the character's own gallery. The image is then
+    published together with the character once an admin approves it. Without it
+    (chat, detail page) the image stays private to its creator.
     """
     try:
         if not isinstance(request.data, Mapping):
@@ -328,6 +334,7 @@ def api_generate_gallery_image(request, character_id):
             actor=request.user,
             request=request,
             operation_id=operation_id,
+            publish_on_approval=CharacterService._to_bool(request.data.get("publish_on_approval"), default=False),
         )
 
         if result["status"] != "success":

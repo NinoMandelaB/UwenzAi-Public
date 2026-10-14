@@ -42,7 +42,7 @@ from capp.models import (
     SparkTransaction,
     UsageCharge,
 )
-from capp.tests import _make_character, _make_user
+from capp.tests import _bypass_generated_image_screen, _make_character, _make_user
 from capp.tests_billing_integration import stub_image_providers
 
 FEATURE = BillingReservation.Feature.IMAGE_GENERATION
@@ -403,6 +403,7 @@ class DoubleClickArtifactConcurrencyTests(TransactionTestCase):
     """
 
     def setUp(self):
+        _bypass_generated_image_screen(self)
         self.user = _make_user(username="clicker", email="clicker@example.com", verified=True)
         SparkPool.objects.update_or_create(user=self.user, defaults={"sparks": 10000})
         self.character = _make_character(name="Ada", slug="ada-concurrency", created_by=self.user)
@@ -462,6 +463,7 @@ class DoubleClickArtifactConcurrencyTests(TransactionTestCase):
 
 class TerminalTransitionConcurrencyTests(TransactionTestCase):
     def setUp(self):
+        _bypass_generated_image_screen(self)
         self.user = _make_user()
         SparkPool.objects.update_or_create(user=self.user, defaults={"sparks": 1000})
         self.reservation = BillingReservationService.reserve(

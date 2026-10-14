@@ -235,6 +235,8 @@ export default function CharacterDetail() {
     if (!canGenerateImage) return;
     setGenerating(true);
     try {
+      // Deliberately without `publish_on_approval`: pictures made here stay
+      // private to the person who generated them, even on a public character.
       await generateGalleryImage(characterId, {
         prompt: "portrait, high quality, detailed",
         extra_prompt: extraPrompt,
@@ -314,6 +316,29 @@ export default function CharacterDetail() {
       >
         <ArrowLeft size={16} /> {t("common.back")}
       </button>
+
+      {/* A draft is invisible to everyone else, admins included, until setup is
+          completed. Without this there was no way back to the setup page after
+          leaving it, so a public character could stay a draft indefinitely. */}
+      {isOwner && character.review_status === "draft" && (
+        <div className="mx-4 mt-4 flex flex-col gap-3 rounded-xl border border-amber-400/40 bg-amber-400/10 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm font-semibold text-amber-300">
+              {t("characters.draftBannerTitle")}
+            </p>
+            <p className="mt-0.5 text-xs text-amber-300/90">
+              {character.is_public
+                ? t("characters.draftBannerBodyPublic")
+                : t("characters.draftBannerBodyPrivate")}
+            </p>
+          </div>
+          <PrimaryButton
+            onClick={() => navigate(`/characters/${characterId}/setup`)}
+          >
+            {t("characters.draftBannerAction")}
+          </PrimaryButton>
+        </div>
+      )}
 
       {/*
         Top section: on mobile we stack everything (unchanged).

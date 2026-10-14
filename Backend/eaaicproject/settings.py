@@ -4,6 +4,7 @@ Django settings for eaaicproject project.
 
 import json
 import os
+import sys
 import ipaddress
 from urllib.parse import urlsplit
 from pathlib import Path
@@ -291,6 +292,9 @@ AGENT_AUTH_FAILURE_WINDOW_SECONDS = int(os.getenv("AGENT_AUTH_FAILURE_WINDOW_SEC
 # Server-side cap for the optional per-key monthly Spark budget a developer
 # may set at key creation (None = unlimited key budget).
 AGENT_KEY_MAX_MONTHLY_BUDGET = int(os.getenv("AGENT_KEY_MAX_MONTHLY_BUDGET", "1000000"))
+# Revoked keys are hard-deleted after this many days (usage logs survive via
+# SET_NULL + key_hint). Set to 0 to disable retention cleanup entirely.
+AGENT_KEY_REVOKED_RETENTION_DAYS = int(os.getenv("AGENT_KEY_REVOKED_RETENTION_DAYS", "30"))
 # Mistral (direct, dedicated key for agent gateway)
 MISTRAL_UWENZAI_AGENT_API_KEY = os.getenv("MISTRAL_UWENZAI_AGENT_API_KEY")
 MISTRAL_UWENZAI_AGENT_BASE_URL = os.getenv("MISTRAL_UWENZAI_AGENT_BASE_URL", "https://api.mistral.ai/v1")
@@ -449,6 +453,42 @@ OPEN_URL_MAX_CALLS_PER_MESSAGE = int(os.getenv("OPEN_URL_MAX_CALLS_PER_MESSAGE",
 # list).
 OPEN_URL_BLOCKED_DOMAINS = [d.strip() for d in os.getenv("OPEN_URL_BLOCKED_DOMAINS", "").split(",") if d.strip()]
 
+# Google Play Billing (Android TWA in-app purchases).
+#
+# The service account JSON must have the Google Play Developer API enabled and
+# be linked in Play Console (Users & permissions). The product map mirrors the
+# managed in-app products created in Play Console: Play product id -> Spark
+# package slug. Purchases of unmapped products are refused, and a malformed
+# map fails closed to "no products" rather than crashing at startup.
+GOOGLE_PLAY_PACKAGE_NAME = os.getenv("GOOGLE_PLAY_PACKAGE_NAME", "com.uwenzai.android")
+GOOGLE_PLAY_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_PLAY_SERVICE_ACCOUNT_JSON", "")
+
+
+def _parse_play_product_map(raw: str) -> dict:
+    """
+    Parse the Play product-id -> package-slug map, failing closed.
+
+    A typo in the environment variable must never take the process down, but it
+    also must never widen what is purchasable: an unparseable map means "no
+    products are purchasable through Play", not "map parsing is skipped".
+    """
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {
+        str(key).strip(): str(value).strip()
+        for key, value in parsed.items()
+        if isinstance(key, str) and isinstance(value, str) and key.strip() and value.strip()
+    }
+
+
+GOOGLE_PLAY_PRODUCT_MAP = _parse_play_product_map(os.getenv("GOOGLE_PLAY_PRODUCT_MAP", ""))
+
 # Paystack
 PAYSTACK_BASE_URL = os.getenv("PAYSTACK_BASE_URL", "https://api.paystack.co")
 PAYSTACK_SECRET_KEY = os.getenv("PAYSTACK_SECRET_KEY")
@@ -508,6 +548,7 @@ INSTALLED_APPS = [
     "rest_framework",
     "rest_framework_simplejwt.token_blacklist",
     "paystack_app",
+    "play_billing_app",
     "capp",
 ]
 
@@ -662,6 +703,26 @@ GUEST_LAST_SEEN_REFRESH_SECONDS = int(os.getenv("GUEST_LAST_SEEN_REFRESH_SECONDS
 GUEST_WS_TICKET_TTL_SECONDS = int(os.getenv("GUEST_WS_TICKET_TTL_SECONDS", "30"))
 
 # ------------------------------------------------------------------------------
+# Audience analytics: recorded site visits (capp/classes/analytics/visit_service.py)
+# ------------------------------------------------------------------------------
+# How stale last_visit_at must be before a new visit ping rewrites it. Keeps the
+# visit endpoint at one row-update per browser session window, not one per ping.
+VISIT_LAST_SEEN_REFRESH_SECONDS = int(os.getenv("VISIT_LAST_SEEN_REFRESH_SECONDS", "300"))
+
+# HTTP header carrying the visitor's country at the edge (Cloudflare injects
+# CF-IPCountry on proxied requests). Only read when the origin is exclusively
+# reachable through that edge — if the origin is exposed directly, a client
+# could spoof its own country header. Set the env var to an empty string to
+# disable country capture entirely; the audience view then reports "unknown".
+# Values are validated as ISO-3166 alpha-2 and the edge's own "unknown" marks
+# (XX/T1) are treated as no country.
+VISIT_COUNTRY_HEADER = os.getenv("VISIT_COUNTRY_HEADER", "HTTP_CF_IPCOUNTRY") or None
+
+# Also validate against ISO-3166? Kept as a strict two-uppercase-letter check in
+# the service (see VisitService._country_from_request) — full code lists are a
+# dependency we do not need for country-level approximation.
+
+# ------------------------------------------------------------------------------
 # Legacy guest-ID transition (TEMPORARY — see Backend/docs/GUEST_IDENTITY.md)
 # ------------------------------------------------------------------------------
 # Production browsers hold a client-generated UUID in localStorage under
@@ -809,7 +870,13 @@ else:
 # ------------------------------------------------------------------------------
 # Django Cache (Redis-backed for throttling and shared cache use)
 # ------------------------------------------------------------------------------
-if REDIS_URL:
+# Test runs keep the Django cache process-local. The parallel test workers
+# share one Redis database, so a cache.clear() in one worker (FLUSHDB) would
+# wipe keys another worker's running test depends on, including the agent
+# gateway's raw-Redis locks. REDIS_URL itself stays set: those locks need it.
+RUNNING_TESTS = len(sys.argv) > 1 and sys.argv[1] == "test"
+
+if REDIS_URL and not RUNNING_TESTS:
     CACHES = {
         "default": {
             "BACKEND": "django.core.cache.backends.redis.RedisCache",
@@ -982,6 +1049,17 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": crontab(minute="*/5"),
         "options": {"expires": 250, "queue": "general"},
     },
+    "reconcile-play-voided-purchases": {
+        "task": "play_billing_app.tasks.reconcile_play_voided_purchases",
+        # Refunds and chargebacks arrive asynchronously through Google's
+        # voided-purchases API; there is no push channel set up, so this
+        # poller is the reversal path. Daily is deliberate: the poll is
+        # idempotent (each voided token is processed once), the stored
+        # checkpoint keeps each run cheap, and day-granularity reversal
+        # timing is fine for a credit the user has normally already spent.
+        "schedule": crontab(hour=3, minute=20),
+        "options": {"queue": "general"},
+    },
     "sync-agent-catalog": {
         "task": "capp.tasks.sync_agent_catalog",
         # The developer-workspace pricing view is database-only by design
@@ -990,6 +1068,14 @@ CELERY_BEAT_SCHEDULE = {
         # refresh it opportunistically in between. A failed provider fetch keeps
         # the last known good rows; admin-disabled models are never re-enabled.
         "schedule": crontab(hour=3, minute=40),
+        "options": {"expires": 3600, "queue": "general"},
+    },
+    "cleanup-revoked-agent-keys": {
+        "task": "capp.tasks.cleanup_revoked_agent_keys",
+        # Revoked API keys are kept for a short grace period (review/support),
+        # then hard-deleted; usage logs survive via SET_NULL + key_hint, so
+        # billing history and per-key usage reporting stay intact.
+        "schedule": crontab(hour=4, minute=10),
         "options": {"expires": 3600, "queue": "general"},
     },
 }

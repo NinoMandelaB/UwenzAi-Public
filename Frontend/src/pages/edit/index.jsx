@@ -27,6 +27,7 @@ import EditPersonalitySection from "./EditPersonalitySection";
 import EditGallerySection from "./EditGallerySection";
 import EditAdminControlsSection from "./EditAdminControlsSection";
 import { mapCharacterToForm, looksLikeUuid } from "./utils";
+import { getReviewSubmission } from "./reviewSubmission";
 
 export default function CharacterEdit() {
   const { t } = useLanguage();
@@ -70,14 +71,16 @@ export default function CharacterEdit() {
   const routeIdentifier =
     params.characterId || params.slug || params.id || params.character || "";
 
-  // ---------- Derived: does saving this character require re-approval? ----------
-  // A non-admin owner editing a public character that is currently approved/active
-  // must go back through the approval queue so admins can review the changes.
-  const requiresReapproval =
-    !isAdmin &&
-    isOwner &&
-    character?.is_public &&
-    character?.status === "approved";
+  // ---------- Derived: does saving this character send it to admin review? ----------
+  // For a non-admin owner of a public character, saving is the submission:
+  // approved characters are re-reviewed, drafts and rejected ones enter the
+  // queue. Without this a public draft saved from here stayed hidden forever.
+  const review = getReviewSubmission({
+    isAdmin,
+    isOwner,
+    reviewStatus: character?.review_status,
+    isPublic: form.is_public,
+  });
 
   // ---------- validation + missing fields ----------
   const { canSubmit, missingFields } = useMemo(() => {
@@ -279,14 +282,17 @@ export default function CharacterEdit() {
         payload.nsfw_enabled = form.nsfw_enabled;
         payload.rejection_reason =
           form.status === "rejected" ? form.rejection_reason.trim() : "";
-      } else if (requiresReapproval) {
-        // Non-admin editing a public approved character:
-        // backend will set status → pending and deactivate the character
-        // until an admin reviews the changes.
-        payload.submit_for_review = true;
+      } else {
+        // The owner may switch the character between public and private; the
+        // server moves it in or out of the review queue accordingly.
+        payload.is_public = form.is_public;
+        if (review.submitForReview) {
+          // approved: backend sets status → pending and takes the character
+          // offline until an admin reviews the changes.
+          // draft / rejected: saving is what submits it for review.
+          payload.submit_for_review = true;
+        }
       }
-      // Non-admin editing a draft/rejected character: no extra flags needed,
-      // the character stays in its current status until they explicitly submit.
 
       if (form.avatar) payload.avatar = form.avatar;
 
@@ -298,7 +304,7 @@ export default function CharacterEdit() {
       clearOperationId(updateOperationRef);
       navigate(`/characters/${character.character_id}`, {
         state: {
-          successMessage: requiresReapproval
+          successMessage: review.submitForReview
             ? t("characters.updateSuccessPendingReview")
             : t("characters.updateSuccess"),
         },
@@ -351,13 +357,16 @@ export default function CharacterEdit() {
         </p>
       </section>
 
-      {/* Re-approval notice for non-admin owners of public characters */}
-      {requiresReapproval && (
+      {/* Review notice for non-admin owners of public characters */}
+      {review.submitForReview && (
         <div className="flex gap-3 rounded-xl border border-amber-400/40 bg-amber-400/10 p-4">
           <Info size={18} className="shrink-0 text-amber-400 mt-0.5" />
           <p className="text-sm text-amber-300">
-            {t("characters.reapprovalNotice") ||
-              "This character is public and currently approved. Saving changes will submit it for admin review and temporarily take it offline until approved."}
+            {review.kind === "draft"
+              ? t("characters.draftSubmitNotice")
+              : review.kind === "rejected"
+                ? t("characters.rejectedResubmitNotice")
+                : t("characters.reapprovalNotice")}
           </p>
         </div>
       )}
@@ -399,6 +408,7 @@ export default function CharacterEdit() {
           images={galleryImages}
           visualStyle={form.visual_style}
           isAdmin={isAdmin}
+          showApprovalNote={!isAdmin && Boolean(form.is_public)}
           onRefresh={async () => {
             const res = await listGalleryImages(character.character_id);
             setGalleryImages(res?.data?.images || []);
@@ -450,9 +460,8 @@ export default function CharacterEdit() {
             )}
             {isSubmitting
               ? t("characters.saving")
-              : requiresReapproval
-                ? t("characters.saveAndSubmitForReview") ||
-                  "Save & Submit for Review"
+              : review.submitForReview
+                ? t("characters.saveAndSubmitForReview")
                 : t("characters.saveChanges")}
           </PrimaryButton>
         </div>

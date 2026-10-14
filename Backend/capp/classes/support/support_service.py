@@ -163,6 +163,33 @@ class SupportService:
                     defaults={"last_viewed_at": timezone.now()},
                 )
 
+            # Web Push for the TARGET user (privacy-safe, content-free): they
+            # would otherwise only learn about the message from the header
+            # badge's 30-second poll or by opening their Support inbox. Runs
+            # as a Celery task on commit so the admin's request never pays
+            # for external push-endpoint latency. Both the registration and
+            # the callback itself are guarded: a broker outage raises inside
+            # the commit, and the ticket that was just created must never be
+            # lost to a 500.
+            def _schedule_support_push():
+                try:
+                    send_support_push_task.delay(str(target_user.user_id))
+                except Exception:
+                    logger.exception(
+                        "Could not enqueue support push for user %s (ticket was created)",
+                        target_user.user_id,
+                    )
+
+            try:
+                from capp.tasks import send_support_message_push as send_support_push_task
+
+                transaction.on_commit(_schedule_support_push)
+            except Exception:
+                logger.exception(
+                    "Could not register support push for user %s (ticket was created)",
+                    target_user.user_id,
+                )
+
             logger.info(
                 "Admin outreach ticket %s created by %s for %s",
                 ticket.ticket_id,

@@ -1,6 +1,7 @@
 import { Heart } from "lucide-react";
 import { useLanguage } from "../../context/LanguageContext";
 import { SectionTitle, AttributeRow } from "./shared";
+import { CLOTHING_LABEL_KEYS } from "../../config/clothingStyles";
 
 const RELATIONSHIP_DISPLAY = {
   friend: () => "wizard.relationshipFriend",
@@ -12,17 +13,9 @@ const RELATIONSHIP_DISPLAY = {
   romantic: () => "wizard.relationshipRomantic",
 };
 
-const CLOTHING_DISPLAY = {
-  casual: () => "wizard.clothingCasual",
-  formal: () => "wizard.clothingFormal",
-  sporty: () => "wizard.clothingSporty",
-  elegant: () => "wizard.clothingElegant",
-  streetwear: () => "wizard.clothingStreetwear",
-  bohemian: () => "wizard.clothingBohemian",
-  gothic: () => "wizard.clothingGothic",
-  preppy: () => "wizard.clothingPreppy",
-  lingerie: "Lingerie / Underwear",
-};
+const CLOTHING_DISPLAY = Object.fromEntries(
+  Object.entries(CLOTHING_LABEL_KEYS).map(([value, key]) => [value, () => key]),
+);
 
 function formatChoice(value, displayMap, t) {
   if (!value) return "—";

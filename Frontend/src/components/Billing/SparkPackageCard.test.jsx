@@ -76,4 +76,17 @@ describe("SparkPackageCard", () => {
     fireEvent.click(screen.getByText("KES 24.36"));
     expect(onSelect).toHaveBeenCalledTimes(1);
   });
+
+  it("shows the Google Play price instead of KES inside the app", () => {
+    render(
+      <SparkPackageCard pkg={pkg} playPrice="KES 120.00" onSelect={() => {}} />,
+    );
+
+    expect(screen.getByText("KES 120.00")).toBeTruthy();
+    // The website price, VAT rate and FX conversions must not be advertised
+    // alongside Play's price inside the Android app.
+    expect(screen.queryByText("KES 24.36")).toBeNull();
+    expect(screen.queryByText(/≈/)).toBeNull();
+    expect(screen.queryByText(/VAT/)).toBeNull();
+  });
 });

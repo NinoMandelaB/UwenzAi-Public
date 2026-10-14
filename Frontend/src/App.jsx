@@ -56,10 +56,13 @@ import NotFound from "./pages/NotFound";
 import ProtectedRoute from "./components/ProtectedRoute";
 import PublicOnlyRoute from "./components/PublicOnlyRoute";
 import CanonicalLink from "./components/CanonicalLink";
+import PlayPurchaseRecovery from "./components/PlayPurchaseRecovery";
 
 export default function App() {
   return (
     <AuthProvider>
+      {/* Android app: credit Play purchases left unverified (no-op on web). */}
+      <PlayPurchaseRecovery />
       <WebSocketProvider>
         <SparkPoolBalanceProvider>
           {" "}

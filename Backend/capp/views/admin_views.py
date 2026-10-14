@@ -12,12 +12,25 @@ text, see capp/models.py::SafetyEvent).
 import logging
 import uuid
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone as dt_timezone
 
 from django.conf import settings
 from django.db import transaction as db_transaction
-from django.db.models import Count, Q
-from django.db.models.functions import TruncDate
+from django.db.models import (
+    CharField,
+    Count,
+    DateTimeField,
+    Exists,
+    F,
+    IntegerField,
+    Max,
+    Min,
+    OuterRef,
+    Q,
+    Subquery,
+    Value,
+)
+from django.db.models.functions import Cast, Coalesce, Concat, Greatest, TruncDate
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -29,6 +42,12 @@ from capp.classes.billing.balances import (
     debit_locked,
     lock_spark_pool,
 )
+from capp.classes.billing.promo_code_service import (
+    delete as promo_delete,
+    generate_codes as promo_generate_codes,
+    revoke as promo_revoke,
+    set_active as promo_set_active,
+)
 from capp.classes.billing.charge_service import _push_spark_pool_balance
 from capp.classes.moderation.safety_ledger import ATTENTION_EVENT_THRESHOLD, SafetyLedgerService, ledger_mode
 from capp.classes.support.support_service import SupportService
@@ -37,6 +56,9 @@ from capp.models import (
     Character,
     Conversation,
     CustomUser,
+    GuestIdentity,
+    Message,
+    PromoCode,
     SafetyEvent,
     SparkPool,
     SparkTransaction,
@@ -86,6 +108,27 @@ def _serialize_user_summary(user: CustomUser) -> dict:
         # covered by the edge/CDN analytics layer (Cloudflare).
         "gender": user.gender,
         "timezone": user.timezone,
+        # Promo campaign: which flyer code this account redeemed (at most one —
+        # enforced by a DB constraint), or None. Cheap read via the related
+        # name; safe on both list (annotated) and detail queries.
+        "promo_code": _user_promo_summary(user),
+    }
+
+
+def _user_promo_summary(user) -> dict | None:
+    """The promo code redeemed by this account, if any (metadata only)."""
+    promo = getattr(user, "redeemed_promo_code_prefetched", None)
+    if promo is None:
+        try:
+            promo = user.redeemed_promo_codes.first()
+        except Exception:  # pragma: no cover - defensive
+            promo = None
+    if promo is None:
+        return None
+    return {
+        "code": promo.code,
+        "sparks_amount": promo.sparks_amount,
+        "redeemed_at": promo.redeemed_at.isoformat() if promo.redeemed_at else None,
     }
 
 
@@ -99,13 +142,24 @@ def admin_list_users(request):
       - page, page_size
       - search: matches username / display_name (case-insensitive)
       - account_status: filter by CustomUser.AccountStatus value
+      - promo_used: "true" for accounts that redeemed a promo code,
+        "false" for accounts that never did (flyer campaign analytics).
     """
     try:
         page, page_size = _paginate(request)
         search = request.query_params.get("search", "").strip()
         account_status = request.query_params.get("account_status", "").strip()
+        promo_used = request.query_params.get("promo_used", "").strip().lower()
 
-        qs = CustomUser.objects.filter(is_deleted=False).order_by("-created_at")
+        qs = (
+            CustomUser.objects.filter(is_deleted=False).prefetch_related("redeemed_promo_codes").order_by("-created_at")
+        )
+
+        if promo_used in ("true", "false"):
+            # At most one redemption per account (DB-unique constraint), so the
+            # annotated count is only ever 0 or 1.
+            qs = qs.annotate(promo_count=Count("redeemed_promo_codes"))
+            qs = qs.filter(promo_count__gt=0) if promo_used == "true" else qs.filter(promo_count=0)
 
         if search:
             qs = qs.filter(
@@ -1351,10 +1405,17 @@ def admin_user_safety(request, user_id):
             "ledger_mode": ledger_mode(),
             "category_counts": category_counts,
             "care_event_count": SafetyEvent.objects.filter(user_id=user.pk, is_care=True).count(),
-            # Blocked child-safety photo uploads (audit F4): the screening
-            # refusal count, next to the other signals. Metadata only.
+            # Blocked photo uploads (audit F4): the screening refusal count,
+            # whatever the reason (child safety, bestiality, gore or death),
+            # next to the other signals. Metadata only.
             "photo_block_count": SafetyEvent.objects.filter(
-                user_id=user.pk, category=SafetyEvent.Category.PHOTO_CHILD_SAFETY.value
+                user_id=user.pk,
+                category__in=(
+                    SafetyEvent.Category.PHOTO_CHILD_SAFETY.value,
+                    SafetyEvent.Category.PHOTO_BESTIALITY.value,
+                    SafetyEvent.Category.PHOTO_GORE.value,
+                    SafetyEvent.Category.PHOTO_DEATH.value,
+                ),
             ).count(),
             "shadowed_event_count": SafetyEvent.objects.filter(
                 user_id=user.pk, action=SafetyEvent.Action.SHADOWED
@@ -1667,4 +1728,860 @@ def admin_shadow_overview(request):
         )
     except Exception:
         logger.exception("Error in admin_shadow_overview")
+        return Response({"status": "fail", "data": "server_error"}, status=500)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Audience analytics: everyone using www.uwenzai.com — accounts AND guests.
+#
+# Unlike admin_user_stats (which deliberately excludes guests and does no IP
+# geolocation), this view is a per-person table. It is admin-only and shows:
+#   * approximate country of the latest recorded visit (edge-injected
+#     CF-IPCountry captured by the visit endpoint — never a stored raw IP for
+#     accounts, never a third-party IP lookup),
+#   * first/last seen with an honest source label ("recorded visit" once the
+#     visit ping has shipped, otherwise earliest known chat/identity activity),
+#   * account creation date (null for guests),
+#   * which characters the person chatted with and how many messages were
+#     exchanged per character (sent user + AI messages only — pending,
+#     streaming, failed, blocked and system rows are not exchanged messages).
+#
+# People are guests (unclaimed GuestIdentity rows, plus legacy guest sessions
+# that pre-date server-minted identities and have no identity row) and accounts
+# (soft-deleted accounts excluded). A guest that was claimed by an account is
+# NOT listed separately: its history was re-keyed to the account at claim time,
+# so listing it would double-count. The claim carries the guest's first
+# recorded visit over to the account (see GuestClaimService).
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Column list shared by all three arms so their .values() projections line up
+# for the UNION (order and names must be identical).
+_AUDIENCE_COLS = (
+    "person_key",
+    "visitor_type",
+    "label",
+    "display_name",
+    "country_code",
+    "first_visit_at",
+    "last_visit_at",
+    "earliest_activity_at",
+    "latest_activity_at",
+    "claimed_guest_first_visit",
+    "record_created_at",
+    "last_login_at",
+    "identity_last_seen_at",
+    "account_created_at",
+    "total_messages",
+    "first_seen",
+    "last_seen",
+)
+
+# "exchanged" = a sent user or AI message. Everything else (system, pending,
+# streaming, failed, blocked) is not part of a conversation the person had.
+_AUDIENCE_SENDER_TYPES = [Message.SenderType.USER, Message.SenderType.AI]
+_AUDIENCE_MESSAGE_STATUS = Message.StatusChoices.SENT
+
+_AUDIENCE_ORDERINGS = {"last_seen", "first_seen", "created", "messages", "country", "label"}
+
+# Cap on per-person character breakdown rows in the response. The full set is
+# summarised by character_count; the list itself is the top characters.
+_AUDIENCE_MAX_CHARACTERS = 10
+
+
+def _audience_end_of_day(moment):
+    """A YYYY-MM-DD filter is date-granular, so a "before" bound includes that
+    whole day."""
+    return moment + timedelta(hours=23, minutes=59, seconds=59)
+
+
+def _audience_date(request, name):
+    """A YYYY-MM-DD query param as an aware datetime, or None.
+
+    Raises ValueError on a malformed value so the caller can 400 instead of
+    silently ignoring the filter. Date granularity only (no time-of-day),
+    mirroring the signups-per-day series in admin_user_stats.
+    """
+    raw = (request.query_params.get(name) or "").strip()
+    if not raw:
+        return None
+    parsed = datetime.strptime(raw, "%Y-%m-%d")  # raises ValueError
+    return timezone.make_aware(parsed, dt_timezone.utc)
+
+
+def _audience_arms(request, skip_country=False):
+    """The per-person arms, annotated and filtered, ready for .values().
+
+    ``skip_country`` rebuilds the arms without the country filter, for the
+    country facet counts.
+
+    Returns (arms, meta) where arms is a list of (kind, queryset) with kind in
+    {"account", "guest", "orphan"} and meta carries the parsed filter values.
+    """
+    params = request.query_params
+    visitor_type = params.get("visitor_type", "all").strip() or "all"
+    country = params.get("country", "").strip().upper() or ""
+    search = params.get("search", "").strip()
+    character_id = (params.get("character_id") or "").strip()
+    ordering = params.get("ordering", "-last_seen").strip() or "-last_seen"
+
+    if visitor_type not in ("all", "guests", "accounts"):
+        raise ValueError("invalid_visitor_type")
+    if ordering.lstrip("-") not in _AUDIENCE_ORDERINGS:
+        raise ValueError("invalid_ordering")
+    if character_id:
+        try:
+            character_id = str(uuid.UUID(character_id))
+        except (ValueError, AttributeError):
+            raise ValueError("invalid_character_id")
+
+    first_after = _audience_date(request, "first_visit_after")
+    first_before = _audience_date(request, "first_visit_before")
+    last_after = _audience_date(request, "last_visit_after")
+    last_before = _audience_date(request, "last_visit_before")
+    created_after = _audience_date(request, "created_after")
+    created_before = _audience_date(request, "created_before")
+
+    for start, end, label in (
+        (first_after, first_before, "first_visit"),
+        (last_after, last_before, "last_visit"),
+        (created_after, created_before, "created"),
+    ):
+        if start and end and start > end:
+            raise ValueError(f"invalid_{label}_range")
+
+    # Guest arms cannot match account-creation filters: guests have no account.
+    include_accounts = visitor_type != "guests"
+    include_guests = visitor_type != "accounts" and not (created_after or created_before)
+
+    # ── Shared subquery builders ──────────────────────────────────────────
+    def _sent_messages(**conversation_filters):
+        return Message.objects.filter(
+            sender_type__in=_AUDIENCE_SENDER_TYPES,
+            status=_AUDIENCE_MESSAGE_STATUS,
+            **conversation_filters,
+        )
+
+    def _dt_subquery(base, group_field, aggregate):
+        return Subquery(
+            base.values(group_field).annotate(m=aggregate).values("m")[:1],
+            output_field=DateTimeField(),
+        )
+
+    def _count_subquery(base, group_field):
+        return Subquery(
+            base.values(group_field).annotate(c=Count("pk")).values("c")[:1],
+            output_field=IntegerField(),
+        )
+
+    arms = []
+
+    # ── Arm 1: accounts ──────────────────────────────────────────────────
+    if include_accounts:
+        account_conversations = Conversation.objects.filter(user=OuterRef("pk"))
+        earliest_convo = _dt_subquery(account_conversations, "user_id", Min("started_at"))
+        latest_convo = _dt_subquery(
+            account_conversations,
+            "user_id",
+            Max(Coalesce("last_message_at", "started_at", output_field=DateTimeField())),
+        )
+        claimed_guest_first_visit = Subquery(
+            GuestIdentity.objects.filter(claimed_by=OuterRef("pk"))
+            .values("claimed_by_id")
+            .annotate(m=Min("first_visit_at"))
+            .values("m")[:1],
+            output_field=DateTimeField(),
+        )
+        account_messages = _sent_messages(conversation__user=OuterRef("pk"))
+
+        accounts = CustomUser.objects.filter(is_deleted=False).annotate(
+            person_key=Concat(Value("user:"), Cast("user_id", output_field=CharField()), output_field=CharField()),
+            visitor_type=Value("account", output_field=CharField()),
+            label=F("username"),
+            country_code=F("visit_country_code"),
+            earliest_activity_at=earliest_convo,
+            latest_activity_at=latest_convo,
+            claimed_guest_first_visit=claimed_guest_first_visit,
+            record_created_at=F("created_at"),
+            last_login_at=F("last_login"),
+            identity_last_seen_at=Value(None, output_field=DateTimeField()),
+            account_created_at=F("created_at"),
+            total_messages=_count_subquery(account_messages, "conversation__user_id"),
+            first_seen=Coalesce(
+                "first_visit_at",
+                claimed_guest_first_visit,
+                earliest_convo,
+                "created_at",
+                output_field=DateTimeField(),
+            ),
+            last_seen=Greatest("last_visit_at", latest_convo, "last_login"),
+        )
+
+        if search:
+            accounts = accounts.filter(
+                Q(username__icontains=search) | Q(display_name__icontains=search) | Q(full_name__icontains=search)
+            )
+        if country and not skip_country:
+            if country == "UNKNOWN":
+                accounts = accounts.filter(visit_country_code__isnull=True)
+            else:
+                accounts = accounts.filter(visit_country_code=country)
+        if character_id:
+            accounts = accounts.filter(
+                Exists(
+                    _sent_messages(
+                        conversation__user=OuterRef("pk"),
+                        conversation__character_id=character_id,
+                    )
+                )
+            )
+        if first_after:
+            accounts = accounts.filter(first_seen__gte=first_after)
+        if first_before:
+            accounts = accounts.filter(first_seen__lte=_audience_end_of_day(first_before))
+        if last_after:
+            accounts = accounts.filter(last_seen__gte=last_after)
+        if last_before:
+            accounts = accounts.filter(last_seen__lte=_audience_end_of_day(last_before))
+        if created_after:
+            accounts = accounts.filter(created_at__gte=created_after)
+        if created_before:
+            accounts = accounts.filter(created_at__lte=_audience_end_of_day(created_before))
+
+        arms.append(("account", accounts))
+
+    # ── Arm 2: guest identities (not claimed) ──────────────────────────────
+    if include_guests:
+        # Cast for annotations resolved on the GuestIdentity queryset itself.
+        guest_key = Cast("guest_id", output_field=CharField())
+        # Cast for expressions resolved INSIDE correlated subqueries against the
+        # outer GuestIdentity row (a plain Cast here would resolve "guest_id"
+        # against Conversation and raise FieldError).
+        outer_key = Cast(OuterRef("guest_id"), output_field=CharField())
+        guest_conversations = Conversation.objects.filter(guest_session_id=outer_key)
+        earliest_convo_g = _dt_subquery(guest_conversations, "guest_session_id", Min("started_at"))
+        latest_convo_g = _dt_subquery(
+            guest_conversations,
+            "guest_session_id",
+            Max(Coalesce("last_message_at", "started_at", output_field=DateTimeField())),
+        )
+        guest_messages = _sent_messages(conversation__guest_session_id=outer_key)
+
+        guests = GuestIdentity.objects.exclude(status=GuestIdentity.Status.CLAIMED).annotate(
+            person_key=Concat(Value("guest:"), guest_key, output_field=CharField()),
+            visitor_type=Value("guest", output_field=CharField()),
+            label=guest_key,
+            display_name=Value(None, output_field=CharField()),
+            country_code=F("visit_country_code"),
+            earliest_activity_at=earliest_convo_g,
+            latest_activity_at=latest_convo_g,
+            claimed_guest_first_visit=Value(None, output_field=DateTimeField()),
+            record_created_at=F("created_at"),
+            last_login_at=Value(None, output_field=DateTimeField()),
+            identity_last_seen_at=F("last_seen_at"),
+            account_created_at=Value(None, output_field=DateTimeField()),
+            total_messages=_count_subquery(guest_messages, "conversation__guest_session_id"),
+            first_seen=Coalesce(
+                "first_visit_at",
+                earliest_convo_g,
+                "created_at",
+                output_field=DateTimeField(),
+            ),
+            last_seen=Greatest("last_visit_at", latest_convo_g, "last_seen_at"),
+        )
+
+        if search:
+            guests = guests.annotate(search_key=guest_key).filter(search_key__icontains=search)
+        if country and not skip_country:
+            if country == "UNKNOWN":
+                guests = guests.filter(visit_country_code__isnull=True)
+            else:
+                guests = guests.filter(visit_country_code=country)
+        if character_id:
+            guests = guests.filter(
+                Exists(
+                    _sent_messages(
+                        conversation__guest_session_id=outer_key,
+                        conversation__character_id=character_id,
+                    )
+                )
+            )
+        if first_after:
+            guests = guests.filter(first_seen__gte=first_after)
+        if first_before:
+            guests = guests.filter(first_seen__lte=_audience_end_of_day(first_before))
+        if last_after:
+            guests = guests.filter(last_seen__gte=last_after)
+        if last_before:
+            guests = guests.filter(last_seen__lte=_audience_end_of_day(last_before))
+
+        arms.append(("guest", guests))
+
+    # ── Arm 3: legacy orphan guest sessions ────────────────────────────────
+    # Conversations still keyed on a guest_session_id that has no GuestIdentity
+    # row: legacy client-generated UUIDs that never went through the one-time
+    # migration. They are real people with real chats, so they appear with
+    # unknown visit fields rather than being silently dropped.
+    if include_guests:
+        identity_keys = GuestIdentity.objects.annotate(key=Cast("guest_id", output_field=CharField())).values("key")
+        orphan_conversations = Conversation.objects.filter(user__isnull=True, guest_session_id__isnull=False).exclude(
+            guest_session_id__in=identity_keys
+        )
+
+        orphans = orphan_conversations.values("guest_session_id").annotate(
+            person_key=Concat(Value("guest:"), "guest_session_id", output_field=CharField()),
+            visitor_type=Value("guest", output_field=CharField()),
+            label=F("guest_session_id"),
+            display_name=Value(None, output_field=CharField()),
+            country_code=Value(None, output_field=CharField()),
+            first_visit_at=Value(None, output_field=DateTimeField()),
+            last_visit_at=Value(None, output_field=DateTimeField()),
+            earliest_activity_at=Min("started_at"),
+            latest_activity_at=Max(Coalesce("last_message_at", "started_at", output_field=DateTimeField())),
+            claimed_guest_first_visit=Value(None, output_field=DateTimeField()),
+            record_created_at=Min("started_at"),
+            last_login_at=Value(None, output_field=DateTimeField()),
+            identity_last_seen_at=Value(None, output_field=DateTimeField()),
+            account_created_at=Value(None, output_field=DateTimeField()),
+            total_messages=Subquery(
+                _sent_messages(conversation__guest_session_id=OuterRef("guest_session_id"))
+                .values("conversation__guest_session_id")
+                .annotate(c=Count("pk"))
+                .values("c")[:1],
+                output_field=IntegerField(),
+            ),
+            first_seen=Min("started_at"),
+            last_seen=Max(Coalesce("last_message_at", "started_at", output_field=DateTimeField())),
+        )
+
+        if search:
+            orphans = orphans.filter(guest_session_id__icontains=search)
+        # Orphans have no recorded visits and no known country: a specific
+        # country filter excludes them; "unknown" keeps them.
+        if country and country != "UNKNOWN" and not skip_country:
+            orphans = orphans.none()
+        if character_id:
+            orphans = orphans.annotate(
+                has_character=Exists(
+                    _sent_messages(
+                        conversation__guest_session_id=OuterRef("guest_session_id"),
+                        conversation__character_id=character_id,
+                    )
+                )
+            ).filter(has_character=True)
+        if first_after:
+            orphans = orphans.filter(first_seen__gte=first_after)
+        if first_before:
+            orphans = orphans.filter(first_seen__lte=_audience_end_of_day(first_before))
+        if last_after:
+            orphans = orphans.filter(last_seen__gte=last_after)
+        if last_before:
+            orphans = orphans.filter(last_seen__lte=_audience_end_of_day(last_before))
+
+        arms.append(("orphan", orphans))
+
+    return arms, {
+        "visitor_type": visitor_type,
+        "country": country,
+        "search": search,
+        "character_id": character_id,
+        "ordering": ordering,
+    }
+
+
+def _audience_order_by(ordering):
+    """The ORDER BY expression list for the union, with deterministic ties.
+
+    NULLs sort last regardless of direction so that e.g. guests (no account
+    date) don't leap to the top of a "newest accounts" list.
+    """
+    direction = "desc" if ordering.startswith("-") else "asc"
+    # The public ordering names map onto the union's column names.
+    field = {
+        "messages": "total_messages",
+        "created": "account_created_at",
+    }.get(ordering.lstrip("-"), ordering.lstrip("-"))
+    expr = F(field)
+    order = expr.desc(nulls_last=True) if direction == "desc" else expr.asc(nulls_last=True)
+    return [order, F("person_key").asc()]
+
+
+def _audience_first_seen_source(row):
+    if row["first_visit_at"]:
+        return "recorded_visit"
+    if row["claimed_guest_first_visit"]:
+        return "claimed_guest_visit"
+    if row["earliest_activity_at"]:
+        return "conversation"
+    return "record_created"
+
+
+def _audience_last_seen_source(row):
+    if row["last_visit_at"]:
+        return "recorded_visit"
+    if row["latest_activity_at"]:
+        return "conversation"
+    if row["last_login_at"]:
+        return "login"
+    if row["identity_last_seen_at"]:
+        return "api_activity"
+    return "record_created"
+
+
+def _audience_character_breakdowns(page_rows):
+    """Per-person character/message aggregates for just the page's people.
+
+    Returns {person_key: {"characters": [...], "character_count": int}} with
+    each character entry {character_id, name, user_messages, ai_messages,
+    total_messages} sorted by total descending.
+    """
+    user_ids = [r["person_key"][5:] for r in page_rows if r["visitor_type"] == "account"]
+    guest_keys = [r["person_key"][6:] for r in page_rows if r["visitor_type"] == "guest"]
+    per_person = {}
+
+    def _collect(rows, owner_field):
+        for row in rows:
+            key = (
+                "user:" + str(row[owner_field]) if owner_field.endswith("user_id") else "guest:" + str(row[owner_field])
+            )
+            entry = per_person.setdefault(key, {"characters": {}, "character_count": 0})
+            char_id = str(row["conversation__character_id"])
+            char_entry = entry["characters"].setdefault(char_id, {"user_messages": 0, "ai_messages": 0})
+            if row["sender_type"] == Message.SenderType.USER:
+                char_entry["user_messages"] += row["c"]
+            else:
+                char_entry["ai_messages"] += row["c"]
+
+    message_filter = {
+        "sender_type__in": _AUDIENCE_SENDER_TYPES,
+        "status": _AUDIENCE_MESSAGE_STATUS,
+    }
+    if user_ids:
+        rows = (
+            Message.objects.filter(conversation__user_id__in=user_ids, **message_filter)
+            .values("conversation__user_id", "conversation__character_id", "sender_type")
+            .annotate(c=Count("pk"))
+        )
+        _collect(rows, "conversation__user_id")
+    if guest_keys:
+        rows = (
+            Message.objects.filter(conversation__guest_session_id__in=guest_keys, **message_filter)
+            .values("conversation__guest_session_id", "conversation__character_id", "sender_type")
+            .annotate(c=Count("pk"))
+        )
+        _collect(rows, "conversation__guest_session_id")
+
+    character_ids = {cid for entry in per_person.values() for cid in entry["characters"]}
+    names = {
+        str(character_id): name
+        for character_id, name in Character.objects.filter(character_id__in=character_ids).values_list(
+            "character_id", "name"
+        )
+    }
+
+    result = {}
+    for person_key, entry in per_person.items():
+        characters = []
+        for cid, counts in entry["characters"].items():
+            total = counts["user_messages"] + counts["ai_messages"]
+            characters.append(
+                {
+                    "character_id": cid,
+                    "name": names.get(cid, "Unknown character"),
+                    "user_messages": counts["user_messages"],
+                    "ai_messages": counts["ai_messages"],
+                    "total_messages": total,
+                }
+            )
+        characters.sort(key=lambda c: (-c["total_messages"], c["name"]))
+        result[person_key] = {
+            "characters": characters[:_AUDIENCE_MAX_CHARACTERS],
+            "character_count": len(characters),
+        }
+    return result
+
+
+def _audience_country_facets(arms):
+    """Country counts for the filter dropdown.
+
+    Computed per arm (annotating over a UNION is not supported). The arms are
+    built with skip_country=True so the dropdown shows what selecting each
+    value would yield.
+    """
+    counts = {}
+
+    def _add(code, n):
+        if n:
+            counts[code] = counts.get(code, 0) + n
+
+    for kind, qs in arms:
+        if kind == "account":
+            rows = qs.values("country_code").annotate(c=Count("user_id"))
+            for row in rows:
+                _add(row["country_code"], row["c"])
+        elif kind == "guest":
+            rows = qs.values("country_code").annotate(c=Count("guest_id"))
+            for row in rows:
+                _add(row["country_code"], row["c"])
+        else:
+            # Orphans always have unknown country.
+            _add(None, qs.count())
+
+    return [
+        {"country_code": code, "count": n}
+        for code, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0] is not None, str(kv[0])))
+    ]
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, IsAdminOrSuperuser])
+def admin_audience_overview(request):
+    """GET /api/v1/admin/audience/
+
+    Per-person analytics across accounts and guests. Query params:
+
+      - page, page_size
+      - visitor_type: all (default) | guests | accounts
+      - country: ISO-3166 alpha-2 code, or "unknown" for no recorded country
+      - character_id: only people who exchanged at least one sent message
+        with that character
+      - first_visit_after / first_visit_before, last_visit_after /
+        last_visit_before (YYYY-MM-DD): bounds on first/last seen
+      - created_after / created_before (YYYY-MM-DD): account creation bounds
+        (excludes guests, who have no account)
+      - search: substring of username/display name/full name (accounts) or
+        guest id (guests)
+      - ordering: -last_seen (default), last_seen, -first_seen, first_seen,
+        -created, created, -messages, messages, country, -country, label,
+        -label
+
+    Privacy: country is the edge-injected country of the latest recorded
+    visit (approximate, never a raw IP); message counts are aggregates;
+    message text is never touched. First/last seen carry a source label so
+    the admin can tell a recorded visit from earliest-known-activity
+    evidence — history from before the visit ping shipped is not invented.
+    """
+    try:
+        page, page_size = _paginate(request, default_page_size=20, max_page_size=100)
+        arms, meta = _audience_arms(request)
+        if not arms:
+            return Response(
+                {
+                    "status": "success",
+                    "data": {
+                        "people": [],
+                        "page": page,
+                        "page_size": page_size,
+                        "total": 0,
+                        "total_pages": 0,
+                        "summary": {"accounts": 0, "guests": 0, "with_recorded_visit": 0},
+                        "countries": [],
+                    },
+                },
+                status=200,
+            )
+
+        projected = [qs.values(*_AUDIENCE_COLS) for _, qs in arms]
+        combined = projected[0].union(*projected[1:], all=True)
+
+        order_expressions = _audience_order_by(meta["ordering"])
+        combined = combined.order_by(*order_expressions)
+
+        total = combined.count()
+        start = (page - 1) * page_size
+        end = start + page_size
+        page_rows = list(combined[start:end])
+
+        breakdowns = _audience_character_breakdowns(page_rows)
+
+        # Type counts over the same filtered set (so the summary matches the
+        # table). Country facets drop only the country filter itself.
+        summary = {"accounts": 0, "guests": 0, "with_recorded_visit": 0}
+        for kind, qs in arms:
+            if kind == "account":
+                summary["accounts"] = qs.count()
+                summary["with_recorded_visit"] += qs.filter(first_visit_at__isnull=False).count()
+            else:
+                summary["guests"] += qs.count()
+                if kind == "guest":
+                    summary["with_recorded_visit"] += qs.filter(first_visit_at__isnull=False).count()
+
+        facet_arms, _ = _audience_arms(request, skip_country=True)
+        countries = _audience_country_facets(facet_arms)
+
+        people = []
+        for row in page_rows:
+            person_key = row["person_key"]
+            breakdown = breakdowns.get(person_key, {"characters": [], "character_count": 0})
+            people.append(
+                {
+                    "person_key": person_key,
+                    "visitor_type": row["visitor_type"],
+                    "label": row["label"],
+                    "display_name": row["display_name"],
+                    "country_code": row["country_code"],
+                    "first_seen_at": row["first_seen"].isoformat() if row["first_seen"] else None,
+                    "first_seen_source": _audience_first_seen_source(row),
+                    "last_seen_at": row["last_seen"].isoformat() if row["last_seen"] else None,
+                    "last_seen_source": _audience_last_seen_source(row),
+                    "account_created_at": (
+                        row["account_created_at"].isoformat() if row["account_created_at"] else None
+                    ),
+                    "total_messages": row["total_messages"] or 0,
+                    "characters": breakdown["characters"],
+                    "character_count": breakdown["character_count"],
+                }
+            )
+
+        return Response(
+            {
+                "status": "success",
+                "data": {
+                    "people": people,
+                    "page": page,
+                    "page_size": page_size,
+                    "total": total,
+                    "total_pages": (total + page_size - 1) // page_size if page_size else 0,
+                    "summary": summary,
+                    "countries": countries,
+                },
+            },
+            status=200,
+        )
+    except ValueError as exc:
+        return Response({"status": "fail", "data": str(exc)}, status=400)
+    except Exception:
+        logger.exception("Error in admin_audience_overview")
+        return Response({"status": "fail", "data": "server_error"}, status=500)
+
+
+# ==============================================================================
+# Promo codes (flyer campaign)
+# ==============================================================================
+
+
+def _serialize_promo_code(promo: PromoCode) -> dict:
+    """Admin-facing promo code row. ``redeemed_by`` is the account that used the
+    code (at most one — single-use), with a deleted-account placeholder kept
+    because ``redeemed_at`` remains set after erasure."""
+    redeemed_by = None
+    if promo.redeemed_by_id is not None:
+        # select_related("redeemed_by") in the list view.
+        redeemed_by_user = promo.redeemed_by
+        if redeemed_by_user is not None:
+            redeemed_by = {
+                "user_id": str(redeemed_by_user.user_id),
+                "username": redeemed_by_user.username,
+                "display_name": redeemed_by_user.get_display_name(),
+                "account_deleted": False,
+            }
+        else:
+            # The link exists but the user row is gone (hard-deleted account).
+            redeemed_by = {
+                "user_id": str(promo.redeemed_by_id),
+                "username": "(deleted account)",
+                "display_name": "(deleted account)",
+                "account_deleted": True,
+            }
+    elif promo.redeemed_at is not None:
+        # Account erasure nulls redeemed_by (SET_NULL) while redeemed_at stays
+        # set — the code remains consumed. Show the placeholder rather than
+        # an empty cell so the campaign history stays readable.
+        redeemed_by = {
+            "user_id": None,
+            "username": "(deleted account)",
+            "display_name": "(deleted account)",
+            "account_deleted": True,
+        }
+    return {
+        "promo_code_id": str(promo.promo_code_id),
+        "code": promo.code,
+        "sparks_amount": promo.sparks_amount,
+        "is_active": promo.is_active,
+        "is_revoked": promo.is_revoked,
+        "redeemed_by": redeemed_by,
+        "redeemed_at": promo.redeemed_at.isoformat() if promo.redeemed_at else None,
+        "note": promo.note,
+        "created_at": promo.created_at.isoformat(),
+        "updated_at": promo.updated_at.isoformat(),
+    }
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, IsAdminOrSuperuser])
+def admin_list_promo_codes(request):
+    """
+    GET /api/v1/admin/promo-codes/
+
+    Query params:
+      - page, page_size
+      - search: matches code (case-insensitive)
+      - status: available | redeemed | inactive | revoked
+    """
+    try:
+        page, page_size = _paginate(request)
+        search = request.query_params.get("search", "").strip()
+        status = request.query_params.get("status", "").strip().lower()
+
+        qs = PromoCode.objects.select_related("redeemed_by").order_by("-created_at")
+
+        if search:
+            qs = qs.filter(code__icontains=search)
+
+        if status == "available":
+            qs = qs.filter(redeemed_at__isnull=True, is_revoked=False, is_active=True)
+        elif status == "redeemed":
+            qs = qs.filter(redeemed_at__isnull=False)
+        elif status == "inactive":
+            qs = qs.filter(redeemed_at__isnull=True, is_revoked=False, is_active=False)
+        elif status == "revoked":
+            qs = qs.filter(is_revoked=True)
+        elif status:
+            return Response({"status": "fail", "data": "invalid_status"}, status=400)
+
+        total = qs.count()
+        start = (page - 1) * page_size
+        end = start + page_size
+        codes = list(qs[start:end])
+
+        return Response(
+            {
+                "status": "success",
+                "data": {
+                    "promo_codes": [_serialize_promo_code(p) for p in codes],
+                    "page": page,
+                    "page_size": page_size,
+                    "total": total,
+                    "total_pages": (total + page_size - 1) // page_size if page_size else 0,
+                },
+            },
+            status=200,
+        )
+    except Exception:
+        logger.exception("Error in admin_list_promo_codes")
+        return Response({"status": "fail", "data": "server_error"}, status=500)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, IsAdminOrSuperuser])
+def admin_create_promo_codes(request):
+    """
+    POST /api/v1/admin/promo-codes/
+
+    Body: { count: int, sparks_amount: int, note?: string }
+
+    Generates `count` unique single-use codes, each worth `sparks_amount` Sparks,
+    ready to print on flyers. The codes are returned once, in full, in the
+    response (they are also always visible in the list endpoint).
+    """
+    try:
+        raw_count = request.data.get("count", 1)
+        raw_sparks = request.data.get("sparks_amount")
+        note = (request.data.get("note") or "").strip()
+
+        try:
+            count = int(raw_count)
+            sparks_amount = int(raw_sparks)
+        except (TypeError, ValueError):
+            return Response({"status": "fail", "data": "invalid_count_or_sparks"}, status=400)
+
+        try:
+            codes = promo_generate_codes(
+                count=count,
+                sparks_amount=sparks_amount,
+                note=note,
+                created_by=request.user,
+            )
+        except ValueError as exc:
+            return Response({"status": "fail", "data": str(exc)}, status=400)
+
+        return Response(
+            {
+                "status": "success",
+                "data": {
+                    "created": len(codes),
+                    "sparks_amount": sparks_amount,
+                    "promo_codes": [_serialize_promo_code(p) for p in codes],
+                },
+            },
+            status=201,
+        )
+    except Exception:
+        logger.exception("Error in admin_create_promo_codes")
+        return Response({"status": "fail", "data": "server_error"}, status=500)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, IsAdminOrSuperuser])
+def admin_set_promo_code_active(request, promo_code_id):
+    """
+    POST /api/v1/admin/promo-codes/<promo_code_id>/active/
+
+    Body: { is_active: bool }
+
+    Reversible pause/resume of an unredeemed, unrevoked code. Revoked codes are
+    permanently withdrawn and cannot be reactivated; redeemed codes are fixed
+    history.
+    """
+    try:
+        raw = request.data.get("is_active")
+        if not isinstance(raw, bool):
+            return Response({"status": "fail", "data": "is_active_boolean_required"}, status=400)
+
+        try:
+            promo = promo_set_active(promo_code_id, is_active=raw, admin_user=request.user)
+        except LookupError:
+            return Response({"status": "fail", "data": "promo_code_not_found"}, status=404)
+        except ValueError as exc:
+            return Response({"status": "fail", "data": str(exc)}, status=409)
+
+        return Response({"status": "success", "data": _serialize_promo_code(promo)}, status=200)
+    except Exception:
+        logger.exception("Error in admin_set_promo_code_active")
+        return Response({"status": "fail", "data": "server_error"}, status=500)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, IsAdminOrSuperuser])
+def admin_revoke_promo_code(request, promo_code_id):
+    """
+    POST /api/v1/admin/promo-codes/<promo_code_id>/revoke/
+
+    Permanently withdraw an unredeemed code. Refused (409 already_redeemed) for
+    redeemed codes — credited Sparks live in the append-only ledger.
+    """
+    try:
+        try:
+            promo = promo_revoke(promo_code_id, admin_user=request.user)
+        except LookupError:
+            return Response({"status": "fail", "data": "promo_code_not_found"}, status=404)
+        except ValueError as exc:
+            return Response({"status": "fail", "data": str(exc)}, status=409)
+
+        return Response({"status": "success", "data": _serialize_promo_code(promo)}, status=200)
+    except Exception:
+        logger.exception("Error in admin_revoke_promo_code")
+        return Response({"status": "fail", "data": "server_error"}, status=500)
+
+
+@api_view(["DELETE"])
+@permission_classes([IsAuthenticated, IsAdminOrSuperuser])
+def admin_delete_promo_code(request, promo_code_id):
+    """
+    DELETE /api/v1/admin/promo-codes/<promo_code_id>/
+
+    Remove an unredeemed code outright. Redeemed codes are kept forever: the
+    campaign history (who used which flyer) is audit-relevant. Backend refuses
+    with 409 already_redeemed in that case.
+    """
+    try:
+        try:
+            promo_delete(promo_code_id, admin_user=request.user)
+        except LookupError:
+            return Response({"status": "fail", "data": "promo_code_not_found"}, status=404)
+        except ValueError as exc:
+            return Response({"status": "fail", "data": str(exc)}, status=409)
+
+        return Response({"status": "success", "data": "deleted"}, status=200)
+    except Exception:
+        logger.exception("Error in admin_delete_promo_code")
         return Response({"status": "fail", "data": "server_error"}, status=500)

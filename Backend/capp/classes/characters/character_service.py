@@ -31,6 +31,13 @@ from capp.classes.billing.paid_features import (
     is_free_actor,
 )
 from capp.classes.characters.attire_detection import mentions_clothing_or_nudity
+from capp.classes.moderation.photo_moderation import (
+    GENERATED_IMAGE_BLOCKED_REASON,
+    GENERATED_IMAGE_UNAVAILABLE_REASON,
+    PhotoModerationBlocked,
+    PhotoModerationUnavailable,
+    moderate_generated_image,
+)
 from capp.classes.moderation.image_prompt_policy import (
     ImagePromptPolicy,
     ProhibitedImageSubjectError,
@@ -40,6 +47,40 @@ from capp.classes.ai.mistral_client import MistralClient
 from capp.constants import CASHBACK_PUBLIC_CHARACTER, COUNTRY_TIMEZONE_MAP
 
 logger = logging.getLogger(__name__)
+
+# Image-prompt descriptions for the traditional Kenyan / East African
+# ``Character.ClothingStyle`` choices. Keyed by the STORED value. Each phrase is
+# read after "…and wear", so it must work as a noun phrase. ``male`` overrides
+# ``default`` only where the garment is genuinely gendered.
+TRADITIONAL_CLOTHING_PROMPTS = {
+    "kitenge": {
+        "default": "a vibrant kitenge outfit made of colorful African wax-print fabric with a modern tailored fit",
+    },
+    "kanga": {
+        "default": "a colorful East African kanga cloth wrap with bold printed patterns and a matching headwrap",
+    },
+    "swahili_coastal": {
+        "default": "a Swahili coastal outfit: a printed kanga wrap dress with a light headscarf and gold jewelry",
+        "male": "a long white Swahili kanzu robe with an embroidered kofia cap",
+    },
+    "maasai": {
+        "default": (
+            "traditional Maasai shuka, a red checked cloth wrap, layered with colorful beaded collars, "
+            "bracelets and earrings"
+        ),
+    },
+    "gomesi": {
+        "default": "a traditional Ugandan gomesi dress with square puffed shoulders and a wide fitted sash",
+        "male": "a traditional Ugandan white kanzu robe worn under a tailored jacket",
+    },
+    "habesha": {
+        "default": (
+            "a traditional Ethiopian habesha kemis, a white cotton dress with colorful woven tilet "
+            "embroidery along the hem and sleeves"
+        ),
+        "male": "a traditional Ethiopian white cotton habesha shirt and trousers with embroidered trim",
+    },
+}
 
 
 class _BoundedExecutor:
@@ -130,6 +171,8 @@ class CharacterService:
             tone_style = payload.get("tone_style", "warm")
             relationship_style = payload.get("relationship_style", "companion")
             clothing_style = payload.get("clothing_style", "casual")
+            # The persona writer should read "Swahili Coastal", not "swahili_coastal".
+            clothing_label = dict(Character.ClothingStyle.choices).get(clothing_style, clothing_style)
             body_type = payload.get("body_type", "average")
             age = payload.get("age", 25)
             hair_color = payload.get("hair_color", "brown")
@@ -180,7 +223,7 @@ class CharacterService:
                 f"Body type: {body_type}\n"
                 f"Hair color: {hair_color}\n"
                 f"Eye color: {eye_color}\n"
-                f"Clothing style: {clothing_style}\n"
+                f"Clothing style: {clothing_label}\n"
                 f"Relationship style: {relationship_style}\n"
                 f"{'Occupation: ' + occupation_name + chr(10) if occupation_name else ''}"
                 f"{'Hobbies: ' + ', '.join(hobbies) + chr(10) if hobbies else ''}"
@@ -582,6 +625,23 @@ class CharacterService:
             if not cls._can_edit_character(actor=actor, character=character, is_admin_actor=is_admin_actor):
                 return {"status": "fail", "data": "permission_denied"}
 
+            # Remembered before any field is applied: the review rules below need
+            # to know what the character was, not what this request turned it into.
+            previous_status = character.status
+            previous_is_public = character.is_public
+
+            # A draft cannot enter the review queue without a picture, the same
+            # rule complete-setup applies. Checked before anything is written so a
+            # refusal leaves the character exactly as it was.
+            if (
+                not is_admin_actor
+                and previous_status == Character.StatusChoices.DRAFT
+                and cls._to_bool(payload.get("submit_for_review"), default=False)
+                and cls._to_bool(payload.get("is_public"), default=character.is_public)
+                and not character.avatar
+            ):
+                return {"status": "fail", "data": "avatar_required"}
+
             name = (payload.get("name") or character.name).strip()
             short_description = (
                 payload.get(
@@ -932,70 +992,52 @@ class CharacterService:
                         update_fields.append("is_active")
 
             else:
-                # ── NON‑ADMIN: handle status changes based on is_public ──────────
-                # Determine if is_public is being changed and what the new value is.
-                # The 'is_public' may already have been updated in character.is_public
-                # if it was in the payload. So we use the current character.is_public
-                # (which reflects the change if any) and compare to the old value.
-                getattr(character, "_old_is_public", character.is_public)
-                # Store old value before we possibly change it; we'll compute new value from payload or existing.
-                # Actually we need to know if the payload contains is_public and what it is.
-                is_public_in_payload = "is_public" in payload
-                new_is_public = (
-                    cls._to_bool(payload.get("is_public"), default=character.is_public)
-                    if is_public_in_payload
-                    else character.is_public
-                )
+                # ── NON‑ADMIN: review state follows visibility ──────────────────
+                # ``character.is_public`` already holds the value this request
+                # asked for, so the change is read against ``previous_is_public``.
+                # (Comparing it with the payload, as this branch used to, was
+                # always equal and the privacy transitions never ran.)
+                status = character.status
+                submit_for_review = False
+                free_submission = False
 
-                # Determine if privacy status changed
-                if is_public_in_payload and character.is_public != new_is_public:
-                    # It changed, so update character.is_public to new value (already done above)
-                    # We'll handle the status change here.
-                    if new_is_public is False:
-                        # Public -> Private: auto‑approve, clear review data
-                        character.status = Character.StatusChoices.APPROVED
-                        character.is_active = True
-                        character.reviewed_by = None
-                        character.reviewed_at = None
-                        character.rejection_reason = None
-                        update_fields.extend(["status", "is_active", "reviewed_by", "reviewed_at", "rejection_reason"])
-                        # No charge for this change
-                        charge_after_save = False
-                    else:
-                        # Private -> Public: submit for approval. The Sparks are
-                        # held just before the save below, once every branch has
-                        # agreed that a re-review is actually happening.
-                        character.status = Character.StatusChoices.PENDING
-                        character.is_active = False
-                        character.reviewed_by = None
-                        character.reviewed_at = None
-                        character.rejection_reason = None
-                        update_fields.extend(["status", "is_active", "reviewed_by", "reviewed_at", "rejection_reason"])
-                        charge_after_save = True
-                else:
-                    # No change in is_public: apply existing re‑review logic only for public characters
-                    should_submit_for_review = False
-                    if character.is_public:  # Only public characters require re‑review
-                        # 1) If character is APPROVED, any edit forces re‑review
-                        if character.status == Character.StatusChoices.APPROVED:
-                            should_submit_for_review = True
-                        # 2) If user explicitly asks to submit (DRAFT or REJECTED)
-                        elif payload.get("submit_for_review") and character.status in (
-                            Character.StatusChoices.DRAFT,
-                            Character.StatusChoices.REJECTED,
-                        ):
-                            should_submit_for_review = True
+                if character.is_public:
+                    if status == Character.StatusChoices.APPROVED:
+                        # Any edit to an approved public character, including
+                        # turning a private one public, needs a fresh review.
+                        submit_for_review = True
+                    elif status in (
+                        Character.StatusChoices.DRAFT,
+                        Character.StatusChoices.REJECTED,
+                    ) and cls._to_bool(payload.get("submit_for_review"), default=False):
+                        submit_for_review = True
+                        # First submission of a draft is part of creating the
+                        # character, which was already paid for; only the
+                        # resubmission of a rejected one is billed as a re-review.
+                        free_submission = status == Character.StatusChoices.DRAFT
+                elif previous_is_public and status in (
+                    Character.StatusChoices.DRAFT,
+                    Character.StatusChoices.PENDING,
+                ):
+                    # Public -> private: private characters need no review, so a
+                    # draft or pending one must not stay stuck waiting for it.
+                    # Approved, rejected and archived characters keep their state
+                    # (and an admin's deactivation) untouched.
+                    character.status = Character.StatusChoices.APPROVED
+                    character.is_active = True
+                    character.reviewed_by = None
+                    character.reviewed_at = None
+                    character.rejection_reason = None
+                    update_fields.extend(["status", "is_active", "reviewed_by", "reviewed_at", "rejection_reason"])
 
-                    if should_submit_for_review:
-                        character.status = Character.StatusChoices.PENDING
-                        character.is_active = False
-                        character.reviewed_by = None
-                        character.reviewed_at = None
-                        character.rejection_reason = None
-                        update_fields.extend(["status", "is_active", "reviewed_by", "reviewed_at", "rejection_reason"])
-                        charge_after_save = True
-                    else:
-                        charge_after_save = False
+                if submit_for_review:
+                    character.status = Character.StatusChoices.PENDING
+                    character.is_active = False
+                    character.reviewed_by = None
+                    character.reviewed_at = None
+                    character.rejection_reason = None
+                    update_fields.extend(["status", "is_active", "reviewed_by", "reviewed_at", "rejection_reason"])
+                    charge_after_save = not free_submission
 
             # ── Hold the re-review fee before persisting the transition ─────────
             # The character is still unsaved here, so a caller who cannot afford
@@ -1039,6 +1081,15 @@ class CharacterService:
 
                 if reservation is not None:
                     PaidFeature.settle(reservation, reason="character_resubmitted_for_review")
+
+                if previous_is_public and not character.is_public:
+                    # Going private withdraws any request to publish gallery
+                    # images with the character.
+                    cls._withdraw_gallery_publication(character)
+                if previous_status != Character.StatusChoices.APPROVED:
+                    # An admin moving the character to approved here is an
+                    # approval like any other.
+                    cls._publish_gallery_after_approval(character)
 
             logger.info("Character updated successfully character_id=%s", character.character_id)
 
@@ -1137,6 +1188,9 @@ class CharacterService:
                     update_fields.extend(["reviewed_by", "reviewed_at"])
 
                 character.save(update_fields=update_fields)
+
+                # An admin finishing setup approves the character on the spot.
+                cls._publish_gallery_after_approval(character)
 
             logger.info(
                 "Character setup completed character_id=%s status=%s",
@@ -1590,6 +1644,30 @@ class CharacterService:
             return {"status": "fail", "data": "server_error"}
 
     @classmethod
+    def _publish_gallery_after_approval(cls, character: Character) -> int:
+        """Publish gallery images waiting on this character's approval.
+
+        A no-op unless the character is now public and approved, so it is safe to
+        call after any status change. A failure here is logged and swallowed: the
+        approval itself is already decided, and approving again republishes.
+        """
+        from capp.classes.characters.character_gallery_service import CharacterGalleryService
+
+        try:
+            # A savepoint, so a database error cannot poison a caller's transaction.
+            with transaction.atomic():
+                return CharacterGalleryService.publish_images_awaiting_approval(character)
+        except Exception:
+            logger.exception("Could not publish gallery images on approval character_id=%s", character.character_id)
+            return 0
+
+    @classmethod
+    def _withdraw_gallery_publication(cls, character: Character) -> int:
+        from capp.classes.characters.character_gallery_service import CharacterGalleryService
+
+        return CharacterGalleryService.withdraw_images_awaiting_approval(character)
+
+    @classmethod
     def approve_character(cls, character: Character, actor, is_active: bool = True, request=None) -> Dict[str, Any]:
         try:
             if not character:
@@ -1624,6 +1702,9 @@ class CharacterService:
             if update_fields:
                 update_fields.append("updated_at")
                 character.save(update_fields=update_fields)
+
+            # The owner's edit/setup gallery images go public with the character.
+            cls._publish_gallery_after_approval(character)
 
             # ---------- CASHBACK ----------
             if (
@@ -1812,9 +1893,10 @@ class CharacterService:
         The prohibited-subject policy is re-asserted here as the last gate
         before the provider is contacted, so no caller — view, service, Celery
         task, or a direct call to this helper — can dispatch a prompt involving
-        children, animals or deceased people. Violations raise
-        ``ProhibitedImageSubjectError`` rather than returning None, so they are
-        never mistaken for a provider failure that should trigger a fallback.
+        children, deceased people or sexual content involving animals.
+        Violations raise ``ProhibitedImageSubjectError`` rather than returning
+        None, so they are never mistaken for a provider failure that should
+        trigger a fallback.
 
         Returns image bytes on success, None on failure.
         """
@@ -1968,6 +2050,135 @@ class CharacterService:
                         [f"{timeout_ms}ms", f"{timeout_ms}ms"],
                     )
             return operation()
+
+    @classmethod
+    def _screen_generated_image(cls, image_bytes: bytes, *, actor, source_provider: str) -> Optional[str]:
+        """Child-safety screen for a provider-produced image before persistence.
+
+        Runs the same fail-closed moderation used for user-uploaded photos
+        against the *output* bytes, so an AI-generated image is refused the same
+        way an upload would be. Returns ``None`` when the image is allowed;
+        otherwise one of the ``generated_image_moderation_*`` reasons callers
+        should treat as a hard failure (refund + no persistence). Fail-closed
+        means a screening outage is also a failure, never a silent allow.
+
+        The bundled providers (Mistral VLM, Hive) RETURN a block decision
+        (``ModerationDecision(action="block")``) rather than raising; only the
+        upload path in `attachment_service` converts that into
+        `PhotoModerationBlocked`. So the decision's ``action`` field is checked
+        here directly — anything but an explicit ``allow`` is a refusal.
+
+        A blocked image also records a Safety Ledger event
+        (``generated_image_child_safety``) so a repeat requester is visible to
+        admin review the same way a repeat uploader is — but with the same
+        narrow posture as the upload path: one block never locks an account.
+        """
+        actor_id = getattr(actor, "user_id", None) if actor is not None else None
+        original_bytes = image_bytes
+        try:
+            screening_bytes, content_type = cls._prepare_screening_copy(image_bytes)
+        except Exception:
+            logger.exception("generated_image_screening: could not prepare screening copy")
+            return GENERATED_IMAGE_UNAVAILABLE_REASON
+
+        try:
+            decision = moderate_generated_image(screening_bytes, content_type)
+        except PhotoModerationBlocked:
+            # Kept for providers that raise; the bundled providers RETURN a
+            # block decision instead, which is handled below.
+            decision = None
+        except PhotoModerationUnavailable:
+            # Fail closed — a moderation outage must not let a generated image
+            # through unreviewed, exactly like the upload path.
+            logger.warning(
+                "generated_image_screening: unavailable (fail closed) actor=%s",
+                actor_id,
+            )
+            return GENERATED_IMAGE_UNAVAILABLE_REASON
+        except Exception:
+            logger.exception("generated_image_screening: unexpected error")
+            return GENERATED_IMAGE_UNAVAILABLE_REASON
+
+        # moderate_photo / moderate_generated_image RETURN action="block"; they
+        # never raise on a block. Anything but an explicit allow is a refusal.
+        if decision is None or getattr(decision, "action", None) != "allow":
+            logger.warning(
+                "generated_image_screening: blocked actor=%s categories=%s",
+                actor_id,
+                ",".join(getattr(decision, "categories", None) or []) or "-",
+            )
+            cls._record_generated_image_block(
+                actor,
+                image_bytes=original_bytes,
+                provider=source_provider,
+                categories=list(getattr(decision, "categories", None) or []),
+            )
+            return GENERATED_IMAGE_BLOCKED_REASON
+        return None
+
+    @classmethod
+    def _prepare_screening_copy(cls, image_bytes: bytes) -> Tuple[bytes, str]:
+        """Detect the actual format and bound the size before VLM screening.
+
+        fal Seedream returns whatever format fal sends (the code only checks
+        that it decodes), so a fixed "image/webp" is wrong for the main
+        provider. Generated images also are not downscaled by default, while
+        uploads are reduced to PHOTO_MODERATION_MAX_DIMENSION first — this
+        mirrors `attachment_service` so both paths send the VLM a bounded,
+        metadata-free copy. Fails closed if the bytes cannot be prepared.
+        """
+        from io import BytesIO
+
+        from PIL import Image
+        from django.conf import settings
+
+        content_type_map = {
+            "JPEG": "image/jpeg",
+            "PNG": "image/png",
+            "WEBP": "image/webp",
+        }
+        image = Image.open(BytesIO(image_bytes))
+        image.load()
+        content_type = content_type_map.get(image.format)
+        if content_type is None:
+            raise ValueError(f"unsupported format for screening: {image.format}")
+
+        moderation_max = int(getattr(settings, "PHOTO_MODERATION_MAX_DIMENSION", 1024))
+        screening = image
+        if max(image.size) > moderation_max:
+            screening = image.copy()
+            screening.thumbnail((moderation_max, moderation_max), Image.LANCZOS)
+
+        buf = BytesIO()
+        screening.save(buf, format=image.format)
+        return buf.getvalue(), content_type
+
+    @classmethod
+    def _record_generated_image_block(
+        cls, actor, *, image_bytes: bytes, provider: str, categories: Optional[list] = None
+    ) -> None:
+        """Best-effort ledger write for a blocked generated image.
+
+        A ledger outage must not change the refusal itself — the image is
+        already rejected — so failures here are logged and swallowed.
+        """
+        try:
+            import hashlib
+
+            from capp.classes.moderation.safety_ledger import SafetyLedgerService
+
+            sha256 = hashlib.sha256(image_bytes).hexdigest() if image_bytes else ""
+            user = actor if isinstance(actor, CustomUser) else None
+            if user is None:
+                return
+            SafetyLedgerService.record_generated_image_block(
+                user=user,
+                sha256=sha256,
+                provider=provider,
+                categories=categories,
+            )
+        except Exception:
+            logger.exception("generated_image_block: ledger write failed")
 
     @classmethod
     def _refund_image_reservation(cls, reservation, *, reason: str, deadline: float) -> None:
@@ -2232,8 +2443,9 @@ class CharacterService:
         always checked server-side — so the flag alone is never a guarantee.
         That provider setting is independent of the application policy: adult
         explicit imagery is allowed, but the prohibited-subject policy
-        (children, animals, deceased people) is re-asserted here as the last
-        gate before the request leaves the process, so no caller can bypass it.
+        (children, deceased people, sexual content involving animals) is
+        re-asserted here as the last gate before the request leaves the
+        process, so no caller can bypass it.
         Violations raise ``ProhibitedImageSubjectError`` rather than returning
         None, so they are never mistaken for a provider failure that should
         trigger a fallback.
@@ -2622,7 +2834,7 @@ class CharacterService:
 
             return " ".join(p for p in parts if p).replace("hair hair", "hair").strip()
 
-        def normalize_clothing(value: str) -> str:
+        def normalize_clothing(value: str, gender_value: str = "", raw_value: str = "") -> str:
             value = clean(value).lower()
             mapping = {
                 "casual": "simple casual clothing",
@@ -2631,7 +2843,19 @@ class CharacterService:
                 "traditional": "tasteful traditional clothing",
                 "streetwear": "modern streetwear",
                 "gothic": "sexy dark gothic clothing",
+                # ``get_display`` hands over the choice LABEL, so this key is the
+                # lower-cased label of ``ClothingStyle.LINGERIE``.
+                "lingerie / underwear": "lingerie and underwear",
             }
+            # Traditional East African attire is looked up by the stored value
+            # (``swahili_coastal``), not the label, so renaming a label never
+            # silently drops the description.
+            traditional = TRADITIONAL_CLOTHING_PROMPTS.get(clean(raw_value).lower())
+            if traditional:
+                # Gendered garments (kanzu/kofia vs. coastal dress) get their own
+                # phrasing; everything else shares one neutral description.
+                is_male = clean(gender_value).lower() == "male"
+                return traditional.get("male", traditional["default"]) if is_male else traditional["default"]
             return mapping.get(value, f"{value} clothing" if value else "simple clothing")
 
         gender_display = get_display("gender", character.gender)
@@ -2652,7 +2876,11 @@ class CharacterService:
         # purpose at the model level.)
         clothing = ""
         if clean(character.clothing_style):
-            clothing = normalize_clothing(get_display("clothing_style", character.clothing_style))
+            clothing = normalize_clothing(
+                get_display("clothing_style", character.clothing_style),
+                character.gender,
+                raw_value=character.clothing_style,
+            )
 
         country = clean(character.country)
         ethnicity_label = nationality_adjective(country)
@@ -3006,6 +3234,7 @@ class CharacterService:
             fal_configured = bool(getattr(settings, "FAL_API_KEY", None))
             fal_image_size = cls._aspect_ratio_to_fal_image_size(aspect_ratio, default="square_hd")
             image_bytes = None
+            source_provider = "fal_seedream"
 
             if fal_configured:
                 ref_url = None
@@ -3043,6 +3272,7 @@ class CharacterService:
             # ── Fallback: Stability AI ─────────────────────────────────────
             if image_bytes is None:
                 if reference_image:
+                    source_provider = "stability"
                     image_bytes = cls._generate_ai_image(
                         prompt=full_prompt,
                         negative_prompt=combined_negative,
@@ -3055,6 +3285,7 @@ class CharacterService:
                         deadline=deadline,
                     )
                 else:
+                    source_provider = "stability"
                     image_bytes = cls._generate_ai_image(
                         prompt=full_prompt,
                         negative_prompt=combined_negative,
@@ -3068,6 +3299,15 @@ class CharacterService:
                 if reservation is not None:
                     cls._refund_image_reservation(reservation, reason="provider_failed", deadline=deadline)
                 return {"status": "fail", "data": "ai_generation_failed"}
+
+            # ---------- Output child-safety screen (before persistence) ----------
+            # Same fail-closed moderation as gallery images, applied to avatar
+            # bytes before the avatar field is written.
+            moderation_reason = cls._screen_generated_image(image_bytes, actor=actor, source_provider=source_provider)
+            if moderation_reason is not None:
+                if reservation is not None:
+                    cls._refund_image_reservation(reservation, reason=moderation_reason, deadline=deadline)
+                return {"status": "fail", "data": moderation_reason}
 
             # ── Save the avatar ────────────────────────────────────────────
             from django.core.files.base import ContentFile
@@ -3155,11 +3395,19 @@ class CharacterService:
         defer_settlement: bool = False,
         deadline: Optional[float] = None,
         cost_override: Optional[int] = None,
+        publish_on_approval: bool = False,
     ) -> Dict[str, Any]:
         """
         Generate a new gallery image for a character using AI.
         - Admins & owners can set is_public=True.
         - All other authenticated users get a private image (visible only to them).
+
+        ``publish_on_approval`` marks the picture as part of the character's own
+        gallery (creation setup and edit pages). On a public character it is
+        stored private for a non-admin owner and published automatically when an
+        admin approves the character; for an admin it is public straight away.
+        Pictures made in chat or on the detail page never pass it and stay
+        private. It is ignored for anyone but the owner or an admin.
 
         ``operation_id`` is the caller's idempotency key. Presenting the same one
         twice returns the picture the first call produced instead of generating
@@ -3339,6 +3587,7 @@ class CharacterService:
             fal_image_size = cls._aspect_ratio_to_fal_image_size(aspect_ratio, default="portrait_4_3")
 
             image_bytes = None
+            source_provider = "fal_seedream"
 
             # ---------- Primary provider: fal.ai Seedream v5 Lite ----------
             # fal.ai stays primary whenever FAL credentials exist. With a
@@ -3395,6 +3644,7 @@ class CharacterService:
                 if reference_image:
                     # We have a reference but the fal.ai path was unavailable or
                     # failed — reuse it via Stability's style-control endpoint.
+                    source_provider = "stability"
                     image_bytes = cls._generate_ai_image(
                         prompt=full_prompt,
                         negative_prompt=combined_negative,
@@ -3413,6 +3663,7 @@ class CharacterService:
                         "gallery_generation: no usable reference for character_id=%s; using txt2img",
                         character.character_id,
                     )
+                    source_provider = "stability"
                     image_bytes = cls._generate_ai_image(
                         prompt=full_prompt,
                         negative_prompt=combined_negative,
@@ -3431,6 +3682,16 @@ class CharacterService:
                     cls._refund_image_reservation(reservation, reason="provider_failed", deadline=deadline)
                 return {"status": "fail", "data": "ai_generation_failed"}
 
+            # ---------- Output child-safety screen (before persistence) ----------
+            # Same fail-closed moderation used for user-uploaded photos, applied to
+            # the provider *output* before anything is written to storage or shown.
+            # Covers fal.ai Seedream (edit and txt2img) and the Stability fallback.
+            moderation_reason = cls._screen_generated_image(image_bytes, actor=actor, source_provider=source_provider)
+            if moderation_reason is not None:
+                if reservation is not None:
+                    cls._refund_image_reservation(reservation, reason=moderation_reason, deadline=deadline)
+                return {"status": "fail", "data": moderation_reason}
+
             try:
                 gallery_image, actor = cls._publish_generated_gallery_image(
                     character=character,
@@ -3441,6 +3702,7 @@ class CharacterService:
                     is_public=is_public,
                     operation_id=operation_id,
                     deadline=deadline,
+                    publish_on_approval=publish_on_approval,
                 )
             except IntegrityError:
                 # Two clicks got past the replay lookup before either had
@@ -3563,7 +3825,17 @@ class CharacterService:
 
     @classmethod
     def _publish_generated_gallery_image(
-        cls, *, character, actor, image_bytes, caption, order, is_public, operation_id, deadline
+        cls,
+        *,
+        character,
+        actor,
+        image_bytes,
+        caption,
+        order,
+        is_public,
+        operation_id,
+        deadline,
+        publish_on_approval=False,
     ):
         """Publish only against current locked owners; keep provider I/O outside."""
         import uuid
@@ -3618,6 +3890,18 @@ class CharacterService:
                     if is_public and (is_admin or is_owner)
                     else CharacterGalleryImage.VisibilityChoices.PRIVATE
                 )
+                awaiting_approval = False
+                if publish_on_approval and (is_admin or is_owner) and character.is_public:
+                    if is_admin:
+                        # Admin-made content needs no second review.
+                        visibility = CharacterGalleryImage.VisibilityChoices.PUBLIC
+                    else:
+                        # The owner's own gallery images wait for the admin to
+                        # approve the character; nothing is shown to others
+                        # before that. ``is_public`` from the caller is not
+                        # trusted to skip the review.
+                        visibility = CharacterGalleryImage.VisibilityChoices.PRIVATE
+                        awaiting_approval = True
                 gallery_image = CharacterGalleryImage.objects.create(
                     character=character,
                     caption=caption[:200] if caption else "",
@@ -3625,6 +3909,7 @@ class CharacterService:
                     source=Character.AvatarSource.AI_GENERATED,
                     created_by=actor,
                     visibility=visibility,
+                    publish_on_approval=awaiting_approval,
                     client_operation_id=operation_id,
                 )
                 # Insert first so a uniqueness failure cannot leave an upload.

@@ -213,23 +213,27 @@ export const termsSw = {
       blocks: [
         {
           type: "p",
-          text: "7.1. Maudhui ya watu wazima. Huduma ni jukwaa la watu wazima pekee. Kwa kuzingatia kifungu cha 7.2, watumiaji wazima wanaweza kuzalisha picha za watu wazima au za kingono wazi za wahusika wa kubuni walio wazima. Sehemu fulani za kiolesura zinakuomba uweke maombi yako kwa heshima; mwongozo huo hautoi ruhusa ambayo hungekuwa nayo vinginevyo, na haupunguzi marufuku zilizo hapa chini.",
+          text: "7.1. Maudhui ya watu wazima. Huduma ni jukwaa la watu wazima pekee. Watumiaji wazima wanaweza kuzalisha picha za watu wazima wa kubuni walio wazima, pamoja na picha zinazodokeza bila kuwa wazi. Picha inayoonyesha uchi wa wazi — sehemu za siri — au inayoonyesha vitendo vya kingono hairuhusiwi, iwe imezalishwa au imepakiwa, bila kujali muundo wa kubuni. Sehemu fulani za kiolesura zinakuomba uweke maombi yako kwa heshima; mwongozo huo hautoi ruhusa ambayo hungekuwa nayo vinginevyo, na haupunguzi marufuku zilizo hapa chini.",
         },
         {
           type: "p",
-          text: "7.2. Marufuku ya kabisa. Bila kujali muktadha, maneno yaliyotumika, au kama ombi ni la kingono, hupaswi kuomba picha inayoonyesha au inayohusisha kwa kiasi kikubwa:",
+          text: "7.2. Marufuku ya kabisa. Bila kujali muktadha, maneno yaliyotumika, au kama ombi ni la kingono, hupaswi kuomba, kuzalisha, au kupakia picha inayoonyesha au inayohusisha kwa kiasi kikubwa:",
         },
         {
           type: "ul",
           items: [
+            "uchi wa wazi — sehemu zozote za siri zinazoonekana, au maonyesho yoyote ya kitendo cha kingono, bila kujali umri wa wahusika au muundo wa kubuni;",
             "watoto — watoto wadogo, wachanga, vijana wa balehe, au mtu yeyote aliye chini ya miaka 18;",
-            "wanyama — wanyama wa kufuga, mifugo, wanyama pori, wadudu, au mnyama yeyote asiye mwanadamu; au",
-            "watu waliofariki au wanaokufa — maiti, mizoga, au mada za mazishi.",
+            "maudhui ya kingono yanayohusisha wanyama — ngono na wanyama kwa aina yoyote;",
+            "watu waliofariki au wanaokufa — maiti, mizoga, au mada za mazishi;",
+            "shughuli za kingono bila ridhaa, au aina nyingine yoyote ya unyonyaji au unajisi wa kingono;",
+            "mtu halisi, anayetambulika, katika muktadha wa kingono au wa kibinafsi bila idhini ya mtu huyo; au",
+            "kitu kingine chochote kilichopigwa marufuku chini ya kifungu cha 6.2 — kila marufuku katika kifungu hicho inatumika kwa picha unazozalisha, kupakia, au kuomba tuzalishe, si kwa maandishi pekee.",
           ],
         },
         {
           type: "p",
-          text: "7.3. Picha unazotuma kwenye mazungumzo. Marufuku ya kifungu cha 7.2 zinasimamia unachoruhusiwa kuomba tuzalishe. Kanuni tofauti inasimamia picha unazopakia na kutuma kwa mwandani wako: hupaswi kutuma picha inayoonyesha maudhui ya unyonyaji wa kijinsia wa watoto, uchi wa mtoto au mchanga aliyeathiriwa kijinsia, maudhui ya kibinafsi yasiyoridhisiwa, au maudhui ambayo huna haki ya kushiriki, na kila picha unayotuma lazima pia ifuate kifungu cha 6. Picha unazotuma huchunguzwa kiotomatiki kabla ya kuhifadhiwa; picha zinazokataliwa au zisizoweza kuchunguzwa zinakataliwa na hazihifadhiwi kabisa, na hakuna cheche zinazotozwa kwa zile. Picha za kawaida za watoto waliovaa nguo kamili — kama picha ya familia — hazipigwa marufuku na kanuni hii: uchunguzi ulikuwepo ili kuzuia uchi wa watoto na maudhui ya kingono yanayohusisha watoto, si kuchuja picha zako za kila siku.",
+          text: "7.3. Picha unazotuma kwenye mazungumzo. Marufuku ya kifungu cha 7.2 inatumika kwa picha unazopakia na kutuma kwa mwandani wako kwa usawa: kila marufuku ya kifungu cha 7.2, pamoja na marufuku ya uchi wa wazi, inatumika kwa picha, na kila picha unayotuma lazima pia ifuate kifungu cha 6. Picha unazotuma huchunguzwa kiotomatiki kabla ya kuhifadhiwa; picha zinazokataliwa au zisizoweza kuchunguzwa zinakataliwa na hazihifadhiwi kabisa, na hakuna cheche zinazotozwa kwa zile. Licha ya kifungu cha 7.2, picha za kawaida za watoto waliovaa nguo kamili — kama picha ya familia — hazijapigwa marufuku na kanuni hii: uchunguzi upo ili kuzuia uchi wa watoto na maudhui ya kingono yanayohusisha watoto, si kuchuja picha zako za kila siku.",
         },
         {
           type: "p",
@@ -711,6 +715,22 @@ export const termsSw = {
         {
           type: "p",
           text: "21.11. Si Pesa za Simu / Si Pesa za Kielektroniki. Cheche si pesa za simu (ikijumuisha, bila kikomo, salio lolote la M-Pesa au salio lingine la pochi ya pesa za simu) na si pesa za kielektroniki. Cheche haziwezi kutumika kama, kugeuzwa kuwa, kutolewa kama, au kuchukuliwa kama pesa za simu au pesa za kielektroniki, na haziwezi kutolewa kama pesa taslimu au kuhamishwa kwenye akaunti yoyote ya pesa za simu. Malipo yoyote yanayofanywa kupitia mtoa huduma wa pesa za simu ni manunuzi ya ufikiaji uliolipwa mapema pekee, si amana au uhamisho wa thamani kwenda kwenye pochi.",
+        },
+        {
+          type: "p",
+          text: "21.12. Manunuzi kwenye programu yetu ya Android. Kwenye programu yetu ya Android, cheche zinauzwa kupitia mfumo wa malipo wa Google Play, na Google Play ndiyo huchakata malipo. Bei unayolipa ni ile ambayo Google Play inakuonyesha kabla ya kuthibitisha, kwa sarafu inayoonyeshwa na pamoja na kodi zozote zinazoonyeshwa, na malipo hayo pia yanasimamiwa na [Masharti ya Huduma ya Google Play](https://play.google.com/about/play-terms/). Ili kununua cheche kwenye programu lazima uwe umeingia kwenye akaunti; wageni hawawezi kununua cheche humo. Cheche huongezwa kwenye salio lako mara Google inapothibitisha malipo. Ikiwa Google bado inashughulikia malipo, cheche huongezwa utakapofungua programu tena ukiwa umeingia kwenye akaunti, baada ya malipo kukamilika. Cheche ulizonunua kwenye programu ni sehemu ya salio la akaunti yako na zinafanya kazi sawa na cheche nyingine, ikijumuisha kwenye tovuti yetu.",
+        },
+        {
+          type: "p",
+          text: "21.13. Kurudishiwa fedha kwa manunuzi ya Google Play. Kifungu cha 21.8 kinatumika pia kwa manunuzi yaliyofanywa kupitia Google Play. Zaidi ya hayo, Google Play inaweza kurudisha fedha za ununuzi chini ya sera zake za kurudisha fedha: ndani ya saa 48 baada ya ununuzi unaweza kuomba Google Play ikurudishie fedha, na Google ndiyo huamua ombi hilo. Baada ya muda huo, au kwa tatizo lingine lolote la ununuzi, wasiliana nasi kupitia [info@uwenzai.com](mailto:info@uwenzai.com); pale ambapo kurudishiwa fedha kunastahili chini ya kifungu cha 21.8, tunarudisha fedha hizo kupitia Google Play. Ikiwa hatuwezi kuongeza cheche kwa malipo ya Google Play yaliyokamilika, hatuuthibitishi ununuzi huo kwa Google, na Google Play hukurudishia pesa kiotomatiki baada ya siku tatu.",
+        },
+        {
+          type: "p",
+          text: "21.14. Malipo yaliyorudishwa au kubatilishwa. Ikiwa malipo ya cheche yamerudishwa, yamebatilishwa na benki au mtoa kadi (chargeback) au yamerejeshwa kwa njia nyingine, tunaweza kuondoa kwenye salio lako cheche zilizoongezwa kwa malipo hayo. Kwa manunuzi ya Google Play, hili hufanyika kiotomatiki mara Google inapotujulisha kuhusu kurudishwa kwa fedha. Ikiwa tayari umetumia baadhi ya cheche hizo, tunaondoa kiasi ambacho salio lako bado linacho. Kuomba kurudishiwa fedha au kubatilishwa kwa malipo ya cheche ambazo tayari umezitumia, ili kuzipata bure, ni ukiukaji wa kifungu cha 6.3 na kunaweza kusababisha kusimamishwa chini ya kifungu cha 14.",
+        },
+        {
+          type: "p",
+          text: "21.15. Misimbo ya ofa. Tunaweza kutoa misimbo ya ofa (inayoitwa “msimbo wa kipeperushi” kwenye fomu ya kujisajili), kwa mfano kwenye vipeperushi, inayoongeza cheche za ziada kwenye akaunti mpya. Msimbo wa ofa unaweza kutumika tu unapofungua akaunti, kwa kuuandika kwenye fomu ya kujisajili; hauwezi kuongezwa kwenye akaunti baadaye. Kila msimbo unaweza kutumika mara moja tu, na kila akaunti inaweza kutumia msimbo mmoja tu. Cheche za ziada huongezwa juu ya cheche za kawaida za kujiunga. Ikiwa msimbo haujulikani, tayari umetumika, umesitishwa au umeondolewa, akaunti yako bado inafunguliwa, bila cheche za ziada. Tunaweza wakati wowote kusitisha au kuondoa misimbo ambayo bado haijatumika. Cheche za ziada ni cheche chini ya kifungu hiki cha 21: hazina thamani ya kifedha, haziwezi kubadilishwa kuwa pesa wala kurudishiwa fedha, na haziwezi kuhamishwa. Huruhusiwi kuuza misimbo ya ofa au kufungua akaunti kwa lengo la kukusanya cheche za ziada tu; tunaweza kuondoa cheche za ziada zilizopatikana kwa kukiuka Masharti haya.",
         },
       ],
     },

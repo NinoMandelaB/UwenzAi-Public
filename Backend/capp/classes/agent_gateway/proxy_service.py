@@ -294,8 +294,15 @@ class AgentProxyService:
         return estimate["sparks"]
 
     @staticmethod
-    def execute_request(key, model, messages, params, client_operation_id=None, provider_name=None):
-        """Shared billed path for browser and external keys; serialize duplicate operations only."""
+    def execute_request(key, model, messages, params, client_operation_id=None, provider_name=None, source=None):
+        """Shared billed path for browser and external keys; serialize duplicate operations only.
+
+        ``source`` tags the resulting usage log (AgentUsageLog.Source) so usage
+        reporting can distinguish workspace playground calls from direct API
+        calls; it never affects billing.
+        """
+        if source is None:
+            source = AgentUsageLog.Source.API
         # Reject invalid data before acquiring any lock or creating billing records.
         AgentProxyService.validate_request(model, messages, params, provider_name)
         if client_operation_id is None:
@@ -311,7 +318,9 @@ class AgentProxyService:
                         "message": "This key or account is inactive or expired. Select an active key.",
                     }
                 }
-            return AgentProxyService._execute_locked(key, model, messages, params, client_operation_id, provider_name)
+            return AgentProxyService._execute_locked(
+                key, model, messages, params, client_operation_id, provider_name, source
+            )
 
     @staticmethod
     def _execute_locked(
@@ -321,6 +330,7 @@ class AgentProxyService:
         params: dict[str, Any],
         client_operation_id: str | None = None,
         provider_name: str | None = None,
+        source: str | None = None,
     ) -> dict[str, Any]:
         """
         Execute a chat completion request through the Agent Gateway.
@@ -567,6 +577,7 @@ class AgentProxyService:
                     client_operation_id,
                     start_time,
                     upstream_status_code=result.upstream_status_code,
+                    source=source,
                 )
 
             # A tool_calls finish with no relayed calls is a broken upstream
@@ -582,6 +593,7 @@ class AgentProxyService:
                     client_operation_id,
                     start_time,
                     failure_kind="tool_calls_dropped",
+                    source=source,
                 )
 
             input_tokens = result.input_tokens
@@ -601,6 +613,7 @@ class AgentProxyService:
                     client_operation_id,
                     start_time,
                     failure_kind="no_token_usage",
+                    source=source,
                 )
 
             cost_info = AgentPricingService.calculate_cost(
@@ -648,6 +661,7 @@ class AgentProxyService:
                     status=AgentUsageLog.Status.SUCCESS,
                     latency_ms=latency_ms,
                     client_operation_id=client_operation_id,
+                    source=source,
                 )
 
                 AgentAPIKey.objects.filter(pk=key.pk).update(last_used_at=timezone.now())
@@ -673,6 +687,7 @@ class AgentProxyService:
                 client_operation_id,
                 start_time,
                 failure_kind="gateway_error:{}".format(type(e).__name__),
+                source=source,
             )
 
     @staticmethod
@@ -699,6 +714,7 @@ class AgentProxyService:
         start_time,
         upstream_status_code=None,
         failure_kind="upstream_error",
+        source=None,
     ):
         """Persist a confirmed refund or an explicitly uncertain hold, never false zero-charge claims."""
         with transaction.atomic():
@@ -724,6 +740,7 @@ class AgentProxyService:
                 sparks_charged=0,
                 status=AgentUsageLog.Status.UPSTREAM_ERROR if confirmed else AgentUsageLog.Status.REFUND_PENDING,
                 latency_ms=int((time.time() - start_time) * 1000),
+                source=source,
                 client_operation_id=client_operation_id,
             )
         # Upstream error text can echo request content, so it is never

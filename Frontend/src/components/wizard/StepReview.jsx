@@ -7,6 +7,7 @@ import { createCharacterFromWizard } from "../../services/characterService";
 import { clearOperationId, reuseOperationId } from "../../utils/idempotency";
 import { getCharacterMessage } from "../../utils/characterMessageMapper";
 import PageCard from "../PageCard";
+import { CLOTHING_STYLES } from "../../config/clothingStyles";
 import { Loader2, CheckCircle, AlertCircle } from "lucide-react";
 
 // Helper to get label from value using options array
@@ -144,17 +145,6 @@ const RELATIONSHIP_STYLES = [
   { value: "companion", labelKey: "wizard.relationshipCompanion" },
   { value: "flirty", labelKey: "wizard.relationshipFlirty" },
   { value: "romantic", labelKey: "wizard.relationshipRomantic" },
-];
-
-const CLOTHING_STYLES = [
-  { value: "casual", labelKey: "wizard.clothingCasual" },
-  { value: "formal", labelKey: "wizard.clothingFormal" },
-  { value: "sporty", labelKey: "wizard.clothingSporty" },
-  { value: "elegant", labelKey: "wizard.clothingElegant" },
-  { value: "streetwear", labelKey: "wizard.clothingStreetwear" },
-  { value: "bohemian", labelKey: "wizard.clothingBohemian" },
-  { value: "gothic", labelKey: "wizard.clothingGothic" },
-  { value: "preppy", labelKey: "wizard.clothingPreppy" },
 ];
 
 function SummaryRow({ label, value }) {
@@ -480,11 +470,17 @@ export default function StepReview() {
             />
             <SummaryRow
               label={t("wizard.clothingStyle")}
-              value={getLabelFromValue(
-                CLOTHING_STYLES,
-                state.clothing_style,
-                t,
-              )}
+              value={(() => {
+                const label = getLabelFromValue(
+                  CLOTHING_STYLES,
+                  state.clothing_style,
+                  t,
+                );
+                const emoji = CLOTHING_STYLES.find(
+                  (style) => style.value === state.clothing_style,
+                )?.emoji;
+                return emoji ? `${emoji} ${label}` : label;
+              })()}
             />
           </div>
           <button

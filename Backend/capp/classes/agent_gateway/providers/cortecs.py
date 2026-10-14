@@ -22,6 +22,7 @@ from capp.classes.agent_gateway.providers.metadata import catalog_metadata
 from capp.classes.agent_gateway.providers.base import (
     ModelInfo,
     ProviderResult,
+    normalize_message_content,
 )
 
 logger = logging.getLogger(__name__)
@@ -69,6 +70,10 @@ class CortecsAgentProvider:
     """
 
     name = "cortecs"
+    # Models Cortecs serves but this provider skipped (unpriced or non-EUR
+    # pricing). Replaced with a fresh list on every catalog fetch; read by
+    # catalog_sync to flag NEW models the operator needs to price.
+    _skipped_models: list[str] = []
 
     def __init__(self):
         self._api_key = getattr(settings, "CORTECS_UWENZAI_AGENT_API_KEY", None)
@@ -112,6 +117,7 @@ class CortecsAgentProvider:
                 return None
 
             result = []
+            self._skipped_models = []
             for m in models_data:
                 model_id = m.get("id")
                 if not model_id:
@@ -126,6 +132,7 @@ class CortecsAgentProvider:
                 if input_price is None or output_price is None:
                     # Do not place an unpriced model into the billable catalog
                     logger.warning("Agent Gateway: skipping unpriced Cortecs model %s", model_id)
+                    self._skipped_models.append(model_id)
                     continue
 
                 if currency and currency != "EUR":
@@ -135,6 +142,7 @@ class CortecsAgentProvider:
                         model_id,
                         currency,
                     )
+                    self._skipped_models.append(model_id)
                     continue
 
                 result.append(
@@ -363,12 +371,15 @@ class CortecsAgentProvider:
             # Get the completion text
             choices = data.get("choices", [])
             text = ""
+            reasoning = None
             finish_reason = None
             tool_calls = None
             if choices:
                 first_choice = choices[0]
                 message = first_choice.get("message", {})
-                text = message.get("content", "")
+                # Reasoning models can return content as a list of typed
+                # chunks; the relayed response must keep content a plain string.
+                text, reasoning = normalize_message_content(message.get("content"))
                 finish_reason = first_choice.get("finish_reason")
                 # Relay structured tool calls verbatim, synthesizing an id when
                 # the upstream omits one — some gateways return id-less calls,
@@ -392,6 +403,7 @@ class CortecsAgentProvider:
                 status="success",
                 finish_reason=finish_reason,
                 model=model,
+                reasoning=reasoning,
                 tool_calls=tool_calls,
             )
         except httpx.HTTPStatusError as e:

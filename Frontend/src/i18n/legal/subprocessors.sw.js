@@ -18,7 +18,8 @@ export const subprocessorsSw = {
   sections: [
     {
       id: "1",
-      heading: "1. Uwekaji mtandaoni, hifadhidata na hifadhi ya faili",
+      heading:
+        "1. Uwekaji mtandaoni, usafirishaji wa mtandao, hifadhidata na hifadhi ya faili",
       blocks: [
         {
           type: "table",
@@ -28,6 +29,11 @@ export const subprocessorsSw = {
               "Railway",
               "Uwekaji wa programu mtandaoni, hifadhidata ya PostgreSQL, akiba ya Redis na safu za kazi za nyuma, na ndoo inayooana na S3 inayohifadhi picha zilizopakiwa na zilizozalishwa na picha unazotuma kwenye mazungumzo.",
               "Data yote ya akaunti na ya Huduma, ikijumuisha maudhui yako. Data iliyohifadhiwa imesimbwa kwa njia fiche ilipohifadhiwa kwenye tabaka la hifadhi; vitu vya picha ni vya faragha na vinafikiwa tu kupitia viungo vilivyotiwa sahihi vya muda mfupi. Faili za picha unazotuma kwenye mazungumzo zinaongezewa usimbaji fiche wa vitufe vyetu mwenyewe kabla ya kufikia ndoo, kwa hivyo mtoa huduma wa hifadhi anazishikilia kama maandishi yaliyosimbwa.",
+            ],
+            [
+              "Cloudflare",
+              "Usafirishaji na ulinzi wa mtandao kwa tovuti na API yetu: DNS, miunganisho iliyosimbwa kwa njia fiche na ulinzi dhidi ya mashambulizi. Pia huziambia seva zetu ombi linatoka nchi gani.",
+              "Anwani yako ya IP na maombi unayotuma kwa tovuti na API yetu, ambayo hupitia mtandao wa Cloudflare. Kwa rekodi za ziara tunahifadhi tu msimbo wa nchi ambao Cloudflare inatoa, si anwani yako ya IP.",
             ],
           ],
         },
@@ -48,7 +54,7 @@ export const subprocessorsSw = {
             ],
             [
               "Mistral AI",
-              "Mtoa huduma wa akiba kwa majibu ya mazungumzo na kwa uwakilishi wa kihesabu, hutumika Cortecs inaposhindwa au haijasanidiwa. Pia huitwa moja kwa moja kwa kazi za maandishi zinazoendeshwa nyuma: kuchambua kumbukumbu, kuandika muhtasari wa mazungumzo, kutunga maelezo ya tabia ya mhusika, na kupima hisia za mazungumzo. Pia ni mtoa huduma wetu wa sasa wa uchambuzi wa kiotomatiki wa usalama wa watoto kwa picha zinazotumwa kwenye mazungumzo: nakala ya picha yenye ukubwa uliopunguzwa, bila maelezo ya kina, hutumwa kwa uchambuzi kabla ya picha kuhifadhiwa. Kwa uchambuzi huo picha pekee ndiyo inayotumwa — si maandishi ya ujumbe wako.",
+              "Mtoa huduma wa akiba kwa majibu ya mazungumzo na kwa uwakilishi wa kihesabu, hutumika Cortecs inaposhindwa au haijasanidiwa. Pia huitwa moja kwa moja kwa kazi za maandishi zinazoendeshwa nyuma: kuchambua kumbukumbu, kuandika muhtasari wa mazungumzo, kutunga maelezo ya tabia ya mhusika, na kupima hisia za mazungumzo. Pia ni mtoa huduma wetu wa sasa wa uchambuzi wa kiotomatiki wa usalama wa watoto na wa maudhui yaliyopigwa marufuku kwa picha zinazotumwa kwenye mazungumzo na kwa picha zinazorudishwa na watoa huduma wetu wa uzalishaji wa picha: nakala ya picha yenye ukubwa uliopunguzwa, bila metadata, hutumwa kwa uchambuzi kabla ya kuhifadhiwa au kuonyeshwa. Kwa uchambuzi huo picha pekee ndiyo inayotumwa — si maandishi ya ujumbe wako wala maelezo unayoongeza kwenye picha.",
               "Muktadha huo huo wa mazungumzo na maandishi ya kumbukumbu kama yaliyotajwa hapo juu, kutegemea kazi inayoendeshwa, na — kwa uchambuzi wa picha — nakala ya picha iliopunguzwa ukubwa iliyoelezwa hapa.",
             ],
             [
@@ -113,8 +119,13 @@ export const subprocessorsSw = {
           rows: [
             [
               "Paystack",
-              "Kuchakata manunuzi ya cheche na ya usajili, ikijumuisha njia za malipo za pesa za simu na za kadi.",
+              "Kuchakata manunuzi ya cheche na ya usajili kwenye tovuti yetu, ikijumuisha njia za malipo za pesa za simu na za kadi.",
               "Kiasi cha muamala, sarafu, kumbukumbu yetu na kilichonunuliwa, pamoja na maelezo ya malipo unayoweka moja kwa moja kwa Paystack. Hatupokei wala hatuhifadhi nambari yako kamili ya kadi, nambari ya usalama ya kadi wala PIN.",
+            ],
+            [
+              "Google Play (Google)",
+              "Kuchakata manunuzi ya cheche kwenye programu yetu ya Android kupitia mfumo wa malipo wa Google Play, na kutujulisha kuhusu marejesho ya fedha na malipo yaliyobatilishwa ya manunuzi hayo.",
+              "Tokeni ya ununuzi, nambari ya oda ya Google Play, bidhaa, hali na muda wa ununuzi, na maelezo ya marejesho ya fedha ambayo Google inaripoti. Google hushughulikia malipo yenyewe chini ya masharti na sera yake ya faragha, na hatupokei maelezo ya kadi yako wala ya njia nyingine ya malipo. Google inaweza kutupatia sisi kama muuzaji jina lako na anwani yako ya barua pepe kwa ajili ya kushughulikia oda.",
             ],
           ],
         },

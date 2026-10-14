@@ -75,6 +75,7 @@ function PillSelector({ label, options, value, onChange, t }) {
                 : "bg-[var(--color-soft)] text-[var(--color-text-muted)] border border-[var(--color-border)]"
             }`}
           >
+            {opt.emoji ? `${opt.emoji} ` : ""}
             {opt.labelKey ? t(opt.labelKey) : opt.label}
           </button>
         ))}

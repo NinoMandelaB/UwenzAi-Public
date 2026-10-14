@@ -3,7 +3,8 @@
 import secrets
 import uuid
 
-from django.db.models import Q
+from django.db.models import Q, Value
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 
 from capp.classes.moderation.model_refusal import CATEGORY_MODEL_REFUSAL
@@ -40,7 +41,12 @@ def erase_private_content(user):
 
     scrub_audit_snapshots(user)
     AgentPlaygroundHistory.objects.filter(user=user).delete()
-    AgentAPIKey.objects.filter(user=user).update(is_active=False)
+    # Stamp revoked_at so the revoked-key retention task can purge these keys,
+    # keeping the original timestamp of keys that were already revoked so
+    # their retention window does not restart.
+    AgentAPIKey.objects.filter(user=user).update(
+        is_active=False, revoked_at=Coalesce("revoked_at", Value(timezone.now()))
+    )
     # Safety-ledger hygiene: support (care) events and shadow-mode telemetry
     # exist for the user's benefit and to measure the classifier — neither
     # purpose outlives the account, so they are deleted on erasure. Advisory
@@ -131,11 +137,14 @@ def scrub_retained_personal_data(user, using):
     ModerationFlag.objects.using(using).filter(reviewed_by=user).update(resolution_note=None)
     GuestWebSocketTicket.objects.using(using).filter(guest_identity__in=identities).delete()
     # Keep the non-usable claim tombstone and stable owner ID, not bearer hashes.
+    # The IP-derived visit country is scrubbed with them — the tombstone exists
+    # for anti-replay, not analytics.
     for identity in identities:
         identities.filter(pk=identity.pk).update(
             credential_hash=secrets.token_hex(32),
             previous_credential_hash=None,
             migrated_from_legacy_session_id=None,
+            visit_country_code=None,
         )
     GuestTokenQuota.objects.using(using).filter(Q(claimed_by=user) | Q(session_id__in=guest_keys)).update(
         ip_address=None, user_agent=None

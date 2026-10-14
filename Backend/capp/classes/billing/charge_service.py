@@ -254,6 +254,10 @@ class ChargeService:
         No authentication required.
         """
         try:
+            # Imported lazily (like the Paystack service above): the billing
+            # apps and capp cross-import, so resolution happens at call time.
+            from play_billing_app.services import PlayBillingService
+
             spark_packages = SparkPackage.objects.filter(is_active=True).order_by("base_spark_amount")
             subscription_plans = SubscriptionPlan.objects.filter(is_active=True).order_by("price")
 
@@ -276,6 +280,12 @@ class ChargeService:
                     "currency": "KES",
                     "tokens": 0,  # legacy, kept for frontend compatibility
                 }
+                # Google Play product id when this package is also purchasable
+                # inside the Android TWA. Only the Digital-Goods-capable
+                # Android client reads this field; the website flow ignores it.
+                play_product_id = PlayBillingService.product_id_for_slug(cp.slug)
+                if play_product_id:
+                    entry["play_product_id"] = play_product_id
                 try:
                     price_usd = convert_kes(cp.final_price_kes, "usd")
                     price_eur = convert_kes(cp.final_price_kes, "eur")

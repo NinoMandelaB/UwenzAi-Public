@@ -24,6 +24,7 @@ from django.views.decorators.cache import never_cache
 
 from django.conf import settings
 from rest_framework.decorators import (
+    action,
     api_view,
     authentication_classes,
     permission_classes,
@@ -34,7 +35,7 @@ from rest_framework import status, viewsets
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.request import Request
 
-from capp.models import AgentAPIKey, ComplianceConfirmationLog, CustomUser
+from capp.models import AgentAPIKey, AgentUsageLog, ComplianceConfirmationLog, CustomUser
 from capp.authentication import AccountJWTAuthentication
 from capp.classes.agent_gateway.guards import (
     AGENT_GATEWAY_CONSENT_VERSION,
@@ -140,38 +141,14 @@ class AgentKeyViewSet(viewsets.ViewSet):
         expires_at_str = request.data.get("expires_at")
         expires_at = None
 
-        budget_raw = request.data.get("monthly_spark_budget")
-        monthly_spark_budget = None
-        if budget_raw is not None:
-            if isinstance(budget_raw, bool) or not isinstance(budget_raw, (int, str)):
-                return Response(
-                    {
-                        "status": "invalid_request",
-                        "message": "monthly_spark_budget must be an integer.",
-                    },
-                    status=400,
-                )
-            try:
-                monthly_spark_budget = int(budget_raw)
-            except (ValueError, TypeError):
-                return Response(
-                    {
-                        "status": "invalid_request",
-                        "message": "monthly_spark_budget must be an integer.",
-                    },
-                    status=400,
-                )
-            if monthly_spark_budget < 1 or monthly_spark_budget > settings.AGENT_KEY_MAX_MONTHLY_BUDGET:
-                return Response(
-                    {
-                        "status": "invalid_request",
-                        "message": (
-                            "monthly_spark_budget must be between 1 and "
-                            f"{settings.AGENT_KEY_MAX_MONTHLY_BUDGET} sparks."
-                        ),
-                    },
-                    status=400,
-                )
+        monthly_spark_budget, budget_error = AgentKeyService.parse_monthly_budget(
+            request.data.get("monthly_spark_budget")
+        )
+        if budget_error:
+            return Response(
+                {"status": "invalid_request", "message": budget_error},
+                status=400,
+            )
 
         if expires_at_str:
             try:
@@ -209,6 +186,77 @@ class AgentKeyViewSet(viewsets.ViewSet):
                     "monthly_spark_budget": key_record.monthly_spark_budget,
                 },
                 "warning": "This is the only time the full key will be shown. Store it securely.",
+            }
+        )
+
+    @action(detail=True, methods=["patch"])
+    def budget(self, request: Request, pk: str = None) -> Response:
+        """
+        Set or clear a key's monthly Sparks spending limit.
+
+        PATCH /api/v1/agent/keys/{id}/budget
+
+        Request body:
+        - monthly_spark_budget: integer 1..AGENT_KEY_MAX_MONTHLY_BUDGET, or
+          null to remove the limit. The field is required.
+
+        Setting a budget below the key's usage this month is allowed: it simply
+        blocks further calls with the key until next month. Revoked keys reject
+        edits (create a new key instead).
+        """
+        user = request.user
+        if not isinstance(user, CustomUser):
+            return Response(
+                {"status": "unauthorized", "message": "Authentication required"},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        key = AgentKeyService.get_key(user, pk)
+        if key is None:
+            return Response(
+                {"status": "not_found", "message": "API key not found or not owned by user"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        if not key.is_active:
+            return Response(
+                {
+                    "status": "invalid_request",
+                    "message": "This key is revoked and its budget can no longer be changed. Create a new key instead.",
+                },
+                status=400,
+            )
+        if "monthly_spark_budget" not in request.data:
+            return Response(
+                {
+                    "status": "invalid_request",
+                    "message": "monthly_spark_budget is required (an integer, or null to remove the limit).",
+                },
+                status=400,
+            )
+
+        budget, budget_error = AgentKeyService.parse_monthly_budget(request.data["monthly_spark_budget"])
+        if budget_error:
+            return Response(
+                {"status": "invalid_request", "message": budget_error},
+                status=400,
+            )
+
+        key.monthly_spark_budget = budget
+        key.save(update_fields=["monthly_spark_budget", "updated_at"])
+
+        logger.info(
+            "Agent Gateway: set monthly budget %s for key %s",
+            budget,
+            pk,
+        )
+
+        return Response(
+            {
+                "status": "ok",
+                "data": {
+                    "key_id": pk,
+                    "monthly_spark_budget": budget,
+                },
             }
         )
 
@@ -284,6 +332,7 @@ class AgentUsageViewSet(viewsets.ViewSet):
                     "usage": usage,
                     "keys_usage": keys_usage,
                     "by_model": AgentUsageService.get_usage_by_model(str(user.user_id)),
+                    "by_key": AgentUsageService.get_usage_by_key(str(user.user_id)),
                     "base_url": base_url,
                 },
             }
@@ -769,6 +818,7 @@ def agent_playground(request):
                 messages=data["messages"],
                 params={"max_tokens": data["max_tokens"]},
                 client_operation_id=data["client_operation_id"],
+                source=AgentUsageLog.Source.PLAYGROUND,
             )
             if "error" in result:
                 code = result["error"].get("status")

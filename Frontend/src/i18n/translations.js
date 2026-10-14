@@ -474,6 +474,11 @@ export const translations = {
       passwordLengthHint:
         "Use 8 to 128 characters. Avoid common passwords and personal information.",
       passwordMismatch: "Passwords do not match.",
+      promoCode: "Promo code (optional)",
+      promoApplied:
+        "Promo code applied — {sparks} bonus sparks were added to your account.",
+      promoNotApplied:
+        "Your promo code could not be applied (it may be invalid or already used). Your account was still created with the standard signup bonus.",
       displayNameRequired: "Screen name is required.",
       genderRequired: "Please select your gender.",
       ageConfirmationRequired: "You must confirm you are 18 or older.",
@@ -638,6 +643,18 @@ export const translations = {
       purchaseSparkConfirmation:
         "You are about to purchase {sparks} sparks for {price}.",
       vatIncluded: "incl. {vat}% VAT",
+      playBilledByGoogle:
+        "You will be charged by Google Play for this purchase.",
+      playPurchaseSuccess:
+        "Payment successful! {sparks} sparks were added to your balance.",
+      playPurchaseAlready:
+        "This purchase was already credited to your balance.",
+      playPurchasePending:
+        "Google Play is still processing your payment. Your sparks will be added to your balance as soon as it completes.",
+      playPurchaseCancelled:
+        "The purchase was cancelled, so no sparks were added.",
+      playPurchaseFailed:
+        "The purchase could not be completed. If you were charged, Google Play will refund it automatically.",
       approxConverted: "Approximate converted price — you are charged in KES",
       upgradeSubscriptionConfirmation:
         "You are about to upgrade your subscription to {planName}.",
@@ -819,6 +836,19 @@ export const translations = {
         "Changes saved — your character has been submitted for review.",
       reapprovalNotice:
         "This character is public and currently approved. Saving changes will submit it for admin review and temporarily take it offline until approved.",
+      draftSubmitNotice:
+        "This public character is still a draft. Saving will submit it for admin review, and it stays hidden until it is approved.",
+      rejectedResubmitNotice:
+        "This character was rejected. Saving will resubmit it for admin review, and it stays hidden until it is approved.",
+      galleryPublishNote:
+        "Pictures you generate here become visible to everyone once an admin approves this character. Save your changes to submit it for review.",
+      galleryPublishOnApproval: "Public after approval",
+      draftBannerTitle: "This character is still a draft",
+      draftBannerBodyPublic:
+        "Only you can see it. Admins are not notified until you finish setup and submit it for review.",
+      draftBannerBodyPrivate:
+        "Only you can see it. Finish setup to start using it.",
+      draftBannerAction: "Finish setup",
       promptUsed: "Prompt Used for Generation",
     },
 
@@ -840,6 +870,10 @@ export const translations = {
       upload: "Upload",
       gallery: "Gallery",
       galleryOptional: "Optional additional images.",
+      galleryPublishNote:
+        "Pictures you add here become visible to everyone once your character is approved.",
+      draftHint:
+        "Until you press Complete Setup, your character stays a draft that only you can see. Admins review it after you complete setup.",
       noGalleryImages: "No gallery images yet.",
       addImage: "Add Image",
       cancel: "Cancel",
@@ -850,7 +884,7 @@ export const translations = {
         "e.g. wearing a red dress, standing in a sunflower field",
       promptUsedTitle: "Prompt Used for Generation",
       close: "Close",
-      skipForNow: "Skip for now",
+      skipForNow: "Save as draft",
       completing: "Completing...",
       completeSetup: "Complete Setup",
       setupCompleteTitle: "Setup Complete",
@@ -1185,6 +1219,14 @@ export const translations = {
       clothingBohemian: "Bohemian",
       clothingGothic: "Gothic",
       clothingPreppy: "Preppy",
+      clothingLingerie: "Lingerie / Underwear",
+      clothingGroupTraditional: "Traditional East African",
+      clothingKitenge: "Kitenge",
+      clothingKanga: "Kanga",
+      clothingSwahiliCoastal: "Swahili Coastal",
+      clothingMaasai: "Maasai Shuka",
+      clothingGomesi: "Gomesi (Uganda)",
+      clothingHabesha: "Habesha Kemis",
       // Step 8
       step8: {
         title: "Review & Create",
@@ -1205,7 +1247,7 @@ export const translations = {
 
     errors: {
       image_prompt_prohibited_subject:
-        "That image can't be generated. Images involving children, animals, or deceased people are not allowed. No sparks were charged.",
+        "That image can't be generated. Images of children or deceased people are not allowed, and neither is sexual content involving animals. No sparks were charged.",
       insufficient_sparks:
         "You don't have enough sparks for this. [Top up](/spark_pool) to continue.",
       billing_error:
@@ -1239,6 +1281,10 @@ export const translations = {
         "That image can't be sent because it appears to contain prohibited content.",
       photo_moderation_unavailable:
         "We couldn't check that photo, so it wasn't sent. Your sparks were not taken — please try again shortly.",
+      generated_image_moderation_blocked:
+        "That image could not be generated because our content-safety screening blocked it. No sparks were charged.",
+      generated_image_moderation_unavailable:
+        "We couldn't check that image, so it wasn't generated. Your sparks were not taken — please try again shortly.",
       photo_not_supported_by_model:
         "The current AI model can't see photos yet. Please try again later or switch models.",
       photo_processing_failed:
@@ -1889,6 +1935,11 @@ export const translations = {
       passwordLengthHint:
         "Tumia herufi 8 hadi 128. Epuka manenosiri ya kawaida na taarifa binafsi.",
       passwordMismatch: "Manenosiri hayalingani.",
+      promoCode: "Msimbo wa kipeperushi (hiari)",
+      promoApplied:
+        "Msimbo wa kipeperushi umekubaliwa — cheche {sparks} za ziada zimeongezwa kwenye akaunti yako.",
+      promoNotApplied:
+        "Msimbo wa kipeperushi haukuweza kutumika (huenda ni batili au tayari umetumika). Akaunti yako bado iliundwa na cheche za kawaida za kujiunga.",
       displayNameRequired: "Jina la skrini linahitajika.",
       genderRequired: "Tafadhali chagua jinsia yako.",
       ageConfirmationRequired: "Lazima uthibitishe kuwa una miaka 18 au zaidi.",
@@ -2058,7 +2109,17 @@ export const translations = {
       purchaseSparkConfirmation:
         "Unakaribia kununua cheche {sparks} kwa {price}.",
       vatIncluded: "pamoja na VAT ya {vat}%",
-      approxConverted: "Bei iliyobadilishwa kwa makadirio — unalipwa kwa KES",
+      playBilledByGoogle: "Utatozwa na Google Play kwa ununuzi huu.",
+      playPurchaseSuccess:
+        "Malipo yamefanikiwa! Cheche {sparks} zimeongezwa kwenye salio lako.",
+      playPurchaseAlready: "Ununuzi huu ulikwishahesabiwa kwenye salio lako.",
+      playPurchasePending:
+        "Google Play bado inashughulikia malipo yako. Cheche zitaongezwa kwenye salio lako mara tu malipo yatakapokamilika.",
+      playPurchaseCancelled:
+        "Ununuzi ulighairiwa, kwa hiyo hakuna cheche zilizoongezwa.",
+      playPurchaseFailed:
+        "Ununuzi haukukamilika. Kama umetozwa, Google Play itakurudishia pesa kiotomatiki.",
+      approxConverted: "Bei iliyobadilishwa kwa makadirio — unatozwa kwa KES",
       upgradeSubscriptionConfirmation:
         "Unakaribia kuboresha usajili wako hadi {planName}.",
       replaceSubscriptionNotice:
@@ -2232,6 +2293,19 @@ export const translations = {
         "Mabadiliko yamehifadhiwa — mhusika wako amewasilishwa kwa ukaguzi.",
       reapprovalNotice:
         "Mhusika huyu ni wa umma na ameidhinishwa. Kuhifadhi mabadiliko kutawasilisha kwa ukaguzi wa msimamizi na kuondolewa kwa muda hadi aidhinishwe.",
+      draftSubmitNotice:
+        "Mhusika huyu wa umma bado ni rasimu. Kuhifadhi kutamwasilisha kwa ukaguzi wa msimamizi, na atabaki amefichwa hadi aidhinishwe.",
+      rejectedResubmitNotice:
+        "Mhusika huyu alikataliwa. Kuhifadhi kutamwasilisha tena kwa ukaguzi wa msimamizi, na atabaki amefichwa hadi aidhinishwe.",
+      galleryPublishNote:
+        "Picha unazounda hapa zitaonekana kwa kila mtu msimamizi atakapomwidhinisha mhusika huyu. Hifadhi mabadiliko ili kumwasilisha kwa ukaguzi.",
+      galleryPublishOnApproval: "Ya umma baada ya idhini",
+      draftBannerTitle: "Mhusika huyu bado ni rasimu",
+      draftBannerBodyPublic:
+        "Wewe pekee unaweza kumwona. Wasimamizi hawajaarifiwa hadi ukamilishe usanidi na kumwasilisha kwa ukaguzi.",
+      draftBannerBodyPrivate:
+        "Wewe pekee unaweza kumwona. Kamilisha usanidi ili uanze kumtumia.",
+      draftBannerAction: "Kamilisha usanidi",
       promptUsed: "Maagizo Yaliyotumika Kutengeneza",
     },
 
@@ -2254,6 +2328,10 @@ export const translations = {
       upload: "Pakia",
       gallery: "Galeria",
       galleryOptional: "Picha za ziada, si lazima.",
+      galleryPublishNote:
+        "Picha unazoongeza hapa zitaonekana kwa kila mtu mhusika wako atakapoidhinishwa.",
+      draftHint:
+        "Hadi ubonyeze Kamilisha Usanidi, mhusika wako anabaki rasimu ambayo wewe pekee unaweza kuiona. Wasimamizi humkagua baada ya kukamilisha usanidi.",
       noGalleryImages: "Hakuna picha za ziada bado.",
       addImage: "Ongeza Picha",
       cancel: "Ghairi",
@@ -2264,7 +2342,7 @@ export const translations = {
         "k.m. amevaa gauni nyekundu, anasimama kwenye shamba la alizeti",
       promptUsedTitle: "Maagizo Yaliyotumika Kutengeneza",
       close: "Funga",
-      skipForNow: "Ruka kwa sasa",
+      skipForNow: "Hifadhi kama rasimu",
       completing: "Inakamilisha...",
       completeSetup: "Kamilisha Usanidi",
       setupCompleteTitle: "Usanidi Umekamilika",
@@ -2593,6 +2671,14 @@ export const translations = {
       clothingBohemian: "Kibohemia",
       clothingGothic: "Gothiki",
       clothingPreppy: "Preppy",
+      clothingLingerie: "Nguo za Ndani (Lingerie)",
+      clothingGroupTraditional: "Mavazi ya Jadi ya Afrika Mashariki",
+      clothingKitenge: "Kitenge",
+      clothingKanga: "Kanga",
+      clothingSwahiliCoastal: "Mavazi ya Pwani",
+      clothingMaasai: "Shuka ya Kimasai",
+      clothingGomesi: "Gomesi (Uganda)",
+      clothingHabesha: "Habesha Kemis (Ethiopia)",
       // Step 8
       step8: {
         title: "Kagua na Unda",
@@ -2613,7 +2699,7 @@ export const translations = {
 
     errors: {
       image_prompt_prohibited_subject:
-        "Picha hiyo haiwezi kutengenezwa. Picha zinazohusisha watoto, wanyama au watu waliofariki haziruhusiwi. Hakuna spark zilizotozwa.",
+        "Picha hiyo haiwezi kutengenezwa. Picha za watoto au za watu waliofariki haziruhusiwi, na maudhui ya kingono yanayohusisha wanyama hayaruhusiwi. Hakuna spark zilizotozwa.",
       insufficient_sparks:
         "Huna spark za kutosha kwa hili. [Ongeza](/spark_pool) ili kuendelea.",
       billing_error:
@@ -2647,6 +2733,10 @@ export const translations = {
         "Picha hiyo haiwezi kutumwa kwa sababu inaonekana kuwa na maudhui yaliyokatazwa.",
       photo_moderation_unavailable:
         "Hatuwezi kukagua picha hiyo, kwa hivyo haikutumwa. Sparks zako hazikuchukuliwa — tafadhali jaribu tena hivi karibuni.",
+      generated_image_moderation_blocked:
+        "Picha hiyo haikuweza kutengenezwa kwa sababu uchambuzi wetu wa usalama wa maudhui uliizuia. Hakuna cheche zilizotozwa.",
+      generated_image_moderation_unavailable:
+        "Hatukuweza kukagua picha hiyo, kwa hivyo haikutengenezwa. Cheche zako hazikuchukuliwa — tafadhali jaribu tena hivi karibuni.",
       photo_not_supported_by_model:
         "Mfano wa AI wa sasa hawezi kuona picha bado. Tafadhali jaribu tena baadaye au badilisha mfano.",
       photo_processing_failed:

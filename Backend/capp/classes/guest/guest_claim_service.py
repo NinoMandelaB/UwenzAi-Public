@@ -36,6 +36,7 @@ from capp.classes.guest.guest_transfer_grant_service import GuestTransferGrantSe
 from capp.models import (
     BillingReservation,
     Conversation,
+    CustomUser,
     GuestIdentity,
     GuestTokenQuota,
     GuestWebSocketTicket,
@@ -164,6 +165,17 @@ class GuestClaimService:
         identity.claimed_at = now
         identity.claimed_by = user
         identity.save(update_fields=["status", "claimed_at", "claimed_by", "updated_at"])
+
+        # Carry the guest's first recorded visit over to the account so the
+        # person's earliest recorded visit survives the merge (the audience view
+        # then reads it from the account row, not the retired guest). One
+        # conditional update: rows with no first_visit_at or a later one adopt
+        # the guest's earlier timestamp; an account that somehow already has an
+        # earlier first_visit_at keeps it.
+        if identity.first_visit_at:
+            CustomUser.objects.filter(pk=user.pk).exclude(first_visit_at__lt=identity.first_visit_at).update(
+                first_visit_at=identity.first_visit_at
+            )
 
         return {
             "claimed": True,

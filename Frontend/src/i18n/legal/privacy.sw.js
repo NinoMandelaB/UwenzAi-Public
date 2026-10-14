@@ -60,7 +60,7 @@ export const privacySw = {
             "Kuki ya mgeni imewekwa kama HttpOnly, kwa hivyo hati za ukurasa haziwezi kuisoma, na hutumwa kwa njia salama kwenye mfumo halisi.",
             "Ni kuki ya kudumu ili mazungumzo yako yaendelee kuwepo hata baada ya kufunga na kufungua kivinjari. Kwa sasa hudumu hadi siku 180, na kipindi cha mgeni pia kinaisha baada ya muda wa kutokutumika.",
             "Kuki hii ni ya lazima kabisa kutoa mazungumzo ya wageni. Si kuki ya matangazo wala ya ufuatiliaji.",
-            "Kama mgeni unaweza kuunda mazungumzo na ujumbe, kuunda wahusika, kuzalisha picha, na kununua cheche. Matumizi ya mgeni yanadhibitiwa na mipaka ya matumizi ya bure ya kila siku na ya jumla.",
+            "Kama mgeni unaweza kuunda mazungumzo na ujumbe, kuunda wahusika, kuzalisha picha, na kununua cheche kwenye tovuti yetu; manunuzi kwenye programu yetu ya Android yanahitaji akaunti. Matumizi ya mgeni yanadhibitiwa na mipaka ya matumizi ya bure ya kila siku na ya jumla.",
           ],
         },
         {
@@ -110,7 +110,11 @@ export const privacySw = {
         },
         {
           type: "p",
-          text: "Data ya matumizi, bili na usaidizi. Salio lako la cheche na miamala, manunuzi, usajili, matumizi ya tokeni na rekodi za gharama, tiketi za usaidizi, maoni unayotoa, na ripoti zozote za maudhui unazotuma.",
+          text: "Data ya matumizi, bili na usaidizi. Salio lako la cheche na miamala, manunuzi, usajili, matumizi ya tokeni na rekodi za gharama, tiketi za usaidizi, maoni unayotoa, na ripoti zozote za maudhui unazotuma. Ukiandika msimbo wa ofa unapojisajili, tunarekodi kwamba akaunti yako iliutumia, lini, na idadi ya cheche za ziada zilizoongezwa; wasimamizi wetu wanaweza kuona ni akaunti gani ilitumia msimbo upi.",
+        },
+        {
+          type: "p",
+          text: "Rekodi za ziara. Unapofungua tovuti au programu yetu, au unaporejea kuitumia, inaiarifu seva yetu, na tunarekodi muda wa ziara yako ya kwanza iliyorekodiwa, muda wa ziara yako ya hivi karibuni, na nchi ya hivi karibuni ambayo ziara zako zilitoka. Tunafanya hivi kwa akaunti na kwa vipindi vya wageni. Nchi hubainishwa na mtoa huduma wetu wa mtandao, Cloudflare, kutokana na anwani ya IP ya muunganisho wako; kwa madhumuni haya tunahifadhi msimbo wa nchi wa herufi mbili tu, si anwani ya IP. Wasimamizi wetu huona rekodi hizi katika muhtasari wa ndani wa watumiaji, pamoja na tarehe akaunti yako ilipofunguliwa na idadi ya ujumbe katika mazungumzo yako na kila mhusika. Muhtasari huu hauonyeshi kamwe maandishi ya ujumbe.",
         },
         {
           type: "p",
@@ -139,6 +143,8 @@ export const privacySw = {
           items: [
             "Kutoa Huduma uliyoiomba — kuendesha mazungumzo, wahusika, kumbukumbu, uzalishaji wa picha na manunuzi. Msingi: utekelezaji wa mkataba wetu na wewe, au hatua za lazima kutoa huduma uliyoiomba kama mgeni.",
             "Kuchukua malipo na kutunza rekodi sahihi za kifedha. Msingi: mkataba na wajibu wetu wa kisheria.",
+            "Kutumia msimbo wa ofa unaouandika unapojisajili, na kuona ni kampeni zipi za misimbo ya ofa zinazoleta watumiaji wapya. Msingi: utekelezaji wa mkataba wetu na wewe, na maslahi yetu halali.",
+            "Kuelewa jinsi Huduma inavyotumika — watu wangapi wanaitembelea, kutoka nchi zipi, na kila mhusika anatumiwa kiasi gani — ili tuweze kuboresha Huduma na kuamua tuitangaze wapi. Msingi: maslahi yetu halali.",
             "Kuweka Huduma salama — kuzuia matumizi mabaya na udanganyifu, kutekeleza kanuni zetu za maudhui yaliyopigwa marufuku, kupitia ripoti, na kulinda watumiaji wengine. Msingi: maslahi yetu halali na wajibu wetu wa kisheria.",
             "Kukusaidia na kutatua hitilafu. Msingi: mkataba na maslahi halali.",
             "Kuthibitisha kuwa wewe ni mtu mzima na kuandika kukubali kwako masharti yetu. Msingi: wajibu wa kisheria na maslahi halali.",
@@ -211,7 +217,7 @@ export const privacySw = {
       blocks: [
         {
           type: "p",
-          text: "Picha unazotuma kwenye mazungumzo. Kabla ya picha unayotuma kuhifadhiwa, uchambuzi wa kiotomatiki wa usalama wa watoto unaendeshwa kwenye seva zetu: nakala ya picha yenye ukubwa uliopunguzwa, bila maelezo ya kina, hutumwa kwa mtoa huduma wetu wa sasa wa uchambuzi wa usalama (Mistral AI) ili kuipima kulingana na sera yetu ya usalama wa watoto. Kwa uchambuzi huu picha pekee ndiyo inayotumwa — si maandishi ya ujumbe wako wala maelezo unayoongeza kwenye picha. Picha ambazo uchambuzi unazikataa, na picha ambazo haziwezi kuchambuliwa kabisa, zinakataliwa na hazihifadhiwi kabisa. Uchambuzi huu ulikuwepo ili kuzuia uchi wa watoto na maudhui ya kingono yanayohusisha watoto; si kichujio cha jumla cha maudhui, na maudhui ya watu wazima hayachujwi.",
+          text: "Picha unazotuma kwenye mazungumzo. Kabla ya picha unayotuma kuhifadhiwa, uchambuzi wa kiotomatiki wa usalama wa watoto na wa maudhui yaliyopigwa marufuku unaendeshwa kwenye seva zetu: nakala ya picha yenye ukubwa uliopunguzwa, bila metadata, hutumwa kwa mtoa huduma wetu wa sasa wa uchambuzi wa usalama (Mistral AI) ili kuipima. Uchambuzi huu hukagua mambo matano: uchi wa watoto, maudhui ya kingono yanayohusisha watoto, maudhui ya kingono yanayohusisha wanyama, majeraha ya kutisha au madhara makubwa (ikiwemo ukatili dhidi ya wanyama), na watu waliofariki au wanaokufa. Uchi na vitendo vya kingono vya watu wazima havichujwi. Kwa uchambuzi huu picha pekee ndiyo inayotumwa — si maandishi ya ujumbe wako wala maelezo unayoongeza kwenye picha. Picha ambazo uchambuzi unazikataa, na picha ambazo haziwezi kuchambuliwa kabisa, zinakataliwa na hazihifadhiwi kabisa. Uchambuzi huo mmoja pia unatumika kwa picha zinazorudishwa na watoa huduma wetu wa uzalishaji wa picha, kabla ya picha hizo kuhifadhiwa au kuonyeshwa kwako. Uchambuzi huu upo ili kuzuia aina hizi tano za maudhui; si kichujio cha jumla cha maudhui, na hauchuji maudhui ya kawaida ya watu wazima. Kanuni kuhusu unachoweza kutuma au kuzalisha ziko katika kifungu cha 7 cha Masharti ya Matumizi.",
         },
         {
           type: "p",
@@ -291,7 +297,7 @@ export const privacySw = {
       blocks: [
         {
           type: "p",
-          text: "Tunategemea watoa huduma wa nje kwa uwekaji mtandaoni na hifadhidata, uzalishaji wa maandishi kwa AI, uzalishaji wa picha, malipo, kutuma barua pepe, kuingia na ulinzi dhidi ya roboti, na ufuatiliaji wa hitilafu wa hiari. Orodha ya sasa, pamoja na lengo la kila mmoja, imeorodheshwa kwenye [Taarifa yetu ya Watoa Huduma](/subprocessors).",
+          text: "Tunategemea watoa huduma wa nje kwa uwekaji mtandaoni na hifadhidata, usafirishaji na ulinzi wa mtandao, uzalishaji wa maandishi kwa AI, uzalishaji wa picha, malipo, kutuma barua pepe, kuingia na ulinzi dhidi ya roboti, na ufuatiliaji wa hitilafu wa hiari. Orodha ya sasa, pamoja na lengo la kila mmoja, imeorodheshwa kwenye [Taarifa yetu ya Watoa Huduma](/subprocessors).",
         },
         {
           type: "p",
@@ -309,7 +315,7 @@ export const privacySw = {
       blocks: [
         {
           type: "p",
-          text: "Manunuzi huchakatwa na Paystack, kwa sasa kwa Shilingi za Kenya. Njia za malipo kama pesa za simu na kadi hutolewa na kushughulikiwa na Paystack, si na sisi.",
+          text: "Kwenye tovuti yetu, manunuzi huchakatwa na Paystack, kwa sasa kwa Shilingi za Kenya. Njia za malipo kama pesa za simu na kadi hutolewa na kushughulikiwa na Paystack, si na sisi.",
         },
         {
           type: "p",
@@ -317,7 +323,15 @@ export const privacySw = {
         },
         {
           type: "p",
-          text: "Tunabakiza rekodi za manunuzi hata baada ya akaunti kufutwa, tukiondoa kiungo cha akaunti, kwa sababu tunazihitaji kwa madhumuni ya uhasibu, kodi, kuzuia udanganyifu na kushughulikia mizozo.",
+          text: "Kwenye programu yetu ya Android, cheche hununuliwa kupitia mfumo wa malipo wa Google Play. Google huchakata malipo na maelezo yako ya malipo chini ya [Masharti ya Huduma ya Google Play](https://play.google.com/about/play-terms/), [Sera ya Faragha ya Google](https://policies.google.com/privacy) na [Ilani ya Faragha ya Google Payments](https://payments.google.com/payments/apis-secure/get_legal_document?ldo=0&ldt=privacynotice). Hatupokei maelezo ya kadi yako wala ya njia nyingine ya malipo.",
+        },
+        {
+          type: "p",
+          text: "Kutoka Google tunapokea na kuhifadhi rekodi ya ununuzi: tokeni ya ununuzi, nambari ya oda ya Google Play, bidhaa, hali na muda wa ununuzi, na kama tumethibitisha ununuzi huo kwa Google. Seva yetu hutuma tokeni ya ununuzi kwa Google ili kuhakiki na kuthibitisha ununuzi, na mara kwa mara huiuliza Google ni manunuzi gani yamerudishiwa fedha. Ununuzi ukirudishiwa fedha au kubatilishwa na benki, tunahifadhi muda, sababu na chanzo ambavyo Google inaripoti, pamoja na idadi ya cheche zilizoondolewa kwenye salio lako kama ilivyoelezwa katika kifungu cha 21 cha [Masharti yetu ya Matumizi](/terms). Chini ya masharti yake, Google inaweza pia kutupatia sisi kama muuzaji taarifa kama jina lako na anwani yako ya barua pepe, kwenye dashibodi ya wasanidi ya Google. Tunaitumia tu kushughulikia oda, marejesho ya fedha, maombi ya usaidizi na udanganyifu unaoshukiwa, na hatuinakili kwenye akaunti yako ya UwenzAi.",
+        },
+        {
+          type: "p",
+          text: "Tunabakiza rekodi za manunuzi hata baada ya akaunti kufutwa, tukiondoa kiungo cha akaunti, kwa sababu tunazihitaji kwa madhumuni ya uhasibu, kodi, kuzuia udanganyifu na kushughulikia mizozo. Hili linahusu manunuzi yaliyofanywa kupitia Paystack na kupitia Google Play.",
         },
       ],
     },
@@ -328,6 +342,10 @@ export const privacySw = {
         {
           type: "p",
           text: "Tunatumia kuki zinazohitajika kuendesha Huduma pekee. Hatutumii kuki za matangazo, na hatuweki hati za uchanganuzi au ufuatiliaji za watu wa tatu kama vile pikseli za matangazo.",
+        },
+        {
+          type: "p",
+          text: "Hata hivyo, sisi wenyewe huhesabu ziara: unapofungua tovuti au programu yetu, inatuma taarifa fupi kwa seva yetu, ambayo hurekodi ziara iliyoelezwa katika kifungu cha 4. Hili halitumii kuki za ziada wala huduma ya uchanganuzi ya watu wa tatu.",
         },
         {
           type: "ul",
@@ -357,7 +375,8 @@ export const privacySw = {
             "Maudhui ya akaunti yako — mazungumzo, ujumbe, wahusika, kumbukumbu na picha — huhifadhiwa wakati akaunti yako inaendelea kuwepo, ili yawepo utakaporejea. Kwa sasa hatuendeshi kazi ya kiotomatiki inayofuta mazungumzo ya zamani baada ya kipindi maalum. Nini kinatokea ukifuta akaunti yako kimeelezwa katika kifungu cha 15.",
             "Data ya mgeni imefungamanishwa na kitambulisho cha mgeni, ambacho kwa sasa hudumu hadi siku 180 na pia kinaisha baada ya muda wa kutokutumika.",
             "Kodi za uthibitishaji na urejeshaji wa nenosiri zinaisha haraka, kwa kawaida ndani ya dakika kadhaa, na hukataliwa baada ya hapo.",
-            "Rekodi za manunuzi, bili na ridhaa huhifadhiwa kwa muda wote tunapozihitaji kutimiza wajibu wa uhasibu, kodi na kisheria, na kujilinda dhidi ya mizozo.",
+            "Rekodi za manunuzi, bili na ridhaa, ikijumuisha rekodi ya msimbo wa ofa uliotumia, huhifadhiwa kwa muda wote tunapozihitaji kutimiza wajibu wa uhasibu, kodi na kisheria, na kujilinda dhidi ya mizozo.",
+            "Rekodi za ziara husasishwa unapotembelea, na ni nchi ya hivi karibuni pekee inayohifadhiwa. Kwa akaunti huhifadhiwa hadi akaunti ifutwe; kwa kipindi cha mgeni hubaki pamoja na rekodi ya kipindi hicho, hata baada ya kipindi kuisha.",
             "Tiketi za usaidizi na ripoti za maudhui huhifadhiwa wakati ziko wazi na kwa kipindi cha kuridhisha baada ya hapo, ili matatizo yanayojirudia yaweze kushughulikiwa.",
             "Rekodi za usalama huhifadhiwa kwa muda tunaohitaji kugundua ukiukaji unaorudiwa katika vikao vyako vingi, kukagua maamuzi ya utekelezaji, na kutimiza wajibu wa kisheria. Rekodi za zamani huacha kuhesabiwa kwa utekelezaji wa kiotomatiki baada ya dirisha maalum (kwa sasa siku 180).",
           ],
@@ -390,7 +409,7 @@ export const privacySw = {
         },
         {
           type: "p",
-          text: "Kufuta akaunti yako kunaondoa rekodi yako ya mtumiaji, maelezo ya wasifu wako, mazungumzo yako, ujumbe, muhtasari, kumbukumbu, vikumbusho, wahusika wa faragha ambao hakuna mtu mwingine aliyewatumia, na picha za faragha — ikijumuisha picha za faragha ulizoongeza kwenye mhusika wa umma wa mtu mwingine. Salio lako lililobaki la cheche linaondolewa. Hii si marejesho ya malipo.",
+          text: "Kufuta akaunti yako kunaondoa rekodi yako ya mtumiaji, maelezo ya wasifu wako, rekodi zako za ziara, mazungumzo yako, ujumbe, muhtasari, kumbukumbu, vikumbusho, wahusika wa faragha ambao hakuna mtu mwingine aliyewatumia, na picha za faragha — ikijumuisha picha za faragha ulizoongeza kwenye mhusika wa umma wa mtu mwingine. Salio lako lililobaki la cheche linaondolewa. Hii si marejesho ya malipo.",
         },
         {
           type: "p",
@@ -407,7 +426,7 @@ export const privacySw = {
         {
           type: "ul",
           items: [
-            "Rekodi za manunuzi na bili zinabakizwa, kiungo cha akaunti yako kikiondolewa, kwa sababu tunalazimika kuzihifadhi.",
+            "Rekodi za manunuzi na bili zinabakizwa, kiungo cha akaunti yako kikiondolewa, kwa sababu tunalazimika kuzihifadhi. Msimbo wa ofa uliotumia unabaki ukiwa umewekwa alama kuwa umetumika, lakini hauhusishwi nawe tena.",
             "Pale picha inafutwa, faili iliyohifadhiwa inaondolewa baada ya rekodi inayoitaja, lakini hatutoi dhamana kwamba kila faili inafutwa kutoka hifadhi ya vitu kwa wakati mmoja. Faili za picha zinazobaki zikitajwa na mhusika wa umma tunayembakiza hazifutwi.",
             "Nakala zinaweza kuendelea kuwepo kwa kipindi kifupi kwenye nakala rudufu za hifadhidata zilizosimbwa kwa njia fiche na kwenye kumbukumbu za utendaji kabla ya kuisha kwa mwendo wa kawaida.",
             "Maudhui yaliyokwisha tumwa kwa mtoa huduma wa AI kuzalisha jibu au picha yanadhibitiwa na muda wa kubakiza wa mtoa huduma huyo. Tunaomba kubakizwa kidogo zaidi pale mtoa huduma anaruhusu, lakini hatuwezi kufuta data kwenye mifumo yao kwa niaba yako.",

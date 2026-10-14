@@ -999,3 +999,9 @@
   outline: 2px solid var(--color-accent);
   outline-offset: 3px;
 }
+.dev-budget-edit .dev-field {
+  margin-bottom: 12px;
+}
+.dev-budget-edit .dev-field input {
+  width: 100%;
+}

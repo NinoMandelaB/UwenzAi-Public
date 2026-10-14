@@ -43,6 +43,15 @@ MESSAGE_BODY_BY_LANGUAGE = {
     "sw": "amekutumia ujumbe",
 }
 
+# Support-notification body, also keyed by preferred_language. Deliberately
+# generic ("you have a new support message") — push services are third
+# parties, and the payload never carries ticket subjects or admin outreach
+# context. See SupportService.create_admin_outreach_ticket for the trigger.
+SUPPORT_MESSAGE_BODY_BY_LANGUAGE = {
+    "en": "You have a new support message.",
+    "sw": "Una ujumbe mpya wa usaidizi.",
+}
+
 
 class PushSubscriptionOwnershipError(Exception):
     """Raised when an endpoint is already bound with different credentials."""
@@ -157,6 +166,29 @@ class PushService:
             # Computed after the triggering message was persisted, so the
             # count the service worker badges the app icon with includes it.
             unread_count=total_unread(user_id=user.user_id),
+        )
+
+    @classmethod
+    def send_support_message_push(cls, user: CustomUser) -> int:
+        """
+        Notify ``user`` about a new support-ticket message — used when an
+        admin opens an outreach ticket on the user's behalf (and available
+        for any future admin-reply path that wants a notification).
+
+        Privacy: the payload is content-free. Push services learn THAT a
+        support message exists, never its subject, text, or that it is an
+        outreach/safety contact — the generic body is identical for every
+        support notification. No ``unread_count`` is passed: that field
+        drives the app-icon badge with the CHAT unread total on message
+        pushes, and a support-only count would clobber it. The in-app header
+        ticket badge polls its own endpoint separately.
+        """
+        body = SUPPORT_MESSAGE_BODY_BY_LANGUAGE.get(user.preferred_language, SUPPORT_MESSAGE_BODY_BY_LANGUAGE["en"])
+        return cls.send_to_user(
+            user,
+            title="UwenzAi",
+            body=body,
+            url="/support",
         )
 
     @classmethod

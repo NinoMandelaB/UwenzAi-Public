@@ -99,7 +99,19 @@ _ADVISORY_CATEGORIES = (CATEGORY_MODEL_REFUSAL,)
 # (see capp/classes/moderation/photo_moderation.py). Recorded through
 # record_photo_block so repeat uploaders are visible in the ledger without
 # importing the text policy's instant-lock semantics.
-CATEGORY_PHOTO_CHILD_SAFETY = "photo_child_safety"
+CATEGORY_PHOTO_CHILD_SAFETY = SafetyEvent.Category.PHOTO_CHILD_SAFETY.value
+# AI-generated output screening, distinct from user uploads so admin review has
+# accurate context. See `record_generated_image_block`.
+CATEGORY_GENERATED_IMAGE_CHILD_SAFETY = SafetyEvent.Category.GENERATED_IMAGE_CHILD_SAFETY.value
+# Non-child block reasons. A funeral photo or a gore image must not be recorded
+# (or read) as a child-safety offence; these mirror the corresponding
+# `generated_image_child_safety` / `photo_child_safety` split.
+CATEGORY_PHOTO_BESTIALITY = SafetyEvent.Category.PHOTO_BESTIALITY.value
+CATEGORY_PHOTO_GORE = SafetyEvent.Category.PHOTO_GORE.value
+CATEGORY_PHOTO_DEATH = SafetyEvent.Category.PHOTO_DEATH.value
+CATEGORY_GENERATED_IMAGE_BESTIALITY = SafetyEvent.Category.GENERATED_IMAGE_BESTIALITY.value
+CATEGORY_GENERATED_IMAGE_GORE = SafetyEvent.Category.GENERATED_IMAGE_GORE.value
+CATEGORY_GENERATED_IMAGE_DEATH = SafetyEvent.Category.GENERATED_IMAGE_DEATH.value
 
 # Deployment modes for the ledger (SAFETY_LEDGER_MODE):
 #
@@ -790,8 +802,16 @@ class SafetyLedgerService:
         conversation_id=None,
         sha256: str,
         provider: str,
+        categories: Optional[list] = None,
     ) -> Optional[SafetyEvent]:
-        """Record a blocked child-safety photo as a safety event.
+        """Record a blocked photo as a safety event.
+
+        The category reflects why the image was blocked:
+        `photo_child_safety` for the child-safety categories
+        (`minor_nudity`, `minor_sexual_content`), or a dedicated category for
+        bestiality, gore or death — so a funeral photo or a graphic-violence
+        image is not recorded as, or read by admin review as, a child-safety
+        offence.
 
         The photo moderation layer blocks the upload on its own; this writes
         the account-level signal so a REPEATED uploader is visible next to the
@@ -828,7 +848,7 @@ class SafetyLedgerService:
         event = SafetyEvent.objects.create(
             user_id=user.pk,
             conversation_id=conversation_id,
-            category=CATEGORY_PHOTO_CHILD_SAFETY,
+            category=cls._photo_block_category(categories),
             severity=SEVERITY_HIGH,
             action=action,
             is_care=False,
@@ -837,12 +857,112 @@ class SafetyLedgerService:
             fingerprint=fingerprint,
         )
         logger.info(
-            "Safety ledger: blocked photo recorded for user=%s (action=%s, provider=%s)",
+            "Safety ledger: blocked photo recorded for user=%s (action=%s, provider=%s, categories=%s)",
             user.pk,
             action,
             provider,
+            categories,
         )
         return event
+
+    @classmethod
+    def _photo_block_category(cls, categories: Optional[list]) -> str:
+        """Map a block decision's categories to a ledger category.
+
+        Child-safety categories map to `photo_child_safety` (backward
+        compatible with every existing row). Bestiality, gore and death map to
+        their own categories so admin review reads them for what they are.
+        An empty or unknown list defaults to the child-safety category: the
+        screening path is fail-closed, so an unknown block reason is more
+        likely a child-safety verdict we could not parse than anything else.
+        """
+        if not categories:
+            return CATEGORY_PHOTO_CHILD_SAFETY
+        lowered = {str(c).lower() for c in categories}
+        if lowered & {"minor_nudity", "minor_sexual_content", "contains_minor"}:
+            return CATEGORY_PHOTO_CHILD_SAFETY
+        if "bestiality" in lowered:
+            return CATEGORY_PHOTO_BESTIALITY
+        if "gore" in lowered:
+            return CATEGORY_PHOTO_GORE
+        if "death" in lowered:
+            return CATEGORY_PHOTO_DEATH
+        return CATEGORY_PHOTO_CHILD_SAFETY
+
+    @classmethod
+    def record_generated_image_block(
+        cls,
+        *,
+        user: CustomUser,
+        conversation_id=None,
+        sha256: str,
+        provider: str,
+        categories: Optional[list] = None,
+    ) -> Optional[SafetyEvent]:
+        """Record a blocked child-safety AI-generated image as a safety event.
+
+        Mirrors `record_photo_block` but for provider *outputs* rather than
+        user uploads, so admin review can tell a user who prompted an
+        AI-generated image that screened positive apart from one who tried to
+        upload the same content directly. Same policy posture as the upload
+        path: a screening false positive must not lock an account or escalate
+        severity by itself, and one blocked image never locks — the lock can
+        only come from a corroborated text violation or an administrator.
+
+        Shadow mode records SHADOWED (measured, never scoring); enforce mode
+        records BLOCKED, which scores. "off" records nothing. The generated
+        image sha256 doubles as the dedup fingerprint.
+        """
+        if user is None or _ledger_mode() == "off":
+            return None
+
+        fingerprint = (sha256 or "")[:64]
+        dedup_start = timezone.now() - timedelta(minutes=settings.SAFETY_DEDUP_WINDOW_MINUTES)
+        already_recorded = SafetyEvent.objects.filter(
+            user_id=user.pk,
+            fingerprint=fingerprint,
+            is_reversed=False,
+            created_at__gte=dedup_start,
+        ).exists()
+        if already_recorded:
+            return None
+
+        action = SafetyEvent.Action.SHADOWED if _ledger_mode() == "shadow" else SafetyEvent.Action.BLOCKED
+        event = SafetyEvent.objects.create(
+            user_id=user.pk,
+            conversation_id=conversation_id,
+            category=cls._generated_image_block_category(categories),
+            severity=SEVERITY_HIGH,
+            action=action,
+            is_care=False,
+            confidence=1.0,
+            classifier_version=f"generated:{provider}"[:40],
+            fingerprint=fingerprint,
+        )
+        logger.info(
+            "Safety ledger: blocked generated image recorded for user=%s (action=%s, provider=%s, categories=%s)",
+            user.pk,
+            action,
+            provider,
+            categories,
+        )
+        return event
+
+    @classmethod
+    def _generated_image_block_category(cls, categories: Optional[list]) -> str:
+        """Same category mapping as `_photo_block_category`, for outputs."""
+        if not categories:
+            return CATEGORY_GENERATED_IMAGE_CHILD_SAFETY
+        lowered = {str(c).lower() for c in categories}
+        if lowered & {"minor_nudity", "minor_sexual_content", "contains_minor"}:
+            return CATEGORY_GENERATED_IMAGE_CHILD_SAFETY
+        if "bestiality" in lowered:
+            return CATEGORY_GENERATED_IMAGE_BESTIALITY
+        if "gore" in lowered:
+            return CATEGORY_GENERATED_IMAGE_GORE
+        if "death" in lowered:
+            return CATEGORY_GENERATED_IMAGE_DEATH
+        return CATEGORY_GENERATED_IMAGE_CHILD_SAFETY
 
     @classmethod
     def attention_summaries(cls, user_ids) -> dict:

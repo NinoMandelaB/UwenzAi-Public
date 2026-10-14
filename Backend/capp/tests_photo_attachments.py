@@ -734,6 +734,9 @@ class MistralVLMProviderTests(TestCase):
             "contains_minor": False,
             "minor_nudity": False,
             "minor_sexual_content": False,
+            "bestiality": False,
+            "gore": False,
+            "death": False,
             "uncertain": False,
         }
         base.update(fields)
@@ -791,6 +794,46 @@ class MistralVLMProviderTests(TestCase):
         self.assertEqual(decision.categories, ["minor_sexual_content"])
 
     @override_settings(IMAGE_MODERATION_PROVIDER="mistral_vlm", MISTRAL_API_KEY="dummy")
+    def test_bestiality_blocks(self):
+        with mock.patch(
+            "capp.classes.ai.mistral_client.MistralClient.chat_completion",
+            return_value=self._respond(self._verdict(bestiality=True)),
+        ):
+            decision = photo_moderation.moderate_photo(_png_bytes(), "image/png")
+        self.assertEqual(decision.action, "block")
+        self.assertEqual(decision.categories, ["bestiality"])
+
+    @override_settings(IMAGE_MODERATION_PROVIDER="mistral_vlm", MISTRAL_API_KEY="dummy")
+    def test_gore_blocks(self):
+        with mock.patch(
+            "capp.classes.ai.mistral_client.MistralClient.chat_completion",
+            return_value=self._respond(self._verdict(gore=True)),
+        ):
+            decision = photo_moderation.moderate_photo(_png_bytes(), "image/png")
+        self.assertEqual(decision.action, "block")
+        self.assertEqual(decision.categories, ["gore"])
+
+    @override_settings(IMAGE_MODERATION_PROVIDER="mistral_vlm", MISTRAL_API_KEY="dummy")
+    def test_death_blocks(self):
+        with mock.patch(
+            "capp.classes.ai.mistral_client.MistralClient.chat_completion",
+            return_value=self._respond(self._verdict(death=True)),
+        ):
+            decision = photo_moderation.moderate_photo(_png_bytes(), "image/png")
+        self.assertEqual(decision.action, "block")
+        self.assertEqual(decision.categories, ["death"])
+
+    @override_settings(IMAGE_MODERATION_PROVIDER="mistral_vlm", MISTRAL_API_KEY="dummy")
+    def test_multiple_prohibited_categories_all_listed(self):
+        with mock.patch(
+            "capp.classes.ai.mistral_client.MistralClient.chat_completion",
+            return_value=self._respond(self._verdict(gore=True, death=True)),
+        ):
+            decision = photo_moderation.moderate_photo(_png_bytes(), "image/png")
+        self.assertEqual(decision.action, "block")
+        self.assertEqual(sorted(decision.categories), ["death", "gore"])
+
+    @override_settings(IMAGE_MODERATION_PROVIDER="mistral_vlm", MISTRAL_API_KEY="dummy")
     def test_adult_content_is_allowed_by_policy(self):
         # Adult nudity is explicitly permitted: no field may fire on it.
         with mock.patch(
@@ -836,6 +879,9 @@ class MistralVLMProviderTests(TestCase):
                 "contains_minor": "no",
                 "minor_nudity": False,
                 "minor_sexual_content": False,
+                "bestiality": False,
+                "gore": False,
+                "death": False,
                 "uncertain": False,
             }
         )
@@ -853,6 +899,9 @@ class MistralVLMProviderTests(TestCase):
                 "contains_minor": False,
                 "minor_nudity": False,
                 "minor_sexual_content": False,
+                "bestiality": False,
+                "gore": False,
+                "death": False,
                 "uncertain": "false",
             }
         )

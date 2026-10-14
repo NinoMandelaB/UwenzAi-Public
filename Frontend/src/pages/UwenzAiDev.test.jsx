@@ -32,6 +32,7 @@ vi.mock("../services/agentDevService", () => ({
   listAgentKeys: vi.fn(),
   createAgentKey: vi.fn(),
   revokeAgentKey: vi.fn(),
+  updateAgentKeyBudget: vi.fn(),
   getAgentUsage: vi.fn(),
   getConsent: vi.fn(),
   confirmConsent: vi.fn(),
@@ -635,6 +636,80 @@ describe("keys", () => {
       "",
     );
   });
+  it("creates a key with an optional monthly budget", async () => {
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: tx("newKey") }));
+    const labelInput = screen.getByRole("textbox", { name: tx("keyLabel") });
+    fireEvent.change(labelInput, { target: { value: "Budgeted app" } });
+    fireEvent.change(screen.getByRole("textbox", { name: tx("budgetLabel") }), {
+      target: { value: "250" },
+    });
+    api.createAgentKey.mockResolvedValueOnce(
+      ok({ key_id: "key-9", full_key: "one-time-value" }),
+    );
+    api.listAgentKeys.mockResolvedValue(
+      ok({
+        keys: [
+          {
+            ...key,
+            id: "key-9",
+            label: "Budgeted app",
+            monthly_spark_budget: 250,
+          },
+        ],
+      }),
+    );
+    fireEvent.submit(labelInput.closest("form"));
+    await screen.findByLabelText(tx("fullKey"));
+    expect(api.createAgentKey).toHaveBeenCalledWith(
+      { label: "Budgeted app", monthly_spark_budget: 250 },
+      expect.anything(),
+    );
+    // The create form closes on success; the budget field does not persist open.
+    expect(
+      screen.queryByRole("textbox", { name: tx("budgetLabel") }),
+    ).toBeNull();
+  });
+  it("edits a key budget inline and validates before saving", async () => {
+    await ready();
+    fireEvent.click(
+      screen.getByRole("button", { name: `${tx("budgetEdit")} ${key.label}` }),
+    );
+    const input = screen.getByRole("textbox", { name: tx("budgetLabel") });
+    expect(input.value).toBe("");
+    // Reject an out-of-range value without calling the API.
+    fireEvent.change(input, { target: { value: "0" } });
+    fireEvent.click(
+      screen.getByRole("button", { name: tx("budgetSave"), exact: true }),
+    );
+    expect(screen.getByText(tx("budgetInvalid"))).toBeTruthy();
+    expect(api.updateAgentKeyBudget).not.toHaveBeenCalled();
+    // A valid value goes through; failures surface, success reloads.
+    fireEvent.change(input, { target: { value: "500" } });
+    api.updateAgentKeyBudget.mockResolvedValueOnce({
+      status: "error",
+      data: {},
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: tx("budgetSave"), exact: true }),
+    );
+    await screen.findByText(tx("budgetFailed"));
+    api.updateAgentKeyBudget.mockResolvedValueOnce(
+      ok({ key_id: key.id, monthly_spark_budget: 500 }),
+    );
+    api.listAgentKeys.mockResolvedValue(
+      ok({ keys: [{ ...key, monthly_spark_budget: 500 }] }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: tx("budgetSave"), exact: true }),
+    );
+    await screen.findByText(tx("budgetSaved"));
+    expect(api.updateAgentKeyBudget).toHaveBeenLastCalledWith(
+      key.id,
+      500,
+      expect.anything(),
+    );
+  });
   it("keeps list/create failures visible and does not pretend an empty key list", async () => {
     api.listAgentKeys.mockRejectedValueOnce(new Error("offline"));
     render(<UwenzAiDev />);
@@ -1103,6 +1178,69 @@ describe("usage and languages", () => {
       target: { value: "provider-b" },
     });
     expect(screen.getByText("alpha / provider-a")).toBeTruthy();
+  });
+  it("breaks usage down by key and source, playground and direct API", async () => {
+    api.getAgentUsage.mockResolvedValue(
+      ok({
+        ...usage,
+        by_key: [
+          {
+            key_id: key.id,
+            label: key.label,
+            hint: "abcd",
+            is_active: true,
+            removed: false,
+            source: "playground",
+            monthly_calls: 1,
+            monthly_sparks: 3,
+            total_calls: 1,
+            total_sparks: 3,
+          },
+          {
+            key_id: key.id,
+            label: key.label,
+            hint: "abcd",
+            is_active: true,
+            removed: false,
+            source: "api",
+            monthly_calls: 2,
+            monthly_sparks: 7,
+            total_calls: 2,
+            total_sparks: 7,
+          },
+          {
+            key_id: null,
+            label: "",
+            hint: "zz99",
+            is_active: false,
+            removed: true,
+            source: "api",
+            monthly_calls: 0,
+            monthly_sparks: 0,
+            total_calls: 4,
+            total_sparks: 11,
+          },
+        ],
+      }),
+    );
+    // ready() looks the key label up by unique text; the by-key table now
+    // repeats it, so wait for the model selector readiness directly.
+    render(<UwenzAiDev />);
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: tx("model") }).disabled).toBe(
+        false,
+      ),
+    );
+    await screen.findByText(tx("byKey"));
+    const tables = screen.getAllByRole("table");
+    const byKeyTable = tables[tables.length - 1];
+    expect(screen.getByText(tx("usageNote"))).toBeTruthy();
+    expect(
+      within(byKeyTable).getAllByText(tx("sourcePlayground")),
+    ).toHaveLength(1);
+    expect(within(byKeyTable).getAllByText(tx("sourceApi"))).toHaveLength(2);
+    expect(within(byKeyTable).getByText(tx("removedKey"))).toBeTruthy();
+    expect(within(byKeyTable).getAllByText(key.label)).toHaveLength(2);
   });
   it("keeps usable content while reporting a usage refresh failure", async () => {
     await ready();

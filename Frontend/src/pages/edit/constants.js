@@ -126,17 +126,8 @@ export const RELATIONSHIP_STYLES = [
   { value: "romantic", labelKey: "wizard.relationshipRomantic" },
 ];
 
-export const CLOTHING_STYLES = [
-  { value: "casual", labelKey: "wizard.clothingCasual" },
-  { value: "formal", labelKey: "wizard.clothingFormal" },
-  { value: "sporty", labelKey: "wizard.clothingSporty" },
-  { value: "elegant", labelKey: "wizard.clothingElegant" },
-  { value: "streetwear", labelKey: "wizard.clothingStreetwear" },
-  { value: "bohemian", labelKey: "wizard.clothingBohemian" },
-  { value: "gothic", labelKey: "wizard.clothingGothic" },
-  { value: "preppy", labelKey: "wizard.clothingPreppy" },
-  { value: "lingerie", label: "Lingerie / Underwear" },
-];
+// Shared with the creation wizard so both surfaces always offer the same styles.
+export { CLOTHING_STYLES } from "../../config/clothingStyles";
 
 export const STATUS_OPTIONS = [
   { value: "draft", labelKey: "wizard.statusDraft" },

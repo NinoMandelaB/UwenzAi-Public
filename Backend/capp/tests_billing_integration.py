@@ -47,7 +47,7 @@ from capp.models import (
     SparkPool,
     SparkTransaction,
 )
-from capp.tests import _make_character, _make_user
+from capp.tests import _bypass_generated_image_screen, _make_character, _make_user
 
 
 @contextlib.contextmanager
@@ -87,6 +87,7 @@ class BillingFeatureTestCase(TestCase):
     """Shared fixtures: one owner with a funded pool and one character."""
 
     def setUp(self):
+        _bypass_generated_image_screen(self)
         self.user = _make_user(username="billed", email="billed@example.com", verified=True)
         self.pool = SparkPool.objects.create(user=self.user, sparks=10000, token_balance=0, is_active=True)
         self.character = _make_character(name="Zola", slug="zola", created_by=self.user)

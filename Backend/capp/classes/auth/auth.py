@@ -34,6 +34,7 @@ from capp.models import (
 from capp.classes.chat.attachment_service import photo_upload_limits, photo_uploads_enabled  # noqa: E402
 
 from capp.classes.auth.email_verification_service import EmailVerificationService
+from capp.classes.billing.promo_code_service import redeem_at_signup as promo_redeem_at_signup  # noqa: E402
 from capp.classes.auth.codes import code_matches
 from capp.authentication import account_can_authenticate
 from capp.classes.auth.feature_preferences import FeaturePreferences
@@ -1006,6 +1007,17 @@ class Auth:
             phone_number = payload.get("phone_number")
             preferred_language = (payload.get("preferred_language") or CustomUser.LanguageChoices.ENGLISH).strip()
 
+            # Optional single-use promo code (flyer campaign). Extracted here;
+            # redemption happens inside the atomic block below so the code is
+            # claimed in the same transaction as the account. A bad code never
+            # fails the signup — the outcome is reported back instead. A
+            # non-string value (number, array, object) is treated as an invalid
+            # code rather than crashing the signup.
+            raw_promo_code = payload.get("promo_code")
+            if raw_promo_code is not None and not isinstance(raw_promo_code, str):
+                raw_promo_code = None
+            promo_code_raw = (raw_promo_code or "").strip()
+
             # --- NEW: extract optional gender ---
             gender = payload.get("gender")  # Could be None or one of GenderChoices values
 
@@ -1180,6 +1192,16 @@ class Auth:
                     SIGNUP_SPARKS,
                 )
 
+                # ---------- Redeem optional promo code ----------
+                # Inside the same transaction: the code row is locked and
+                # claimed (or cleanly rejected) together with the account, so
+                # a failed signup can never consume a code and two concurrent
+                # signups can never both redeem one. Sparks are credited on
+                # top of the signup bonus, never instead of it.
+                promo_outcome = None
+                if promo_code_raw:
+                    promo_outcome = promo_redeem_at_signup(user, promo_code_raw)
+
                 verification = EmailVerificationService.create_verification_for_user(user)
 
                 verification_payload = {
@@ -1202,6 +1224,13 @@ class Auth:
                 username,
             )
 
+            # The promo credit updates the pool through its own locked row, so
+            # the object created above can be stale by one credit. Re-read the
+            # committed balance so the response reports what the account
+            # actually holds (signup + any promo bonus).
+            if promo_outcome is not None:
+                spark_pool.refresh_from_db()
+
             return {
                 "status": "success",
                 "data": {
@@ -1222,6 +1251,7 @@ class Auth:
                         "sparks": int(spark_pool.sparks),
                         "token_balance": int(spark_pool.token_balance),
                     },
+                    **({"promo": promo_outcome} if promo_outcome is not None else {}),
                 },
             }
 

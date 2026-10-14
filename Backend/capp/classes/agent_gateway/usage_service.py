@@ -5,15 +5,21 @@ Handles usage tracking and reporting for the Agent Gateway.
 """
 
 import logging
-from datetime import date
+
 from typing import Any
 
 from django.db import models
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 
 from capp.models import AgentAPIKey, AgentUsageLog
 
 logger = logging.getLogger(__name__)
+
+
+def month_start():
+    """Start of the current calendar month in the server timezone (aware)."""
+    return timezone.localtime().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
 
 class AgentUsageService:
@@ -88,12 +94,9 @@ class AgentUsageService:
         )
 
         # Get monthly usage (current month)
-        today = timezone.now().date()
-        first_of_month = date(today.year, today.month, 1)
-
         monthly = AgentUsageLog.objects.filter(
             key_id=key_id,
-            created_at__gte=first_of_month,
+            created_at__gte=month_start(),
         ).aggregate(
             sparks=models.Sum("sparks_charged"),
             calls=models.Count("usage_log_id"),
@@ -203,10 +206,69 @@ class AgentUsageService:
         return list(daily)
 
     @staticmethod
+    def get_usage_by_key(user_id: str) -> list[dict[str, Any]]:
+        """Usage grouped by key and source, aggregated from usage logs.
+
+        Grouping happens on the logs (key id + denormalized key_hint + source)
+        rather than on live AgentAPIKey rows, so usage keeps showing for keys
+        that were removed by the revoked-key retention task. ``source`` is
+        ``None`` for rows written before the field existed (shown as direct
+        API usage) and distinguishes workspace playground calls from direct
+        API calls otherwise.
+
+        Args:
+            user_id: The user ID
+
+        Returns:
+            List of per-(key, source) usage summaries ordered by total sparks
+        """
+        monthly_q = models.Q(created_at__gte=month_start())
+        # Group NULL (pre-field) and "api" rows together so the deployed mix
+        # of legacy and new rows shows one Direct API line per key, not two.
+        rows = (
+            AgentUsageLog.objects.filter(user_id=user_id)
+            .annotate(
+                source_key=Coalesce("source", models.Value(AgentUsageLog.Source.API)),
+            )
+            .values("key_id", "key_hint", "source_key")
+            .annotate(
+                total_sparks=models.Sum("sparks_charged", default=0),
+                total_calls=models.Count("usage_log_id"),
+                monthly_sparks=models.Sum("sparks_charged", filter=monthly_q, default=0),
+                monthly_calls=models.Count("usage_log_id", filter=monthly_q),
+            )
+            .order_by("-total_sparks")
+        )
+
+        keys_by_id = {
+            str(key.agent_api_key_id): key
+            for key in AgentAPIKey.objects.filter(user_id=user_id).only(
+                "agent_api_key_id", "label", "key_hint", "is_active", "revoked_at"
+            )
+        }
+
+        result = []
+        for row in rows:
+            key = keys_by_id.get(str(row["key_id"])) if row["key_id"] else None
+            result.append(
+                {
+                    "key_id": str(row["key_id"]) if row["key_id"] else None,
+                    # Live label while the key exists; hint-only afterwards.
+                    "label": key.label if key else "",
+                    # Same display format as list_keys ("...abcd").
+                    "hint": f"...{row['key_hint']}" if row["key_hint"] else (key.display_hint if key else ""),
+                    "is_active": key.is_active if key else False,
+                    "removed": key is None,
+                    "source": row["source_key"],
+                    **{k: row[k] for k in ("total_sparks", "total_calls", "monthly_sparks", "monthly_calls")},
+                }
+            )
+        return result
+
+    @staticmethod
     def get_usage_by_model(user_id: str) -> list[dict[str, Any]]:
         """All pairs, including revoked/deleted keys; calendar month in server timezone."""
-        start = timezone.localtime().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        monthly = models.Q(created_at__gte=start)
+        monthly = models.Q(created_at__gte=month_start())
         return list(
             AgentUsageLog.objects.filter(user_id=user_id)
             .values("model", "provider")

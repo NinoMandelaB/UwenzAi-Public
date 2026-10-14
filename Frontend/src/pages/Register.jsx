@@ -3,7 +3,16 @@
 import { Link, useNavigate } from "react-router-dom";
 import { useRef, useState } from "react";
 import ReCAPTCHA from "react-google-recaptcha";
-import { Lock, User, Mail, Eye, EyeOff, Mars, Venus } from "lucide-react";
+import {
+  Lock,
+  User,
+  Mail,
+  Eye,
+  EyeOff,
+  Mars,
+  Venus,
+  Ticket,
+} from "lucide-react";
 import PrimaryButton from "../components/PrimaryButton";
 import MessagePopup from "../components/MessagePopup";
 import { useLanguage } from "../context/LanguageContext";
@@ -49,6 +58,7 @@ function Input({
         }}
       >
         <label
+          htmlFor={name}
           className={`pointer-events-none absolute transition-all duration-200 ${
             isFloating
               ? "-top-2.5 left-4 px-2 text-xs font-bold uppercase tracking-wider"
@@ -83,6 +93,7 @@ function Input({
         )}
 
         <input
+          id={name}
           name={name}
           type={inputType}
           value={value}
@@ -189,6 +200,7 @@ export default function Register() {
     display_name: "",
     full_name: "",
     gender: "", // new gender field
+    promo_code: "", // optional flyer promo code
   });
 
   const [captchaToken, setCaptchaToken] = useState("");
@@ -230,6 +242,7 @@ export default function Register() {
   const loginLabel = safeT(t, "common.login", "Login");
   const guestLabel = safeT(t, "common.continueAsGuest", "Continue as Guest");
   const signupLabel = safeT(t, "common.signup", "Sign Up");
+  const promoCodeLabel = safeT(t, "auth.promoCode", "Promo code (optional)");
 
   const showPopup = ({ type = "info", title = "", message = "" }) => {
     setPopup({ open: true, type, title, message });
@@ -366,6 +379,7 @@ export default function Register() {
         full_name: formData.full_name.trim() || formData.display_name.trim(),
         display_name: formData.display_name.trim(),
         gender: formData.gender || undefined,
+        promo_code: formData.promo_code.trim() || undefined,
         recaptcha_token: captchaToken,
         age_confirmed: ageConfirmed,
         terms_accepted: termsAccepted,
@@ -378,7 +392,13 @@ export default function Register() {
       const userEmail = formData.email.trim();
 
       navigate("/verify-email", {
-        state: { user_id: userId, email: userEmail },
+        state: {
+          user_id: userId,
+          email: userEmail,
+          // Promo outcome (only present when a code was submitted): shown as
+          // a note on the verification screen. Never blocks the signup.
+          promo: result?.data?.promo,
+        },
       });
     } catch (err) {
       resetRecaptcha();
@@ -484,6 +504,20 @@ export default function Register() {
           autoComplete="new-password"
           icon={Lock}
           error={errors.confirmPassword}
+        />
+
+        {/* Optional flyer promo code — grants extra sparks on top of the
+            signup bonus. Invalid or used codes never block the signup; the
+            outcome is shown on the verification screen instead. */}
+        <Input
+          name="promo_code"
+          label={promoCodeLabel}
+          type="text"
+          value={formData.promo_code}
+          onChange={handleChange}
+          autoComplete="off"
+          icon={Ticket}
+          error={errors.promo_code}
         />
 
         {/* Compliance Confirmations */}

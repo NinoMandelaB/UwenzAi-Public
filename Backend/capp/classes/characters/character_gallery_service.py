@@ -3,6 +3,7 @@ from typing import Dict, Any, Optional
 
 from django.db.models import Q
 from django.db import transaction
+from django.utils import timezone
 from PIL import Image, UnidentifiedImageError
 
 from capp.models import Character, CharacterGalleryImage, CustomUser, delete_file_after_commit
@@ -138,11 +139,18 @@ class CharacterGalleryService:
             # ``is_staff`` / ``is_superuser`` deliberately do not widen it — a
             # moderator browsing the ordinary gallery must not be handed another
             # user's private chat-generated pictures. Any need-to-know access
-            # belongs in separate, audited moderation tooling, not here.
+            # belongs in separate, audited moderation tooling, not here. The only
+            # widening is for images awaiting approval (see below).
             if actor and getattr(actor, "is_authenticated", False):
-                queryset = queryset.filter(
-                    Q(visibility=CharacterGalleryImage.VisibilityChoices.PUBLIC) | Q(created_by=actor)
-                )
+                visible = Q(visibility=CharacterGalleryImage.VisibilityChoices.PUBLIC) | Q(created_by=actor)
+                if cls._is_admin_user(actor):
+                    # The one exception: images the owner submitted for public
+                    # release together with the character. A moderator has to be
+                    # able to look at them before approving, otherwise approval
+                    # would publish pictures nobody reviewed. Chat and detail-page
+                    # images never carry the flag and stay hidden from admins.
+                    visible |= Q(publish_on_approval=True)
+                queryset = queryset.filter(visible)
             else:
                 # Anonymous and guest callers: public only. A guest's own private
                 # images have no ``created_by`` to match on, and matching NULL
@@ -169,6 +177,47 @@ class CharacterGalleryService:
         except Exception:
             logger.exception("Unexpected error listing gallery images")
             return {"status": "fail", "data": "server_error"}
+
+    @classmethod
+    def publish_images_awaiting_approval(cls, character: Character) -> int:
+        """Make the owner's edit/setup gallery images public once the character is.
+
+        Called whenever a character moves to APPROVED. Only images that carry
+        ``publish_on_approval`` are touched, and those are only ever created by
+        the character's owner or an admin, so chat-generated and detail-page
+        images (never flagged) stay private. Returns how many were published.
+        """
+        if character is None or not character.is_public or character.status != Character.StatusChoices.APPROVED:
+            return 0
+
+        # Belt and braces: the flag is only set for the owner or an admin, but a
+        # row from any other account must never be published by this path.
+        trusted = Q(created_by__is_staff=True) | Q(created_by__is_superuser=True)
+        if character.created_by_id is not None:
+            trusted |= Q(created_by_id=character.created_by_id)
+        published = (
+            CharacterGalleryImage.objects.filter(character=character, publish_on_approval=True)
+            .filter(trusted)
+            .update(
+                visibility=CharacterGalleryImage.VisibilityChoices.PUBLIC,
+                publish_on_approval=False,
+                updated_at=timezone.now(),
+            )
+        )
+        if published:
+            logger.info(
+                "Published %d gallery image(s) on approval character_id=%s",
+                published,
+                character.character_id,
+            )
+        return published
+
+    @classmethod
+    def withdraw_images_awaiting_approval(cls, character: Character) -> int:
+        """Drop the publish-on-approval intent, e.g. when the character goes private."""
+        return CharacterGalleryImage.objects.filter(character=character, publish_on_approval=True).update(
+            publish_on_approval=False, updated_at=timezone.now()
+        )
 
     @classmethod
     def delete_gallery_image(
@@ -304,6 +353,9 @@ class CharacterGalleryService:
             # Always include these fields – needed for UI permissions
             "created_by": str(image.created_by.user_id) if image.created_by else None,
             "visibility": image.visibility,
+            # True while the image waits for the character's approval before it
+            # becomes visible to everyone.
+            "publish_on_approval": bool(image.publish_on_approval),
         }
         return resp
 

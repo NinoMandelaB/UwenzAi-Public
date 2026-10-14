@@ -24,6 +24,12 @@ from capp.views.admin_views import (
     admin_unlock_safety,
     admin_reset_model_refusals,
     admin_shadow_overview,
+    admin_audience_overview,
+    admin_list_promo_codes,
+    admin_create_promo_codes,
+    admin_set_promo_code_active,
+    admin_revoke_promo_code,
+    admin_delete_promo_code,
 )
 
 urlpatterns = [
@@ -77,7 +83,32 @@ urlpatterns = [
         admin_reset_model_refusals,
         name="admin_reset_model_refusals",
     ),
+    # Flyer campaign promo codes: list/generate codes, pause/resume, revoke
+    # (permanent) and delete (unredeemed only). See capp/views/admin_views.py
+    # and capp/classes/billing/promo_code_service.py.
+    path("promo-codes/", admin_list_promo_codes, name="admin_list_promo_codes"),
+    path("promo-codes/create/", admin_create_promo_codes, name="admin_create_promo_codes"),
+    path(
+        "promo-codes/<uuid:promo_code_id>/active/",
+        admin_set_promo_code_active,
+        name="admin_set_promo_code_active",
+    ),
+    path(
+        "promo-codes/<uuid:promo_code_id>/revoke/",
+        admin_revoke_promo_code,
+        name="admin_revoke_promo_code",
+    ),
+    path(
+        "promo-codes/<uuid:promo_code_id>/",
+        admin_delete_promo_code,
+        name="admin_delete_promo_code",
+    ),
     # Shadow-mode overview: every account the classifier flagged while the
     # ledger only recorded (never enforced). Metadata only.
     path("safety/shadow-overview/", admin_shadow_overview, name="admin_shadow_overview"),
+    # Per-person audience analytics across accounts AND guests (the user stats
+    # endpoint above deliberately excludes guests). Country is the edge-injected
+    # country of the latest recorded visit; first/last seen carry source labels.
+    # See capp/views/admin_views.py::admin_audience_overview.
+    path("audience/", admin_audience_overview, name="admin_audience_overview"),
 ]

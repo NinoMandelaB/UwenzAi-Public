@@ -541,6 +541,12 @@ def api_signup_user(request):
             },
         }
 
+        # Promo outcome (only present when a promo_code was submitted): the
+        # frontend shows a note on the verification screen. Never fails the
+        # signup.
+        if "promo" in result["data"]:
+            response_data["data"]["promo"] = result["data"]["promo"]
+
         return Response(response_data, status=201)
 
     except Exception:

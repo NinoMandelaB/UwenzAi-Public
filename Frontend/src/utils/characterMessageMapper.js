@@ -138,6 +138,14 @@ const CHARACTER_MESSAGE_MAP = {
   image_file_too_large: "Image must be 5MB or smaller.",
   image_invalid_image: "The uploaded file is not a valid image.",
   image_too_small: "Image must be at least 400×400 pixels.",
+
+  // ============================================================
+  // GENERATED IMAGE SCREENING
+  // ============================================================
+  generated_image_moderation_blocked:
+    "Our content-safety screening blocked this image, so it was not saved. No sparks were charged.",
+  generated_image_moderation_unavailable:
+    "We couldn't check this image, so it was not saved. No sparks were charged — please try again shortly.",
 };
 
 export function getCharacterMessage(

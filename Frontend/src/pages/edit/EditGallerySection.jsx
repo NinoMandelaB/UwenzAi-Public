@@ -18,6 +18,7 @@ export default function EditGallerySection({
   images,
   visualStyle,
   isAdmin = false,
+  showApprovalNote = false,
   onRefresh,
   onError,
   onImageGenerated,
@@ -52,6 +53,8 @@ export default function EditGallerySection({
           "bright natural lighting, relaxed full-body pose, clean fresh skin, professional fashion photography",
         style_preset: visualStyle === "anime" ? "anime" : "photographic",
         extra_prompt: extra,
+        // Part of the character's own gallery: goes public with its approval.
+        publish_on_approval: true,
         operationId: reuseOperationId(galleryOperationRef, extra),
       });
       clearOperationId(galleryOperationRef);
@@ -159,6 +162,12 @@ export default function EditGallerySection({
           </div>
         </div>
 
+        {showApprovalNote && (
+          <p className="text-xs theme-text-muted">
+            {t("characters.galleryPublishNote")}
+          </p>
+        )}
+
         {images.length === 0 ? (
           <p className="text-sm theme-text-muted text-center py-4">
             {t("characters.noGalleryImages")}
@@ -175,6 +184,11 @@ export default function EditGallerySection({
                   alt={img.caption || t("characters.galleryImage")}
                   className="h-full w-full object-cover"
                 />
+                {img.publish_on_approval && (
+                  <span className="absolute bottom-1 left-1 right-1 rounded-md bg-black/60 px-1.5 py-0.5 text-center text-[10px] leading-tight text-white backdrop-blur-sm">
+                    {t("characters.galleryPublishOnApproval")}
+                  </span>
+                )}
                 <button
                   type="button"
                   onClick={() => handleDeleteClick(img)}

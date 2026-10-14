@@ -787,10 +787,30 @@ const CONTENT = {
           method: "DELETE",
           path: "/api/v1/agent/keys/{id}/",
           auth: "session",
-          desc: "Revoke one of your keys by its ID. Connected apps lose access immediately. This cannot be undone — create a new key instead if you change your mind.",
+          desc: "Revoke one of your keys by its ID. Connected apps lose access immediately. This cannot be undone — create a new key instead if you change your mind. Revoked keys are removed from the list automatically after a retention period; their usage history remains in your usage reports.",
           response: `{
   "status": "ok",
   "data": { "message": "API key revoked", "key_id": "6f1c2d34-…" }
+}`,
+        },
+        {
+          t: "endpoint",
+          method: "PATCH",
+          path: "/api/v1/agent/keys/{id}/budget/",
+          auth: "session",
+          desc: "Set or change the monthly Sparks spending limit of an active key. The workspace keys panel calls this for you; the field is required — pass an integer to set a limit, or null to remove it. A budget below this month's usage simply blocks further calls with the key until next month. Revoked keys cannot be edited.",
+          params: [
+            [
+              "monthly_spark_budget",
+              "integer | null",
+              "required",
+              "Per-key monthly cap in Sparks, 1–1,000,000, or null for unlimited.",
+            ],
+          ],
+          request: `{ "monthly_spark_budget": 5000 }`,
+          response: `{
+  "status": "ok",
+  "data": { "key_id": "6f1c2d34-…", "monthly_spark_budget": 5000 }
 }`,
         },
       ],
@@ -868,10 +888,30 @@ const CONTENT = {
           method: "DELETE",
           path: "/api/v1/agent/keys/{id}/",
           auth: "session",
-          desc: "Batilisha moja ya funguo zako kwa kitambulisho chake. Programu zilizounganishwa zinapoteza ufikiaji mara moja. Hii haiwezi kutenduliwa — unda ufunguo mpya kama ubadilisha maoni.",
+          desc: "Batilisha moja ya funguo zako kwa kitambulisho chake. Programu zilizounganishwa zinapoteza ufikiaji mara moja. Hii haiwezi kutenduliwa — unda ufunguo mpya kama ubadilisha maoni. Funguo zilizobatilishwa hufutwa kwenye orodha kiotomatiki baada ya kipindi cha uhifadhi; historia yao ya matumizi inabaki kwenye ripoti zako za matumizi.",
           response: `{
   "status": "ok",
   "data": { "message": "Ufunguo wa API umebatilishwa", "key_id": "6f1c2d34-…" }
+}`,
+        },
+        {
+          t: "endpoint",
+          method: "PATCH",
+          path: "/api/v1/agent/keys/{id}/budget/",
+          auth: "session",
+          desc: "Weka au badilisha kikomo cha matumizi ya Sparks ya mwezi kwa ufunguo unaotumika. Paneleo la funguo la eneo la kazi linaloituma kwa niaba yako; sehemu hii lazima iwepo — weka namba kamili kuweka kikomo, au null kuiondoa. Bajeti iliyo chini ya matumizi ya mwezi huu inazuia miito mingine kwa ufunguo huo hadi mwezi ujao. Funguo zilizobatilishwa haziwezi kurekebishwa.",
+          params: [
+            [
+              "monthly_spark_budget",
+              "integer | null",
+              "lazima",
+              "Kikomo cha mwezi kwa kila ufunguo kwa Sparks, 1–1,000,000, au null kwa ukomo usio na mpaka.",
+            ],
+          ],
+          request: `{ "monthly_spark_budget": 5000 }`,
+          response: `{
+  "status": "ok",
+  "data": { "key_id": "6f1c2d34-…", "monthly_spark_budget": 5000 }
 }`,
         },
       ],

@@ -58,6 +58,19 @@ RECAPTCHA_OK = {"success": True}
 _UNSET = object()
 
 
+def _bypass_generated_image_screen(testcase):
+    """Skip the generated-image screen in a test that is not about screening.
+
+    The screen fails closed without a moderation provider (the test runner
+    turns DEBUG off) and on dummy image bytes. Its own tests live in
+    tests_generated_image_screening. The patch is stopped when the test ends,
+    so it never leaks into later tests that run in the same process.
+    """
+    patcher = mock.patch.object(CharacterService, "_screen_generated_image", return_value=None)
+    patcher.start()
+    testcase.addCleanup(patcher.stop)
+
+
 def _make_user(username="alice", email="alice@example.com", verified=True, is_staff=False):
     fields = EncryptionService.prepare_email_fields(email)
     return CustomUser.objects.create_user(
@@ -747,6 +760,7 @@ class ChatImageGenerationTests(TestCase):
     """In-chat image generation: auth, safety, billing, privacy, async."""
 
     def setUp(self):
+        _bypass_generated_image_screen(self)
         cache.clear()
         self.owner = _make_user(username="imgowner", email="imgowner@example.com", verified=True)
         self.other = _make_user(username="imgother", email="imgother@example.com", verified=True)
@@ -1305,6 +1319,7 @@ class GalleryPrivateImageIsolationTests(TestCase):
     """
 
     def setUp(self):
+        _bypass_generated_image_screen(self)
         cache.clear()
         self.owner = _make_user(username="idemowner", email="idemowner@example.com", verified=True)
         self.attacker = _make_user(username="idemother", email="idemother@example.com", verified=True)
@@ -1434,6 +1449,7 @@ class ChatImageReferenceStorageTests(TestCase):
     """
 
     def setUp(self):
+        _bypass_generated_image_screen(self)
         cache.clear()
         self.owner = _make_user(username="refowner", email="refowner@example.com", verified=True)
         self.character = _make_character(name="Ref", slug="ref")
@@ -1775,6 +1791,7 @@ class AvatarSeedreamGenerationTests(TestCase):
     as primary, with Stability as fallback."""
 
     def setUp(self):
+        _bypass_generated_image_screen(self)
         cache.clear()
         self.owner = _make_user(username="avowner", email="avowner@example.com", verified=True)
         self.character = _make_character(name="Av", slug="av", created_by=self.owner)
@@ -2425,7 +2442,8 @@ class ImagePromptPolicyTests(SimpleTestCase):
 
     The policy is deliberately narrow: adult NSFW is allowed, and only minors,
     bestiality/zoophilia and deceased people are refused. Normal, non-sexual
-    animal scenes (pets, riding, farming, wildlife) are allowed. These cases pin
+    animal scenes (pets, riding, farming, wildlife) are allowed, and so are
+    hunting, fishing, food and dead animals. These cases pin
     both halves of that contract, plus the substring false-positives the term
     lists must not trip on.
     """
@@ -2466,6 +2484,16 @@ class ImagePromptPolicyTests(SimpleTestCase):
         "mbwa na paka",
         "simba wa Serengeti",
         "nyuki kwenye ua",
+        # Hunting, fishing, food and dead animals are allowed (2026-10-14).
+        "a woman holding a dead fish",
+        "a man with a dead deer",
+        "the man who killed two antelopes",
+        "the dead fish on the grill",
+        "a goat carcass at the butcher",
+        "the carcass of a goat hanging at the market",
+        "a woman cooking a slaughtered goat",
+        "nyama choma at a family celebration",
+        "mzoga wa mbuzi sokoni",
     )
 
     BLOCKED = {
@@ -2523,6 +2551,14 @@ class ImagePromptPolicyTests(SimpleTestCase):
             "an autopsy room",
             "maiti chumbani",
             "kaburi la marehemu",
+            # Death words about people still count next to the animal carve-out.
+            "a man killed by a lion",
+            "a woman with her dead husband",
+            "a human carcass",
+            "the carcass of a woman",
+            "the dead rising from their graves",
+            "a man killed, his dog nearby",
+            "mzoga wa mtu",
         ),
     }
 
@@ -2587,6 +2623,7 @@ class ImagePolicyServiceEnforcementTests(TestCase):
     """Gallery and avatar generation refuse prohibited subjects before charging."""
 
     def setUp(self):
+        _bypass_generated_image_screen(self)
         cache.clear()
         self.user = _make_user(username="polowner", email="polowner@example.com", verified=True)
         self.character = _make_character(name="Neema", slug="neema", created_by=self.user)
@@ -2843,6 +2880,7 @@ class AdminOnlyImageUploadTests(TestCase):
     """
 
     def setUp(self):
+        _bypass_generated_image_screen(self)
         cache.clear()
         self.admin = _make_user(username="imgadmin", email="imgadmin@example.com", verified=True, is_staff=True)
         self.owner = _make_user(username="imgowner", email="imgowner@example.com", verified=True)

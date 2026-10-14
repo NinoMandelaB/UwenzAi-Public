@@ -29,8 +29,8 @@ class GatewayAdmissionConcurrencyTests(TransactionTestCase):
             provider="cortecs",
             model="parallel-model",
             currency="EUR",
-            input_price_per_1m=Decimal("0.22"),
-            output_price_per_1m=Decimal("0.66"),
+            input_price_per_1m=Decimal("1.00"),
+            output_price_per_1m=Decimal("2.00"),
         )
         self.addCleanup(reset_registry)
 

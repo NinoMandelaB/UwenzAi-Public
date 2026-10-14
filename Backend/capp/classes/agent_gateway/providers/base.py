@@ -10,6 +10,49 @@ from decimal import Decimal
 from typing import Any, Protocol, runtime_checkable
 
 
+def normalize_message_content(content: Any) -> tuple[str, str | None]:
+    """Flatten an upstream ``message.content`` into ``(text, reasoning)``.
+
+    Standard OpenAI-compatible upstreams return content as a plain string,
+    but reasoning models (e.g. mistral-large-4) and citation-aware upstreams
+    return a list of typed chunks, e.g.::
+
+        [{"type": "thinking", "thinking": [{"type": "text", "text": "..."}},
+         {"type": "text", "text": "..."}]
+
+    The gateway's OpenAI-compatible contract promises a string ``content``;
+    thinking traces are relayed separately (``reasoning_content``) and
+    non-text metadata chunks (tool_reference etc.) are dropped.
+    Returns ``("", None)`` for None/empty content (tool_calls-only messages).
+    """
+    if isinstance(content, str):
+        return content, None
+    if not isinstance(content, list):
+        return "", None
+    text_parts: list[str] = []
+    reasoning_parts: list[str] = []
+    for chunk in content:
+        if isinstance(chunk, str):
+            text_parts.append(chunk)
+            continue
+        if not isinstance(chunk, dict):
+            continue
+        chunk_type = chunk.get("type")
+        if chunk_type == "thinking":
+            inner = chunk.get("thinking")
+            if isinstance(inner, list):
+                for piece in inner:
+                    if isinstance(piece, dict) and isinstance(piece.get("text"), str):
+                        reasoning_parts.append(piece["text"])
+            elif isinstance(inner, str):
+                reasoning_parts.append(inner)
+        elif isinstance(chunk.get("text"), str) and chunk_type in (None, "text"):
+            text_parts.append(chunk["text"])
+        # Other chunk types (tool_reference, redacted, ...) are metadata for
+        # upstream features the gateway does not relay; skip them.
+    return "".join(text_parts), ("".join(reasoning_parts) or None)
+
+
 @runtime_checkable
 class AgentProvider(Protocol):
     """
@@ -110,6 +153,10 @@ class ProviderResult:
     upstream_status_code: int | None = None
     finish_reason: str | None = None
     model: str | None = None
+    # Visible thinking trace from reasoning models, extracted from chunked
+    # content. Relayed as ``reasoning_content`` on the assistant message so
+    # ``content`` can stay a plain string for OpenAI-compatible clients.
+    reasoning: str | None = None
 
     @property
     def input_tokens(self) -> int:
@@ -147,6 +194,7 @@ class ProviderResult:
                     "message": {
                         "role": "assistant",
                         "content": self.text,
+                        **({"reasoning_content": self.reasoning} if self.reasoning else {}),
                         **({"tool_calls": self.tool_calls} if self.tool_calls else {}),
                     },
                     "finish_reason": self.finish_reason or "stop",

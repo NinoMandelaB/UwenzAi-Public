@@ -247,6 +247,8 @@ export default function CharacterImageSetup() {
         style_preset:
           character?.visual_style === "anime" ? "anime" : "photographic",
         extra_prompt: extra,
+        // Part of the character's own gallery: goes public with its approval.
+        publish_on_approval: true,
         operationId: reuseOperationId(galleryOperationRef, extra),
       });
       clearOperationId(galleryOperationRef);
@@ -346,6 +348,9 @@ export default function CharacterImageSetup() {
 
   const hasAvatar = Boolean(character.avatar_url);
   const avatarBusy = isGeneratingAvatar || isAutoGenerating;
+  // A public character made by a non-admin only reaches the admins' review
+  // queue once setup is completed, and its gallery goes live with the approval.
+  const showApprovalNotes = !isAdmin && Boolean(character.is_public);
 
   return (
     <div className="space-y-6 max-w-2xl">
@@ -556,6 +561,7 @@ export default function CharacterImageSetup() {
             </h2>
             <p className="text-sm theme-text-muted">
               {t("imageSetup.galleryOptional")}
+              {showApprovalNotes && ` ${t("imageSetup.galleryPublishNote")}`}
             </p>
           </div>
           <div className="flex gap-2">
@@ -630,6 +636,11 @@ export default function CharacterImageSetup() {
                     alt={img.caption || "Gallery"}
                     className="h-full w-full object-cover"
                   />
+                  {img.publish_on_approval && (
+                    <span className="absolute bottom-1 left-1 right-1 rounded-md bg-black/60 px-1.5 py-0.5 text-center text-[10px] leading-tight text-white backdrop-blur-sm">
+                      {t("characters.galleryPublishOnApproval")}
+                    </span>
+                  )}
                   <button
                     type="button"
                     onClick={() => handleDeleteGalleryImage(img.id)}
@@ -671,6 +682,11 @@ export default function CharacterImageSetup() {
             : t("imageSetup.completeSetup")}
         </PrimaryButton>
       </div>
+      {showApprovalNotes && (
+        <p className="text-right text-xs theme-text-muted">
+          {t("imageSetup.draftHint")}
+        </p>
+      )}
     </div>
   );
 }

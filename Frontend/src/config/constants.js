@@ -48,6 +48,13 @@ export const API = {
     WS_TICKET: "/api/v1/guest/ws-ticket/",
   },
 
+  ANALYTICS: {
+    // Fire-and-forget visit ping for the admin audience view. Sent once per
+    // app open (and when a background tab becomes visible again); the backend
+    // coalesces writes server-side. See src/utils/visitTracking.js.
+    VISIT: "/api/v1/analytics/visit/",
+  },
+
   CHARACTERS: {
     BASE: "/api/v1/characters/",
     PENDING: "/api/v1/characters/pending/",
@@ -144,6 +151,10 @@ export const API = {
   PAYSTACK: {
     INITIATE: "/api/v1/paystack/pay/",
     VERIFY: "/api/v1/paystack/verify/",
+  },
+
+  PLAY_BILLING: {
+    VERIFY: "/api/v1/billing/play/verify/",
   },
 
   PACKAGES: "/api/v1/packages/",

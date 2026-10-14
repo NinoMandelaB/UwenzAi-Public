@@ -16,6 +16,14 @@ import {
 } from "../services/billingService";
 import { ensureGuestSession } from "../utils/session";
 import { useSparkPoolBalance } from "../hooks/useSparkPoolBalance";
+import {
+  getPlayBillingService,
+  fetchPlayItemDetails,
+  formatPlayPrice,
+  purchaseSparksViaPlay,
+  recoverPendingPlayPurchases,
+  PLAY_ERRORS,
+} from "../services/playBillingService";
 import SparkPackageCard from "../components/Billing/SparkPackageCard";
 import SubscriptionPlanCard from "../components/Billing/SubscriptionPlanCard";
 
@@ -49,6 +57,22 @@ function formatDate(isoString) {
 
 const BILLING_CYCLES = ["daily", "weekly", "monthly", "yearly"];
 
+// Play verify result -> notice shown after the purchase sheet closes.
+const PLAY_NOTICE_FOR_RESULT = {
+  credited: "success",
+  already_credited: "already",
+  pending: "pending",
+  cancelled: "cancelled",
+};
+
+const PLAY_NOTICE_TONE = {
+  success: "var(--color-success, #22c55e)",
+  already: "var(--color-success, #22c55e)",
+  pending: "var(--color-warning, #f59e0b)",
+  cancelled: "var(--color-warning, #f59e0b)",
+  error: "var(--color-danger, #ef4444)",
+};
+
 export default function SparkPool() {
   const navigate = useNavigate();
   const { t } = useLanguage();
@@ -66,6 +90,15 @@ export default function SparkPool() {
   const [loadingPackages, setLoadingPackages] = useState(true);
   const [loadingPayment, setLoadingPayment] = useState(null);
   const [confirmDialog, setConfirmDialog] = useState(null);
+
+  // Google Play Billing inside the Android TWA. `playService` is non-null only
+  // inside the app; on the plain website it resolves to null and the existing
+  // Paystack flow below is untouched. `playDetails` is null until the Play
+  // prices have loaded, so the package list can tell "still loading" from
+  // "nothing purchasable".
+  const [playService, setPlayService] = useState(null);
+  const [playDetails, setPlayDetails] = useState(null);
+  const [playNotice, setPlayNotice] = useState(null);
 
   // Tab state for subscription plans
   const [activeCycle, setActiveCycle] = useState("daily");
@@ -112,6 +145,45 @@ export default function SparkPool() {
     }
   }, [isAuthenticated, fetchPackages, fetchTransactions, fetchSubscription]);
 
+  // Detect Play Billing once. The check itself doubles as "am I the Android
+  // app?": the Digital Goods API only exists inside the TWA.
+  useEffect(() => {
+    let cancelled = false;
+    getPlayBillingService().then((service) => {
+      if (!cancelled) setPlayService(service);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Inside the app, prices come from the Play Console — never the KES price.
+  useEffect(() => {
+    if (!playService || loadingPackages) return;
+    const productIds = packages
+      .filter((p) => p.type === "spark" && p.play_product_id)
+      .map((p) => p.play_product_id);
+    if (productIds.length === 0) {
+      setPlayDetails({});
+      return;
+    }
+    fetchPlayItemDetails(productIds)
+      .then((details) => setPlayDetails(details))
+      .catch(() => setPlayDetails({}));
+  }, [playService, loadingPackages, packages]);
+
+  // Purchase recovery: if the app closed between the Play sheet and the
+  // backend call, the purchase is still uncredited. Verifying it now is
+  // idempotent (a re-submitted token credits once), and consuming frees the
+  // product for the next purchase. It also runs on every app open
+  // (PlayPurchaseRecovery); overlapping calls share one run.
+  useEffect(() => {
+    if (!playService || !isAuthenticated) return;
+    recoverPendingPlayPurchases().catch((err) =>
+      console.error("Play purchase recovery failed", err),
+    );
+  }, [playService, isAuthenticated]);
+
   const handlePurchaseConfirm = async () => {
     if (!confirmDialog) return;
     const packageSlug = confirmDialog.slug;
@@ -119,20 +191,47 @@ export default function SparkPool() {
     setLoadingPayment(packageSlug);
     setConfirmDialog(null);
     try {
-      if (!isAuthenticated) {
-        await ensureGuestSession();
+      if (playService) {
+        // Android app: Google Play Billing only. Per Play policy the web
+        // checkout is never offered inside the app, so there is no Paystack
+        // fallback on this branch.
+        if (!isAuthenticated) {
+          navigate("/login");
+          return;
+        }
+        const outcome = await purchaseSparksViaPlay({
+          service: playService,
+          productId: confirmDialog.play_product_id,
+        });
+        setPlayNotice({
+          kind: PLAY_NOTICE_FOR_RESULT[outcome.result] ?? "error",
+          sparks: outcome.sparksGranted,
+        });
+      } else {
+        if (!isAuthenticated) {
+          await ensureGuestSession();
+        }
+        // No return URL is sent: the server owns the redirect target and builds it
+        // from its own allowlist, so a tampered client cannot steer the return
+        // anywhere. PaymentVerify still proves ownership with the guest cookie.
+        const result = await initiatePayment({
+          package_slug: packageSlug,
+          package_type: packageType,
+          isGuest: !isAuthenticated,
+        });
+        window.location.href = result.data.authorization_url;
       }
-      // No return URL is sent: the server owns the redirect target and builds it
-      // from its own allowlist, so a tampered client cannot steer the return
-      // anywhere. PaymentVerify still proves ownership with the guest cookie.
-      const result = await initiatePayment({
-        package_slug: packageSlug,
-        package_type: packageType,
-        isGuest: !isAuthenticated,
-      });
-      window.location.href = result.data.authorization_url;
     } catch (err) {
-      console.error("Payment initiation failed", err);
+      if (err?.code === PLAY_ERRORS.USER_CANCELLED) {
+        // The user dismissed Google's own sheet; nothing happened and no
+        // message is needed beyond restoring the normal state.
+        setPlayNotice(null);
+      } else if (playService) {
+        console.error("Play purchase failed", err);
+        setPlayNotice({ kind: "error" });
+      } else {
+        console.error("Payment initiation failed", err);
+      }
     } finally {
       setLoadingPayment(null);
     }
@@ -140,6 +239,23 @@ export default function SparkPool() {
 
   const sparkPackages = packages.filter((p) => p.type === "spark");
   const subscriptionPlans = packages.filter((p) => p.type === "subscription");
+
+  // Play policy: inside the Android app every purchase goes through Google
+  // Play, so only packages mapped to a Play product with a live Play price are
+  // shown — never the Paystack/KES flow as a fallback. Subscriptions are not
+  // offered in the app at all until they are implemented through Play Billing.
+  const visibleSparkPackages = playService
+    ? sparkPackages.filter(
+        (p) => p.play_product_id && playDetails[p.play_product_id],
+      )
+    : sparkPackages;
+
+  const playPriceFor = (pkg) => {
+    if (!playService || !pkg.play_product_id || !playDetails) return null;
+    const details = playDetails[pkg.play_product_id];
+    if (!details) return null;
+    return formatPlayPrice(details.currency, details.price);
+  };
 
   // Group subscription plans by cycle
   const plansByCycle = BILLING_CYCLES.reduce((acc, cycle) => {
@@ -313,6 +429,41 @@ export default function SparkPool() {
         </section>
       )}
 
+      {/* Play purchase outcome (Android app only) */}
+      {playNotice && (
+        <section
+          className="rounded-3xl border p-4 shadow-sm"
+          style={{
+            borderColor: `color-mix(in srgb, ${PLAY_NOTICE_TONE[playNotice.kind]} 25%, transparent)`,
+            backgroundColor: `color-mix(in srgb, ${PLAY_NOTICE_TONE[playNotice.kind]} 8%, transparent)`,
+          }}
+        >
+          <div className="flex items-start justify-between gap-3">
+            <p className="text-sm theme-text leading-6">
+              {playNotice.kind === "success" &&
+                t("spark_pool.playPurchaseSuccess").replace(
+                  "{sparks}",
+                  playNotice.sparks?.toLocaleString(),
+                )}
+              {playNotice.kind === "already" &&
+                t("spark_pool.playPurchaseAlready")}
+              {playNotice.kind === "pending" &&
+                t("spark_pool.playPurchasePending")}
+              {playNotice.kind === "cancelled" &&
+                t("spark_pool.playPurchaseCancelled")}
+              {playNotice.kind === "error" &&
+                t("spark_pool.playPurchaseFailed")}
+            </p>
+            <button
+              onClick={() => setPlayNotice(null)}
+              className="text-xs font-medium theme-text-muted"
+            >
+              {t("common.close")}
+            </button>
+          </div>
+        </section>
+      )}
+
       {/* Top-up Packages (Spark packages) */}
       <PageCard>
         <div className="flex items-start justify-between gap-3">
@@ -330,20 +481,38 @@ export default function SparkPool() {
           <div className="py-8 text-center text-sm theme-text-muted">
             {t("spark_pool.loadingPackages")}
           </div>
-        ) : sparkPackages.length === 0 ? (
+        ) : playService && playDetails === null ? (
+          // Play prices are still loading — "no packages available" would be
+          // wrong here, and the KES price must not be shown in its place.
+          <div className="py-8 text-center text-sm theme-text-muted">
+            {t("spark_pool.loadingPackages")}
+          </div>
+        ) : visibleSparkPackages.length === 0 ? (
           <div className="py-8 text-center text-sm theme-text-muted">
             {t("spark_pool.noPackagesAvailable")}
           </div>
         ) : (
           <div className="mt-4 space-y-3">
-            {sparkPackages.map((pkg) => (
+            {visibleSparkPackages.map((pkg) => (
               <SparkPackageCard
                 key={pkg.slug}
                 pkg={pkg}
                 isSelected={pkg.slug === selectedSlug}
+                playPrice={playPriceFor(pkg)}
                 onSelect={() => {
+                  if (playService && !isAuthenticated) {
+                    // Play purchases credit an account, not a guest cookie —
+                    // inside the app, guests are sent to sign in instead of
+                    // being offered the web checkout.
+                    navigate("/login");
+                    return;
+                  }
                   setSelectedSlug(pkg.slug);
-                  setConfirmDialog({ ...pkg, type: "spark" });
+                  setConfirmDialog({
+                    ...pkg,
+                    type: "spark",
+                    playPrice: playPriceFor(pkg),
+                  });
                 }}
               />
             ))}
@@ -352,7 +521,9 @@ export default function SparkPool() {
       </PageCard>
 
       {/* Subscription Plans – tabbed by billing cycle */}
-      {subscriptionPlans.length > 0 && (
+      {/* Hidden inside the Android app: subscriptions are not yet sold through
+          Play Billing, and offering the web checkout here is not allowed. */}
+      {!playService && subscriptionPlans.length > 0 && (
         <PageCard>
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -500,15 +671,24 @@ export default function SparkPool() {
                     .replace("{sparks}", confirmDialog.base_spark_amount)
                     .replace(
                       "{price}",
-                      `KES ${Number(confirmDialog.final_price_kes).toFixed(2)}`,
+                      // Inside the app, the charged amount is Google Play's
+                      // regional price — the KES figure is never shown.
+                      confirmDialog.playPrice ??
+                        `KES ${Number(confirmDialog.final_price_kes).toFixed(2)}`,
                     )}
                 </p>
-                {Number(confirmDialog.vat_percent) > 0 && (
+                {!confirmDialog.playPrice &&
+                  Number(confirmDialog.vat_percent) > 0 && (
+                    <p className="mt-1 text-xs theme-text-muted">
+                      {t("spark_pool.vatIncluded").replace(
+                        "{vat}",
+                        Number(confirmDialog.vat_percent).toFixed(0),
+                      )}
+                    </p>
+                  )}
+                {confirmDialog.playPrice && (
                   <p className="mt-1 text-xs theme-text-muted">
-                    {t("spark_pool.vatIncluded").replace(
-                      "{vat}",
-                      Number(confirmDialog.vat_percent).toFixed(0),
-                    )}
+                    {t("spark_pool.playBilledByGoogle")}
                   </p>
                 )}
               </>

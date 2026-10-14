@@ -78,6 +78,10 @@ from capp.classes.billing.reservation_service import BillingReservationService
 from capp.classes.moderation.model_refusal import extract_refusal
 from capp.classes.moderation.safety_ledger import SafetyLedgerService
 from capp.classes.moderation.image_prompt_policy import ImagePromptPolicy
+from capp.classes.moderation.photo_moderation import (
+    GENERATED_IMAGE_BLOCKED_REASON,
+    GENERATED_IMAGE_UNAVAILABLE_REASON,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -406,10 +410,12 @@ def _extract_photo_offer(text: str):
 
 
 # Shown in chat when an image request involves a prohibited subject. Adult
-# explicit imagery is allowed; children, animals and deceased people are not.
+# explicit imagery is allowed; children, deceased people and sexual content
+# involving animals are not.
 PROHIBITED_SUBJECT_SYSTEM_MESSAGE = (
-    "That image request cannot be generated. Images involving children, "
-    "animals, or deceased people are not allowed. No sparks were charged."
+    "That image request cannot be generated. Images of children or deceased "
+    "people are not allowed, and neither is sexual content involving animals. "
+    "No sparks were charged."
 )
 
 # Guest chat blockers. Only the true out-of-sparks case offers the spark
@@ -1847,6 +1853,22 @@ def generate_chat_image(self, conversation_id, user_message_id, prompt, operatio
                 PROHIBITED_SUBJECT_SYSTEM_MESSAGE,
                 code=ImagePromptPolicy.ERROR_CODE,
             )
+        elif reason == GENERATED_IMAGE_BLOCKED_REASON:
+            _send_system_message(
+                conversation.conversation_id,
+                "That image could not be generated because our content-safety "
+                "screening blocked it. No sparks were charged.",
+                code=str(reason),
+            )
+        elif reason == GENERATED_IMAGE_UNAVAILABLE_REASON:
+            # An outage is not a violation — do not tell the user their request
+            # was blocked when the screening simply could not run.
+            _send_system_message(
+                conversation.conversation_id,
+                "We could not check that image, so it was not generated. No "
+                "sparks were charged — please try again shortly.",
+                code=str(reason),
+            )
         elif reason in ("Insufficient sparks or usage cap reached",) or "spark" in str(reason).lower():
             _send_system_message(
                 conversation.conversation_id,
@@ -2190,17 +2212,62 @@ def _mark_message_failed_by_id(message_id: str, reason: str):
         pass
 
 
+@shared_task(name="capp.tasks.cleanup_revoked_agent_keys")
+def cleanup_revoked_agent_keys():
+    """Hard-delete revoked Agent API keys past the retention window.
+
+    Revoked keys are kept for a grace period (review/support), then removed so
+    the key list cannot accumulate stale entries. Usage logs survive deletion:
+    AgentUsageLog.key is SET_NULL with a denormalized key_hint, so billing
+    history stays intact. Keys revoked without a revocation timestamp are
+    never deleted (unknown revocation date).
+    """
+    from datetime import timedelta
+
+    from django.conf import settings
+
+    from capp.models import AgentAPIKey
+
+    retention_days = getattr(settings, "AGENT_KEY_REVOKED_RETENTION_DAYS", 30)
+    if retention_days <= 0:
+        return 0
+    cutoff = timezone.now() - timedelta(days=retention_days)
+    stale = AgentAPIKey.objects.filter(is_active=False, revoked_at__lt=cutoff)
+    count = stale.count()
+    if count:
+        stale.delete()
+        logger.info(
+            "Agent Gateway: removed %d revoked API key(s) past the %d-day retention window",
+            count,
+            retention_days,
+        )
+    return count
+
+
 @shared_task(name="capp.tasks.sync_agent_catalog")
 def sync_agent_catalog():
     """Refresh the Agent Gateway model catalog (AgentModelPrice) from configured providers.
 
     Scheduled daily; the workspace pricing view is database-only, so this task
     (plus opportunistic refreshes from external /models requests) is what keeps
-    the catalog populated with current models and prices.
+    the catalog populated with current models and prices. Models served
+    upstream without a price (new releases on providers whose /models endpoint
+    does not publish pricing) are flagged here so the operator can add them to
+    the settings price map the day they appear.
     """
     from capp.classes.agent_gateway.catalog_sync import run_catalog_sync
 
-    return run_catalog_sync()
+    summary = run_catalog_sync()
+    for name, result in summary.items():
+        new_skipped = result.get("new_skipped_models")
+        if new_skipped:
+            logger.warning(
+                "Agent Gateway: %s now serves model(s) without a price — invisible in the catalog "
+                "until added to the provider price map in settings: %s",
+                name,
+                ", ".join(new_skipped),
+            )
+    return summary
 
 
 @shared_task(name="capp.tasks.retry_media_deletions")
@@ -2217,3 +2284,28 @@ def retry_media_deletions():
         else:
             MediaDeletionJob.objects.filter(pk=job.pk).update(updated_at=timezone.now())
     return completed
+
+
+@shared_task(name="capp.tasks.send_support_message_push")
+def send_support_message_push(user_id):
+    """Web Push for a new support-ticket message (admin outreach).
+
+    Scheduled on commit by SupportService.create_admin_outreach_ticket so the
+    admin's request never pays for external push-endpoint latency. A failed
+    push must never undo the ticket: every failure is logged and swallowed.
+
+    Content-free by design — see PushService.send_support_message_push.
+    """
+    from capp.models import CustomUser
+
+    user = CustomUser.objects.filter(user_id=user_id).first()
+    if user is None:
+        logger.warning("Support push skipped: user %s no longer exists", user_id)
+        return 0
+    try:
+        return PushService.send_support_message_push(user)
+    except SoftTimeLimitExceeded:
+        raise
+    except Exception:
+        logger.exception("Support push failed for user %s", user_id)
+        return 0

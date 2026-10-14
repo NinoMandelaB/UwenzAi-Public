@@ -336,6 +336,7 @@ def record_screening_failure(
                 conversation_id=(conversation.conversation_id if conversation is not None else None),
                 sha256=blocked.sha256,
                 provider=decision.provider,
+                categories=list(decision.categories or []),
             )
         except Exception:
             logger.exception("Could not record photo block in the safety ledger.")

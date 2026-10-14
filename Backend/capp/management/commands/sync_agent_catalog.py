@@ -14,7 +14,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         summary = run_catalog_sync()
-        ok = failed = skipped = 0
+        ok = failed = skipped_providers = 0
         for name in sorted(summary):
             result = summary[name]
             status = result["status"]
@@ -25,14 +25,23 @@ class Command(BaseCommand):
             if status == "ok":
                 ok += 1
                 self.stdout.write(self.style.SUCCESS(line))
+                new_skipped = result.get("new_skipped_models") or []
+                if new_skipped:
+                    self.stdout.write(
+                        self.style.WARNING(
+                            "{} new model(s) served upstream without a price — not in the catalog "
+                            "until priced (add to the provider's MODEL_PRICES map in settings): "
+                            "{}".format(len(new_skipped), ", ".join(new_skipped))
+                        )
+                    )
             elif status == "not_configured":
-                skipped += 1
+                skipped_providers += 1
                 self.stdout.write(self.style.NOTICE(line))
             else:
                 failed += 1
                 self.stdout.write(self.style.ERROR(line))
         self.stdout.write(
-            "Catalog sync finished: {} refreshed, {} not configured, {} failed.".format(ok, skipped, failed)
+            "Catalog sync finished: {} refreshed, {} not configured, {} failed.".format(ok, skipped_providers, failed)
         )
         # A partial refresh still updated the catalog, so only an across-the-board
         # failure should fail the command (e.g. in a deploy hook or fresh setup).

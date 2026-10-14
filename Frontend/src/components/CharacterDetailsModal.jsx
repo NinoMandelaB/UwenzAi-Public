@@ -19,6 +19,7 @@ import {
 import africanWomanAvatar from "../assets/images/avatars/african-woman.png";
 import GalleryViewer from "../components/GalleryViewer";
 import { listHobbies } from "../services/characterService";
+import { CLOTHING_LABELS_EN } from "../config/clothingStyles";
 
 function DetailChip({ icon, label, value }) {
   return (
@@ -210,16 +211,7 @@ const RELATIONSHIP_DISPLAY = {
   romantic: "Romantic",
 };
 
-const CLOTHING_DISPLAY = {
-  casual: "Casual",
-  formal: "Formal",
-  sporty: "Sporty",
-  elegant: "Elegant",
-  streetwear: "Streetwear",
-  bohemian: "Bohemian",
-  gothic: "Gothic",
-  preppy: "Preppy",
-};
+const CLOTHING_DISPLAY = CLOTHING_LABELS_EN;
 
 export default function CharacterDetailsModal({
   isOpen,

@@ -192,3 +192,80 @@ class OutreachGateFlagTests(OutreachBaseTestCase):
         # Same definition as the list flag: a care event alone also qualifies.
         _event(self.alice, category="self_harm", severity="low", is_care=True)
         self.assertTrue(self.safety_summary(self.alice)["has_priority_events"])
+
+
+class OutreachPushTests(OutreachBaseTestCase):
+    """The target user gets a content-free web push for the outreach message."""
+
+    def test_outreach_schedules_push_for_the_target_user_on_commit(self):
+        from unittest import mock
+
+        from capp.tasks import send_support_message_push as push_task
+
+        with mock.patch.object(push_task, "delay") as mock_delay:
+            with self.captureOnCommitCallbacks(execute=True):
+                response = self.client.post(
+                    ADMIN_URL.format(user_id=self.alice.user_id),
+                    {"message": "hello"},
+                    format="json",
+                )
+        self.assertEqual(response.status_code, 201)
+        # Scheduled exactly once, for the TARGET user (not the admin).
+        mock_delay.assert_called_once_with(str(self.alice.user_id))
+
+    def test_push_scheduling_failure_never_breaks_ticket_creation(self):
+        from unittest import mock
+
+        from capp.tasks import send_support_message_push as push_task
+
+        with mock.patch.object(push_task, "delay", side_effect=Exception("broker down")):
+            with self.captureOnCommitCallbacks(execute=True):
+                response = self.client.post(
+                    ADMIN_URL.format(user_id=self.alice.user_id),
+                    {"message": "hello"},
+                    format="json",
+                )
+        # The ticket exists even though the push could not be scheduled.
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(SupportTicket.objects.count(), 1)
+
+    def test_push_payload_is_content_free(self):
+        from unittest import mock
+
+        from capp.classes.push.push_service import PushService
+
+        with mock.patch.object(PushService, "send_to_user", return_value=1) as mock_send:
+            PushService.send_support_message_push(self.alice)
+        mock_send.assert_called_once_with(
+            self.alice,
+            title="UwenzAi",
+            body="You have a new support message.",
+            url="/support",
+        )
+        # No unread_count kwarg: that field drives the chat badge.
+        self.assertNotIn("unread_count", mock_send.call_args.kwargs)
+
+    def test_push_body_follows_preferred_language(self):
+        from unittest import mock
+
+        from capp.classes.push.push_service import PushService
+
+        self.alice.preferred_language = "sw"
+        self.alice.save(update_fields=["preferred_language"])
+        with mock.patch.object(PushService, "send_to_user", return_value=1) as mock_send:
+            PushService.send_support_message_push(self.alice)
+        self.assertEqual(mock_send.call_args.kwargs["body"], "Una ujumbe mpya wa usaidizi.")
+
+    def test_push_task_survives_delivery_failure_and_missing_user(self):
+        from capp.tasks import send_support_message_push as push_task
+
+        # Missing user: logged and skipped, not a crash.
+        self.assertEqual(push_task("00000000-0000-0000-0000-000000000000"), 0)
+        # Delivery failure: logged and swallowed — the ticket is already safe.
+        from unittest import mock
+
+        with mock.patch(
+            "capp.classes.push.push_service.PushService.send_support_message_push",
+            side_effect=Exception("endpoint unreachable"),
+        ):
+            self.assertEqual(push_task(str(self.alice.user_id)), 0)

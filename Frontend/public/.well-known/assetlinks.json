@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.uwenzai.android",
+      "sha256_cert_fingerprints": [
+        "AA:B3:1F:75:F4:0E:E0:63:A5:E7:CD:C8:A1:E6:3A:FA:19:37:D1:1E:8E:44:D1:74:AF:03:A5:1F:5F:C0:A8:B6"
+      ]
+    }
+  }
+]

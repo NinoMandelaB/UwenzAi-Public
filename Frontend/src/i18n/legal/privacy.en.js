@@ -60,7 +60,7 @@ export const privacyEn = {
             "The guest cookie is set as HttpOnly, so page scripts cannot read it, and it is transmitted securely in production.",
             "It is a persistent cookie so your chats survive a browser restart. It currently lasts up to 180 days, and a guest session also expires after a period of inactivity.",
             "This cookie is strictly necessary to provide guest chat. It is not an advertising or tracking cookie.",
-            "As a guest you can create conversations and messages, create characters, generate images, and buy sparks. Guest use is subject to daily and lifetime free-usage limits.",
+            "As a guest you can create conversations and messages, create characters, generate images, and buy sparks on our website; purchases in our Android app require an account. Guest use is subject to daily and lifetime free-usage limits.",
           ],
         },
         {
@@ -110,7 +110,11 @@ export const privacyEn = {
         },
         {
           type: "p",
-          text: "Usage, billing and support data. Your spark balance and transactions, purchases, subscriptions, token usage and cost records, support tickets, feedback you submit, and any content reports you file.",
+          text: "Usage, billing and support data. Your spark balance and transactions, purchases, subscriptions, token usage and cost records, support tickets, feedback you submit, and any content reports you file. If you enter a promo code when you sign up, we record that your account redeemed it, when, and the bonus Sparks it added; our administrators can see which account redeemed which code.",
+        },
+        {
+          type: "p",
+          text: "Visit records. When you open our website or app, or return to it, it notifies our server, and we record the time of your first recorded visit, the time of your latest visit and the most recent country your visits came from. We do this for accounts and for guest sessions. The country is determined by our network provider, Cloudflare, from the IP address of your connection; for this purpose we store only the two-letter country code, not the IP address. Our administrators see these records in an internal audience overview, together with when your account was created and how many messages there are in your chats with each character. The overview never shows message text.",
         },
         {
           type: "p",
@@ -139,6 +143,8 @@ export const privacyEn = {
           items: [
             "To provide the Service you asked for — running chats, characters, memory, image generation and purchases. Basis: performance of our contract with you, or the necessary steps to provide a service you requested as a guest.",
             "To take payment and keep accurate financial records. Basis: contract and our legal obligations.",
+            "To apply a promo code you enter when you sign up, and to see which promo-code campaigns bring new users. Basis: performance of our contract with you, and our legitimate interests.",
+            "To understand how the Service is used — how many people visit, from which countries, and how much each character is used — so that we can improve the Service and decide where to promote it. Basis: our legitimate interests.",
             "To keep the Service safe — preventing abuse and fraud, enforcing our prohibited-content rules, reviewing reports, and protecting other users. Basis: our legitimate interests and our legal obligations.",
             "To support you and to fix faults. Basis: contract and legitimate interests.",
             "To confirm you are an adult and to record your acceptance of our terms. Basis: legal obligation and legitimate interests.",
@@ -211,7 +217,7 @@ export const privacyEn = {
       blocks: [
         {
           type: "p",
-          text: "Photos you send in chat. Before a photo you send is stored, an automated child-safety screening runs on our servers: a downscaled copy of the image, without metadata, is sent to our current safety-screening provider (Mistral AI) for classification against our child-safety policy. Only the image is sent for this screening — never your message text or caption. Photos the screening blocks, and photos that cannot be screened at all, are refused and never stored. The screening exists to prevent child nudity and child sexual content; it is not a general content filter, and adult content is not screened out.",
+          text: "Photos you send in chat. Before a photo you send is stored, an automated child-safety and prohibited-content screening runs on our servers: a downscaled copy of the image, without metadata, is sent to our current safety-screening provider (Mistral AI) for classification. The screening checks for five things: nudity of a minor, sexual content involving a minor, sexual content involving animals, gore or extreme harm (including cruelty to animals), and dead or dying people. Adult nudity and adult sexual acts are not screened out. Only the image is sent for this screening — never your message text or caption. Photos the screening blocks, and photos that cannot be screened at all, are refused and never stored. The same screening is also applied to the images our image-generation providers return, before those images are stored or shown to you. The screening exists to stop these five kinds of content; it is not a general content filter, and it does not filter ordinary adult content. The rules on what you may send or generate are in section 7 of the Terms of Use.",
         },
         {
           type: "p",
@@ -291,7 +297,7 @@ export const privacyEn = {
       blocks: [
         {
           type: "p",
-          text: "We rely on third-party providers for hosting and databases, AI text generation, image generation, payments, email delivery, sign-in and bot protection, and optional error monitoring. The current list, with the purpose of each, is set out in our [Service Provider Disclosure](/subprocessors).",
+          text: "We rely on third-party providers for hosting and databases, network delivery and protection, AI text generation, image generation, payments, email delivery, sign-in and bot protection, and optional error monitoring. The current list, with the purpose of each, is set out in our [Service Provider Disclosure](/subprocessors).",
         },
         {
           type: "p",
@@ -309,7 +315,7 @@ export const privacyEn = {
       blocks: [
         {
           type: "p",
-          text: "Purchases are processed by Paystack, currently in Kenyan Shillings. Payment methods such as mobile money and cards are offered and handled by Paystack, not by us.",
+          text: "On our website, purchases are processed by Paystack, currently in Kenyan Shillings. Payment methods such as mobile money and cards are offered and handled by Paystack, not by us.",
         },
         {
           type: "p",
@@ -317,7 +323,15 @@ export const privacyEn = {
         },
         {
           type: "p",
-          text: "We retain purchase records even after an account is deleted, with the account link removed, because we need them for accounting, tax, fraud-prevention and dispute-handling purposes.",
+          text: "In our Android app, Sparks are bought through Google Play's billing system. Google processes the payment and your payment details under the [Google Play Terms of Service](https://play.google.com/about/play-terms/), the [Google Privacy Policy](https://policies.google.com/privacy) and the [Google Payments Privacy Notice](https://payments.google.com/payments/apis-secure/get_legal_document?ldo=0&ldt=privacynotice). We do not receive your card or other payment-method details.",
+        },
+        {
+          type: "p",
+          text: "From Google we receive and store the purchase record: the purchase token, the Google Play order number, the product, the purchase status and time, and whether we have confirmed the purchase to Google. Our server sends the purchase token to Google to verify and confirm the purchase, and regularly asks Google which purchases have been refunded. If a purchase is refunded or charged back, we store the time, reason and source that Google reports, together with the number of Sparks removed from your balance as described in section 21 of our [Terms of Use](/terms). Under its terms, Google may also make information such as your name and email address available to us as the seller, in Google's developer console. We use it only to handle orders, refunds, support requests and suspected fraud, and we do not copy it into your UwenzAi account.",
+        },
+        {
+          type: "p",
+          text: "We retain purchase records even after an account is deleted, with the account link removed, because we need them for accounting, tax, fraud-prevention and dispute-handling purposes. This applies to purchases made through Paystack and through Google Play.",
         },
       ],
     },
@@ -328,6 +342,10 @@ export const privacyEn = {
         {
           type: "p",
           text: "We use only the cookies needed to run the Service. We do not use advertising cookies, and we do not embed third-party analytics or tracking scripts such as advertising pixels.",
+        },
+        {
+          type: "p",
+          text: "We do count visits ourselves: when you open our website or app, it sends a short notice to our own server, which records the visit described in section 4. This uses no additional cookies and no third-party analytics service.",
         },
         {
           type: "ul",
@@ -357,7 +375,8 @@ export const privacyEn = {
             "Your account content — conversations, messages, characters, memory notes and images — is kept while your account exists, so that it is there when you return. We do not currently run an automatic job that deletes old conversations after a fixed period. What happens if you delete your account is described in section 15.",
             "Guest data is tied to the guest credential, which currently lasts up to 180 days and also expires after a period of inactivity.",
             "Verification and password-recovery codes expire quickly, typically within minutes, and are refused after that.",
-            "Purchase, billing and consent records are kept for as long as we need them to meet accounting, tax and legal obligations, and to defend against disputes.",
+            "Purchase, billing and consent records, including the record of a promo code you redeemed, are kept for as long as we need them to meet accounting, tax and legal obligations, and to defend against disputes.",
+            "Visit records are updated as you visit, and only the most recent country is kept. For an account they are kept until the account is deleted; for a guest session they stay with that session's record, also after the session has expired.",
             "Support tickets and content reports are kept while they are open and for a reasonable period afterwards, so that repeat problems can be handled.",
             "Safety records are kept for as long as we need them to detect repeat violations across your sessions, to review enforcement decisions, and to meet legal obligations. Older records stop counting toward automated enforcement after a fixed window (currently 180 days).",
           ],
@@ -390,7 +409,7 @@ export const privacyEn = {
         },
         {
           type: "p",
-          text: "Deleting your account removes your user record, your profile details, your conversations, messages, summaries, memory notes, reminders, unused private characters, and private images — including private images you added to someone else’s public character. Your remaining spark balance is removed. This is not a refund of purchases.",
+          text: "Deleting your account removes your user record, your profile details, your visit records, your conversations, messages, summaries, memory notes, reminders, unused private characters, and private images — including private images you added to someone else’s public character. Your remaining spark balance is removed. This is not a refund of purchases.",
         },
         {
           type: "p",
@@ -407,7 +426,7 @@ export const privacyEn = {
         {
           type: "ul",
           items: [
-            "Purchase and billing records are retained, with your account link removed, because we are required to keep them.",
+            "Purchase and billing records are retained, with your account link removed, because we are required to keep them. A promo code you redeemed stays marked as used, but it is no longer linked to you.",
             "Where an image is deleted, the stored file is removed after the record that referenced it, but we do not guarantee that every file is erased from object storage at the same instant. Image files that remain referenced by a public character we keep are not deleted.",
             "Copies may persist for a limited period in encrypted database backups and in operational logs before they age out in the ordinary course.",
             "Content already sent to an AI provider to generate a reply or an image is subject to that provider’s own retention. We request minimal retention where a provider supports it, but we cannot delete data from their systems on your behalf.",

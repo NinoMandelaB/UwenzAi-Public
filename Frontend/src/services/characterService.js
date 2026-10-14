@@ -499,7 +499,12 @@ export async function generateAvatar(characterId, options = {}) {
 /**
  * Generate an AI gallery image for a character
  * @param {string} characterId - UUID of the character
- * @param {Object} options - { prompt, caption, order, negative_prompt, aspect_ratio, style_preset, seed, extra_prompt }
+ * @param {Object} options - { prompt, caption, order, negative_prompt, aspect_ratio, style_preset, seed, extra_prompt, publish_on_approval }
+ *
+ * `publish_on_approval` is set only by the character setup and edit pages:
+ * the picture is then part of the character's own gallery and becomes visible
+ * to everyone once an admin approves the character. Pictures generated on the
+ * detail page or in chat leave it out and stay private to their creator.
  */
 export async function generateGalleryImage(characterId, options = {}) {
   const {
@@ -511,6 +516,7 @@ export async function generateGalleryImage(characterId, options = {}) {
     style_preset = "photographic",
     seed = 0,
     extra_prompt = "", // <-- new
+    publish_on_approval = false,
   } = options;
 
   const body = {
@@ -522,6 +528,9 @@ export async function generateGalleryImage(characterId, options = {}) {
     extra_prompt, // always included, even if empty
   };
 
+  if (publish_on_approval) {
+    body.publish_on_approval = true;
+  }
   if (caption) {
     body.caption = caption;
   }

@@ -8,6 +8,7 @@ import {
   LEGAL_POLICY_VERSION,
   legalDocuments,
 } from "../../i18n/legal";
+import { translations } from "../../i18n/translations";
 import TermsOfService from "./TermsOfService";
 import PrivacyPolicy from "./PrivacyPolicy";
 import SubprocessorDisclosure from "./SubprocessorDisclosure";
@@ -278,8 +279,15 @@ describe("legal publication versions", () => {
     // disclosed, so the consent version moves again.
     // 2026-10-07: advisory model-refusal records (Privacy §4) — counted,
     // never punitive, admin-resettable, deleted with the account.
-    expect(LEGAL_POLICY_VERSION).toBe("2026-10-07");
-    expect(LEGAL_LAST_UPDATED).toBe("07-OCT-2026");
+    // 2026-10-09: Google Play purchases (Terms 21.12–21.14, Privacy 2/12,
+    // Provider Disclosure 5), promo codes (Terms 21.15, Privacy 4/5/14/15)
+    // and visit records with the Cloudflare country (Privacy 4/5/11/13/14/15,
+    // Provider Disclosure 1). New channel, data and provider: version moves.
+    // 2026-10-13: image rules — explicit nudity banned for generation and
+    // uploads, section 6.2 applied to images, screening categories named,
+    // Mistral subprocessor row extended to generated images.
+    expect(LEGAL_POLICY_VERSION).toBe("2026-10-13");
+    expect(LEGAL_LAST_UPDATED).toBe("13-OCT-2026");
   });
 
   for (const language of ["en", "sw"]) {
@@ -898,13 +906,26 @@ describe("photo message disclosures (2026-10-05)", () => {
     (language) => {
       const s8 = sectionText(legalDocuments.privacy[language], "8");
       if (language === "en") {
-        expect(s8).toMatch(/child-safety screening/i);
+        expect(s8).toMatch(/child-safety and prohibited-content screening/i);
         expect(s8).toMatch(/never your message text or caption/i);
         expect(s8).toMatch(/refused and never stored/i);
+        expect(s8).toMatch(
+          /Adult nudity and adult sexual acts are not screened out/i,
+        );
+        // Privacy describes what the screening checks; the stricter rules
+        // stay in Terms section 7 (and animals are no longer banned there).
+        expect(s8).toMatch(
+          /checks for five things: nudity of a minor, sexual content involving a minor, sexual content involving animals, gore or extreme harm \(including cruelty to animals\), and dead or dying people/i,
+        );
+        expect(s8).not.toMatch(/minors, animals/i);
       } else {
         expect(s8).toMatch(/usalama wa watoto/i);
         expect(s8).toMatch(/si maandishi ya ujumbe wako/i);
         expect(s8).toMatch(/hazihifadhiwi kabisa/i);
+        expect(s8).toMatch(
+          /hukagua mambo matano: uchi wa watoto, maudhui ya kingono yanayohusisha watoto, maudhui ya kingono yanayohusisha wanyama, majeraha ya kutisha au madhara makubwa \(ikiwemo ukatili dhidi ya wanyama\), na watu waliofariki au wanaokufa/i,
+        );
+        expect(s8).not.toMatch(/watoto, wanyama/i);
       }
     },
   );
@@ -948,13 +969,21 @@ describe("photo message disclosures (2026-10-05)", () => {
     (language) => {
       const doc = flatten(legalDocuments.subprocessors[language]);
       if (language === "en") {
-        expect(doc).toMatch(/child-safety screening of photos sent in chat/i);
-        expect(doc).toMatch(/never your message text/i);
+        expect(doc).toMatch(
+          /child-safety and prohibited-content screening of photos sent in chat/i,
+        );
+        expect(doc).toMatch(
+          /and of the images our image-generation providers return/i,
+        );
+        expect(doc).toMatch(/never your message text or caption/i);
       } else {
         expect(doc).toMatch(
-          /usalama wa watoto kwa picha zinazotumwa kwenye mazungumzo/i,
+          /usalama wa watoto na wa maudhui yaliyopigwa marufuku kwa picha zinazotumwa kwenye mazungumzo/i,
         );
-        expect(doc).toMatch(/si maandishi ya ujumbe wako/i);
+        expect(doc).toMatch(
+          /na kwa picha zinazorudishwa na watoa huduma wetu wa uzalishaji wa picha/i,
+        );
+        expect(doc).toMatch(/si maandishi ya ujumbe wako wala maelezo/i);
       }
     },
   );
@@ -984,32 +1013,288 @@ describe("photo message disclosures (2026-10-05)", () => {
   );
 
   it.each(["en", "sw"])(
-    "terms.%s keeps uploaded-photo prohibitions separate from generation prohibitions",
+    "terms.%s applies the section 7.2 prohibitions to uploaded photos too",
     (language) => {
       const s7 = sectionText(legalDocuments.terms[language], "7");
       if (language === "en") {
         expect(s7).toMatch(
-          /The prohibitions in section 7\.2 govern what you may ask us to generate/i,
+          /The prohibitions in section 7\.2 apply equally to photos you upload and send/i,
         );
-        expect(s7).toMatch(
-          /A separate rule governs photos you upload and send/i,
-        );
-        // Ordinary clothed photos of children must stay allowed (only child
-        // nudity / sexual content blocks, unlike the generation rule).
+        // Ordinary clothed photos of children must stay allowed: the screening
+        // targets child nudity / sexual content, not everyday family photos.
         expect(s7).toMatch(
           /fully-clothed photos of children[^]*are not prohibited by this rule/i,
         );
         expect(s7).toMatch(/no sparks are charged for them/i);
       } else {
         expect(s7).toMatch(
-          /Marufuku ya kifungu cha 7\.2 zinasimamia unachoruhusiwa kuomba tuzalishe/i,
+          /Marufuku ya kifungu cha 7\.2 inatumika kwa picha unazopakia na kutuma/i,
         );
-        expect(s7).toMatch(
-          /Kanuni tofauti inasimamia picha unazopakia na kutuma/i,
-        );
-        expect(s7).toMatch(/hazipigwa marufuku na kanuni hii/i);
+        expect(s7).toMatch(/hazijapigwa marufuku na kanuni hii/i);
         expect(s7).toMatch(/hakuna cheche zinazotozwa kwa zile/i);
       }
+    },
+  );
+});
+
+// 2026-10-09: Spark purchases in the Android app go through Google Play
+// Billing (play_billing_app). Google processes the payment; we keep the
+// purchase record and claw back Sparks when Google reports a refund.
+describe("Google Play purchase disclosures (2026-10-09)", () => {
+  it.each(["en", "sw"])(
+    "terms.%s covers Play billing, Google's refund route and the clawback",
+    (language) => {
+      const s21 = sectionText(legalDocuments.terms[language], "21");
+      expect(s21).toMatch(/play\.google\.com\/about\/play-terms/);
+      if (language === "en") {
+        expect(s21).toMatch(/21\.12\. Purchases in our Android app/);
+        expect(s21).toMatch(/through Google Play's billing system/);
+        expect(s21).toMatch(/guests cannot buy them there/);
+        expect(s21).toMatch(
+          /the Sparks are added the next time you open the app, signed in/,
+        );
+        expect(s21).toMatch(/Section 21\.8 also applies to purchases made/);
+        expect(s21).toMatch(
+          /within 48 hours of the purchase you can request a refund from Google Play/,
+        );
+        expect(s21).toMatch(/refunds it automatically after three days/);
+        expect(s21).toMatch(
+          /this happens automatically once Google reports the refund to us/,
+        );
+      } else {
+        expect(s21).toMatch(
+          /21\.12\. Manunuzi kwenye programu yetu ya Android/,
+        );
+        expect(s21).toMatch(/kupitia mfumo wa malipo wa Google Play/);
+        expect(s21).toMatch(/wageni hawawezi kununua cheche humo/);
+        expect(s21).toMatch(/cheche huongezwa utakapofungua programu tena/);
+        expect(s21).toMatch(/Kifungu cha 21\.8 kinatumika pia kwa manunuzi/);
+        expect(s21).toMatch(/ndani ya saa 48 baada ya ununuzi/);
+        expect(s21).toMatch(/kiotomatiki baada ya siku tatu/);
+        expect(s21).toMatch(
+          /hili hufanyika kiotomatiki mara Google inapotujulisha/,
+        );
+      }
+    },
+  );
+
+  it.each(["en", "sw"])(
+    "privacy.%s names both payment routes and what Google shares with us",
+    (language) => {
+      const privacy = legalDocuments.privacy[language];
+      const s2 = flatten({ ...privacy, sections: [privacy.sections[1]] });
+      const s12 = sectionText(privacy, "12");
+      expect(s12).toMatch(/policies\.google\.com\/privacy/);
+      expect(s12).toMatch(/ldt=privacynotice/);
+      if (language === "en") {
+        expect(s2).toMatch(/purchases in our Android app require an account/);
+        expect(s12).toMatch(
+          /On our website, purchases are processed by Paystack/,
+        );
+        expect(s12).toMatch(
+          /In our Android app, Sparks are bought through Google Play's billing system/,
+        );
+        expect(s12).toMatch(
+          /We do not receive your card or other payment-method details/,
+        );
+        expect(s12).toMatch(/your name and email address/);
+        expect(s12).toMatch(/we do not copy it into your UwenzAi account/);
+        expect(s12).toMatch(/through Paystack and through Google Play/);
+      } else {
+        expect(s2).toMatch(
+          /manunuzi kwenye programu yetu ya Android yanahitaji akaunti/,
+        );
+        expect(s12).toMatch(
+          /Kwenye tovuti yetu, manunuzi huchakatwa na Paystack/,
+        );
+        expect(s12).toMatch(
+          /cheche hununuliwa kupitia mfumo wa malipo wa Google Play/,
+        );
+        expect(s12).toMatch(/Hatupokei maelezo ya kadi yako/);
+        expect(s12).toMatch(/jina lako na anwani yako ya barua pepe/);
+        expect(s12).toMatch(/hatuinakili kwenye akaunti yako ya UwenzAi/);
+        expect(s12).toMatch(/kupitia Paystack na kupitia Google Play/);
+      }
+    },
+  );
+
+  it.each(["en", "sw"])(
+    "subprocessors.%s lists Google Play next to Paystack under payments",
+    (language) => {
+      const payments = legalDocuments.subprocessors[language].sections.find(
+        (s) => s.id === "5",
+      );
+      const rows = payments.blocks.find((b) => b.type === "table").rows;
+      expect(rows.map((row) => row[0])).toEqual([
+        "Paystack",
+        "Google Play (Google)",
+      ]);
+      expect(rows[0][1]).toMatch(
+        language === "en" ? /on our website/ : /kwenye tovuti yetu/,
+      );
+      expect(rows[1][1]).toMatch(
+        language === "en" ? /in our Android app/ : /programu yetu ya Android/,
+      );
+    },
+  );
+});
+
+// 2026-10-09: single-use flyer promo codes, redeemable only in the sign-up
+// form (capp/classes/billing/promo_code_service.py).
+describe("promo code disclosures (2026-10-09)", () => {
+  it.each(["en", "sw"])(
+    "terms.%s states the promo code rules the service enforces",
+    (language) => {
+      const s21 = sectionText(legalDocuments.terms[language], "21");
+      if (language === "en") {
+        expect(s21).toMatch(/21\.15\. Promo codes\./);
+        expect(s21).toMatch(/only be redeemed when you create an account/);
+        expect(s21).toMatch(/cannot be added to an account afterwards/);
+        expect(s21).toMatch(
+          /Each code can be redeemed once, and each account can redeem one promo code/,
+        );
+        expect(s21).toMatch(/on top of the standard sign-up bonus/);
+        expect(s21).toMatch(/your account is still created, without the bonus/);
+        expect(s21).toMatch(
+          /pause or withdraw codes that have not been redeemed/,
+        );
+        expect(s21).toMatch(/they have no cash value/);
+      } else {
+        expect(s21).toMatch(/21\.15\. Misimbo ya ofa\./);
+        expect(s21).toMatch(
+          /Msimbo wa ofa unaweza kutumika tu unapofungua akaunti/,
+        );
+        expect(s21).toMatch(/hauwezi kuongezwa kwenye akaunti baadaye/);
+        expect(s21).toMatch(
+          /Kila msimbo unaweza kutumika mara moja tu, na kila akaunti inaweza kutumia msimbo mmoja tu/,
+        );
+        expect(s21).toMatch(/juu ya cheche za kawaida za kujiunga/);
+        expect(s21).toMatch(
+          /akaunti yako bado inafunguliwa, bila cheche za ziada/,
+        );
+        expect(s21).toMatch(
+          /kusitisha au kuondoa misimbo ambayo bado haijatumika/,
+        );
+        expect(s21).toMatch(/hazina thamani ya kifedha/);
+      }
+    },
+  );
+
+  it("names the promo code the way the Kiswahili sign-up form does", () => {
+    const label = translations.sw.auth.promoCode.replace(/\s*\(hiari\)$/, "");
+    expect(sectionText(legalDocuments.terms.sw, "21").toLowerCase()).toContain(
+      label.toLowerCase(),
+    );
+  });
+
+  it.each(["en", "sw"])(
+    "privacy.%s records, explains, retains and unlinks redemptions",
+    (language) => {
+      const privacy = legalDocuments.privacy[language];
+      const [s4, s5, s14, s15] = ["4", "5", "14", "15"].map((id) =>
+        flatten({ ...privacy, sections: [privacy.sections[Number(id) - 1]] }),
+      );
+      if (language === "en") {
+        expect(s4).toMatch(/If you enter a promo code when you sign up/);
+        expect(s4).toMatch(
+          /administrators can see which account redeemed which code/,
+        );
+        expect(s5).toMatch(/To apply a promo code you enter when you sign up/);
+        expect(s14).toMatch(
+          /including the record of a promo code you redeemed/,
+        );
+        expect(s15).toMatch(
+          /stays marked as used, but it is no longer linked to you/,
+        );
+      } else {
+        expect(s4).toMatch(/Ukiandika msimbo wa ofa unapojisajili/);
+        expect(s4).toMatch(/ni akaunti gani ilitumia msimbo upi/);
+        expect(s5).toMatch(/Kutumia msimbo wa ofa unaouandika unapojisajili/);
+        expect(s14).toMatch(/ikijumuisha rekodi ya msimbo wa ofa uliotumia/);
+        expect(s15).toMatch(/lakini hauhusishwi nawe tena/);
+      }
+    },
+  );
+});
+
+// 2026-10-09: first-party visit records (capp/classes/analytics/
+// visit_service.py) with the country taken from Cloudflare's CF-IPCountry
+// header, shown to admins in the audience overview with message counts only.
+describe("visit record and Cloudflare disclosures (2026-10-09)", () => {
+  const sectionOf = (doc, id) =>
+    flatten({ ...doc, sections: [doc.sections[Number(id) - 1]] });
+
+  it.each(["en", "sw"])(
+    "privacy.%s section 4 explains visit records and the admin overview",
+    (language) => {
+      const s4 = sectionOf(legalDocuments.privacy[language], "4");
+      expect(s4).toMatch(/Cloudflare/);
+      if (language === "en") {
+        expect(s4).toMatch(/Visit records\. When you open our website or app/);
+        expect(s4).toMatch(/the most recent country your visits came from/);
+        expect(s4).toMatch(/for accounts and for guest sessions/);
+        expect(s4).toMatch(
+          /we store only the two-letter country code, not the IP address/,
+        );
+        expect(s4).toMatch(/internal audience overview/);
+        expect(s4).toMatch(/The overview never shows message text/);
+      } else {
+        expect(s4).toMatch(
+          /Rekodi za ziara\. Unapofungua tovuti au programu yetu/,
+        );
+        expect(s4).toMatch(/nchi ya hivi karibuni ambayo ziara zako zilitoka/);
+        expect(s4).toMatch(/kwa akaunti na kwa vipindi vya wageni/);
+        expect(s4).toMatch(
+          /msimbo wa nchi wa herufi mbili tu, si anwani ya IP/,
+        );
+        expect(s4).toMatch(/muhtasari wa ndani wa watumiaji/);
+        expect(s4).toMatch(/hauonyeshi kamwe maandishi ya ujumbe/);
+      }
+    },
+  );
+
+  it.each(["en", "sw"])(
+    "privacy.%s covers purpose, provider, cookies, retention and deletion",
+    (language) => {
+      const privacy = legalDocuments.privacy[language];
+      const [s5, s11, s13, s14, s15] = ["5", "11", "13", "14", "15"].map((id) =>
+        sectionOf(privacy, id),
+      );
+      if (language === "en") {
+        expect(s5).toMatch(/To understand how the Service is used/);
+        expect(s11).toMatch(/network delivery and protection/);
+        expect(s13).toMatch(/We do count visits ourselves/);
+        expect(s13).toMatch(
+          /no additional cookies and no third-party analytics service/,
+        );
+        expect(s14).toMatch(/only the most recent country is kept/);
+        expect(s14).toMatch(/also after the session has expired/);
+        expect(s15).toMatch(/your profile details, your visit records/);
+      } else {
+        expect(s5).toMatch(/Kuelewa jinsi Huduma inavyotumika/);
+        expect(s11).toMatch(/usafirishaji na ulinzi wa mtandao/);
+        expect(s13).toMatch(/sisi wenyewe huhesabu ziara/);
+        expect(s13).toMatch(
+          /halitumii kuki za ziada wala huduma ya uchanganuzi ya watu wa tatu/,
+        );
+        expect(s14).toMatch(/ni nchi ya hivi karibuni pekee inayohifadhiwa/);
+        expect(s14).toMatch(/hata baada ya kipindi kuisha/);
+        expect(s15).toMatch(/maelezo ya wasifu wako, rekodi zako za ziara/);
+      }
+    },
+  );
+
+  it.each(["en", "sw"])(
+    "subprocessors.%s lists Cloudflare next to Railway",
+    (language) => {
+      const hosting = legalDocuments.subprocessors[language].sections.find(
+        (s) => s.id === "1",
+      );
+      const rows = hosting.blocks.find((b) => b.type === "table").rows;
+      expect(rows.map((row) => row[0])).toEqual(["Railway", "Cloudflare"]);
+      expect(rows[1][2]).toMatch(
+        language === "en" ? /not your IP address/ : /si anwani yako ya IP/,
+      );
     },
   );
 });

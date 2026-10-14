@@ -18,7 +18,7 @@ export const subprocessorsEn = {
   sections: [
     {
       id: "1",
-      heading: "1. Hosting, database and file storage",
+      heading: "1. Hosting, network, database and file storage",
       blocks: [
         {
           type: "table",
@@ -28,6 +28,11 @@ export const subprocessorsEn = {
               "Railway",
               "Application hosting, PostgreSQL database, Redis cache and background queues, and the S3-compatible bucket that stores uploaded and generated images and the photos you send in chat.",
               "All account and service data, including your content. Stored data is encrypted at rest at the storage layer; image objects are private and reachable only through short-lived signed links. Photo files you send in chat are additionally encrypted with our own keys before they reach the bucket, so the storage provider holds them as ciphertext.",
+            ],
+            [
+              "Cloudflare",
+              "Network delivery and protection for our website and API: DNS, encrypted connections and protection against attacks. It also tells our servers which country a request comes from.",
+              "Your IP address and the requests you send to our website and API, which pass through Cloudflare's network. For visit records we store only the country code Cloudflare provides, not your IP address.",
             ],
           ],
         },
@@ -48,7 +53,7 @@ export const subprocessorsEn = {
             ],
             [
               "Mistral AI",
-              "Fallback provider for chat replies and for embeddings, used when Cortecs fails or is not configured. Also called directly for background text tasks: extracting memory notes, writing conversation summaries, drafting character persona details, and judging conversation tone. Also our current provider for the automated child-safety screening of photos sent in chat: a downscaled, metadata-free copy of the photo is sent for classification before the photo is stored. Only the image is sent for that screening — never your message text.",
+              "Fallback provider for chat replies and for embeddings, used when Cortecs fails or is not configured. Also called directly for background text tasks: extracting memory notes, writing conversation summaries, drafting character persona details, and judging conversation tone. Also our current provider for the automated child-safety and prohibited-content screening of photos sent in chat and of the images our image-generation providers return: a downscaled, metadata-free copy of the image is sent for classification before it is stored or shown. Only the image is sent for that screening — never your message text or caption.",
               "The same conversation context and memory note text as above, depending on which task is running, and — for photo screening — the downscaled image copy described here.",
             ],
             [
@@ -113,8 +118,13 @@ export const subprocessorsEn = {
           rows: [
             [
               "Paystack",
-              "Processing spark and subscription purchases, including mobile-money and card payment methods.",
+              "Processing spark and subscription purchases on our website, including mobile-money and card payment methods.",
               "Transaction amount, currency, our reference and what was purchased, plus the payment details you enter directly with Paystack. We do not receive or store your full card number, card security code or PIN.",
+            ],
+            [
+              "Google Play (Google)",
+              "Processing spark purchases in our Android app through Google Play's billing system, and reporting refunds and chargebacks of those purchases to us.",
+              "The purchase token, Google Play order number, product, purchase status and time, and the refund details Google reports. Google handles the payment itself under its own terms and privacy policy, and we do not receive your card or other payment-method details. Google may make your name and email address available to us as the seller for handling orders.",
             ],
           ],
         },

@@ -1,6 +1,6 @@
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useState } from "react";
-import { Mail, RotateCcw, ShieldCheck } from "lucide-react";
+import { Mail, RotateCcw, ShieldCheck, Ticket } from "lucide-react";
 import PrimaryButton from "../components/PrimaryButton";
 import MessagePopup from "../components/MessagePopup";
 import { useLanguage } from "../context/LanguageContext";
@@ -117,6 +117,7 @@ export default function VerifyEmail() {
   const state = location.state || {};
   const initialUserId = state.user_id || "";
   const initialEmail = state.email || "";
+  const promoOutcome = state.promo || null;
 
   const [formData, setFormData] = useState({
     user_id: initialUserId,
@@ -290,6 +291,35 @@ export default function VerifyEmail() {
           {t("auth.verifyEmailSubtitle")}
         </p>
       </div>
+
+      {/* Promo code outcome from the signup that led here. Shown only when a
+          code was submitted; an invalid or already-used code never blocked
+          the signup itself. */}
+      {promoOutcome && (
+        <div
+          className="mb-5 rounded-2xl border p-4"
+          style={{
+            borderColor:
+              promoOutcome.status === "applied"
+                ? "rgba(34, 197, 94, 0.5)"
+                : "var(--color-border)",
+            backgroundColor: "var(--color-soft)",
+          }}
+        >
+          <div className="flex items-start gap-3">
+            <Ticket
+              size={18}
+              className="shrink-0 mt-0.5"
+              style={{ color: "var(--color-accent)" }}
+            />
+            <p className="text-sm leading-6 theme-text">
+              {promoOutcome.status === "applied"
+                ? t("auth.promoApplied", { sparks: promoOutcome.sparks })
+                : t("auth.promoNotApplied")}
+            </p>
+          </div>
+        </div>
+      )}
 
       <div
         className="mb-5 rounded-2xl border p-4"

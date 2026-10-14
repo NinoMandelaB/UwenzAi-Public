@@ -34,7 +34,7 @@ from capp.classes.characters.attire_detection import (
     mentions_clothing_or_nudity,
     mentions_nudity,
 )
-from capp.classes.characters.character_service import CharacterService
+from capp.classes.characters.character_service import TRADITIONAL_CLOTHING_PROMPTS, CharacterService
 from capp.models import Character
 from capp.tests import RECAPTCHA_OK, _bearer_token, _make_character, _make_user
 
@@ -115,6 +115,19 @@ class AttireDetectionTests(SimpleTestCase):
 
     def test_swahili_clothing_detected(self):
         for text in ("amevaa gauni nyekundu", "nguo za kifahari", "mavazi ya kawaida", "kuvaa suruali"):
+            self.assertTrue(mentions_clothing(text), text)
+
+    def test_east_african_traditional_garments_detected(self):
+        # A user who names a traditional garment has expressed attire intent, so
+        # the character's preset outfit must not be layered on top of it.
+        for text in (
+            "in a gomesi at a wedding",
+            "draped in a red shuka",
+            "relaxing in a kikoy on the beach",
+            "a busuuti with a wide sash",
+            "habesha kemis for Easter",
+            "kanga headwrap and a smile",
+        ):
             self.assertTrue(mentions_clothing(text), text)
 
     def test_case_insensitive(self):
@@ -286,6 +299,70 @@ class DefaultOutfitInjectionTests(SimpleTestCase):
         self.assertIn("athletic build", prompt)
 
 
+class TraditionalAndLingerieStyleTests(SimpleTestCase):
+    """The traditional East African styles and the lingerie style resolve to
+    real garment descriptions instead of the generic ``"<label> clothing"``
+    fallback that only fits simple labels such as ``elegant``."""
+
+    def test_every_traditional_style_has_a_prompt_description(self):
+        traditional = {
+            value
+            for value, _label in Character.ClothingStyle.choices
+            if value in {"kitenge", "kanga", "swahili_coastal", "maasai", "gomesi", "habesha"}
+        }
+        # Guards against adding a choice and forgetting its prompt text (or the reverse).
+        self.assertEqual(traditional, set(TRADITIONAL_CLOTHING_PROMPTS))
+
+    def test_stored_values_fit_the_column(self):
+        max_length = Character._meta.get_field("clothing_style").max_length
+        for value, _label in Character.ClothingStyle.choices:
+            self.assertLessEqual(len(value), max_length, value)
+
+    def test_traditional_styles_inject_a_garment_description(self):
+        expectations = {
+            "kitenge": "kitenge",
+            "kanga": "kanga cloth wrap",
+            "swahili_coastal": "kanga wrap dress",
+            "maasai": "Maasai shuka",
+            "gomesi": "gomesi dress",
+            "habesha": "habesha kemis",
+        }
+        for style, snippet in expectations.items():
+            prompt = _build_prompt(_PromptCharacter(gender="female", clothing_style=style), "at the market")
+            self.assertIn(snippet, prompt, style)
+            # The generic fallback would read like "swahili coastal clothing".
+            self.assertNotIn(f"{style.replace('_', ' ')} clothing", prompt, style)
+
+    def test_gendered_garments_follow_the_character_gender(self):
+        male = _build_prompt(_PromptCharacter(gender="male", clothing_style="swahili_coastal"), "at the market")
+        female = _build_prompt(_PromptCharacter(gender="female", clothing_style="swahili_coastal"), "at the market")
+        self.assertIn("kanzu robe with an embroidered kofia cap", male)
+        self.assertNotIn("kanzu", female)
+        self.assertIn("kanga wrap dress", female)
+
+        male_gomesi = _build_prompt(_PromptCharacter(gender="male", clothing_style="gomesi"), "at the wedding")
+        self.assertIn("Ugandan white kanzu", male_gomesi)
+        self.assertNotIn("gomesi dress", male_gomesi)
+
+    def test_garment_without_a_male_variant_is_shared(self):
+        male = _build_prompt(_PromptCharacter(gender="male", clothing_style="maasai"), "on the savanna")
+        self.assertIn("Maasai shuka", male)
+
+    def test_lingerie_style_reads_as_a_garment_not_a_slash_label(self):
+        prompt = _build_prompt(_PromptCharacter(gender="female", clothing_style="lingerie"), "in the bedroom")
+        self.assertIn("wear lingerie and underwear", prompt)
+        self.assertNotIn("underwear clothing", prompt)
+
+    def test_traditional_style_is_dropped_when_the_user_names_other_attire(self):
+        prompt = _build_prompt(_PromptCharacter(clothing_style="maasai"), "wearing a red dress")
+        self.assertNotIn("Maasai shuka", prompt)
+        self.assertIn("red dress", prompt)
+
+    def test_traditional_style_is_dropped_for_explicit_nudity(self):
+        prompt = _build_prompt(_PromptCharacter(clothing_style="kitenge"), "topless on the balcony")
+        self.assertNotIn("kitenge", prompt)
+
+
 class DefaultOutfitApiTests(TestCase):
     """API round-trip of the existing ``clothing_style`` field — the value
     the prompt builder reads is the value the wizard and edit form write."""
@@ -336,6 +413,14 @@ class DefaultOutfitApiTests(TestCase):
         # And the stored value is exactly what the prompt builder injects.
         prompt = _build_prompt(character, "at the park")
         self.assertIn(_CLOTHING_LINE["formal"], prompt)
+
+    @mock.patch("capp.classes.auth.recaptcha.RecaptchaService.verify_token", return_value=RECAPTCHA_OK)
+    def test_create_accepts_every_clothing_style_choice(self, _recaptcha):
+        token = _bearer_token(self.client, "outfitadmin")
+        for index, (value, _label) in enumerate(Character.ClothingStyle.choices):
+            resp = self._post_create(token, {"name": f"Stylist {index}", "clothing_style": value, "gender": "female"})
+            self.assertEqual(resp.status_code, 201, (value, resp.content))
+            self.assertEqual(resp.json()["data"]["character"]["clothing_style"], value)
 
     @mock.patch("capp.classes.auth.recaptcha.RecaptchaService.verify_token", return_value=RECAPTCHA_OK)
     def test_create_defaults_to_casual_when_omitted(self, _recaptcha):

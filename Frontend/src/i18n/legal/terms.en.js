@@ -209,23 +209,27 @@ export const termsEn = {
       blocks: [
         {
           type: "p",
-          text: "7.1. Adult content. The Service is an adults-only platform. Subject to section 7.2, adult users may generate mature or sexually explicit imagery of adult fictional characters. Some parts of the interface ask you to keep requests respectful; that guidance does not create a permission you would not otherwise have, and it does not narrow the prohibitions below.",
+          text: "7.1. Adult content. The Service is an adults-only platform. Adult users may generate mature imagery of adult fictional characters, including suggestive imagery that is not explicit. Imagery that shows explicit nudity — genitalia — or depicts sexual acts is not permitted, whether generated or uploaded, regardless of the fictional framing. Some parts of the interface ask you to keep requests respectful; that guidance does not create a permission you would not otherwise have, and it does not narrow the prohibitions below.",
         },
         {
           type: "p",
-          text: "7.2. Absolute prohibitions. Regardless of context, wording, or whether the request is sexual, you must not request an image that depicts or materially involves:",
+          text: "7.2. Absolute prohibitions. Regardless of context, wording, or whether the request is sexual, you must not request, generate, or upload an image that depicts or materially involves:",
         },
         {
           type: "ul",
           items: [
+            "explicit nudity — any visible genitalia, or any depiction of a sexual act, regardless of the characters' ages or the fictional framing;",
             "minors — children, babies, teenagers, or any person under 18;",
-            "animals — pets, livestock, wildlife, insects, or any non-human animal; or",
-            "deceased or dying people — corpses, cadavers, or funerary subjects.",
+            "sexual content involving animals — bestiality in any form;",
+            "deceased or dying people — corpses, cadavers, or funerary subjects;",
+            "non-consensual sexual activity, or any other form of sexual exploitation or abuse;",
+            "a real, identifiable person in a sexual or intimate context without that person's consent; or",
+            "anything else prohibited under section 6.2 — every prohibition in that section applies to images you generate, upload, or ask us to generate, not only to text.",
           ],
         },
         {
           type: "p",
-          text: "7.3. Photos you send in chat. The prohibitions in section 7.2 govern what you may ask us to generate. A separate rule governs photos you upload and send to your companion: you must not send a photo that depicts child sexual abuse material, child nudity or a sexualised minor, non-consensual intimate content, or content you have no right to share, and any photo you send must also comply with section 6. Photos you send are screened automatically before they are stored; blocked or unscreenable photos are refused and never stored, and no sparks are charged for them. Ordinary, fully-clothed photos of children — a family picture, for example — are not prohibited by this rule: the screening exists to stop child nudity and child sexual content, not to filter your everyday photos.",
+          text: "7.3. Photos you send in chat. The prohibitions in section 7.2 apply equally to photos you upload and send to your companion: every prohibition in section 7.2, including the explicit-nudity prohibition, applies to photos, and any photo you send must also comply with section 6. Photos you send are screened automatically before they are stored; blocked or unscreenable photos are refused and never stored, and no sparks are charged for them. Despite section 7.2, ordinary, fully-clothed photos of children — a family picture, for example — are not prohibited by this rule: the screening exists to stop child nudity and child sexual content, not to filter your everyday photos.",
         },
         {
           type: "p",
@@ -710,6 +714,22 @@ export const termsEn = {
         {
           type: "p",
           text: "21.11. Not Mobile Money / Not E-Money. Sparks are not mobile money (including, without limitation, any M-Pesa balance or other mobile money wallet balance) and are not electronic money. Sparks cannot be used as, converted to, withdrawn to, or treated as mobile money or electronic money, and cannot be cashed out or transferred to any mobile money account. Any payment made through a mobile money provider is a purchase of prepaid access only, not a deposit or transfer of value into a wallet.",
+        },
+        {
+          type: "p",
+          text: "21.12. Purchases in our Android app. In our Android app, Sparks are sold through Google Play's billing system, and Google Play processes the payment. The price you pay is the one Google Play shows you before you confirm, in the currency and including any taxes it shows, and the payment is also governed by the [Google Play Terms of Service](https://play.google.com/about/play-terms/). You must be signed in to an account to buy Sparks in the app; guests cannot buy them there. Sparks are added to your balance once Google confirms the payment. If Google is still processing a payment, the Sparks are added the next time you open the app, signed in, after the payment has completed. Sparks bought in the app are part of your account balance and work like any other Sparks, including on our website.",
+        },
+        {
+          type: "p",
+          text: "21.13. Refunds of Google Play purchases. Section 21.8 also applies to purchases made through Google Play. In addition, Google Play may refund a purchase under its own refund policies: within 48 hours of the purchase you can request a refund from Google Play, and Google decides on that request. After that, or for any other problem with a purchase, contact us at [info@uwenzai.com](mailto:info@uwenzai.com); where a refund is due under section 21.8, we issue it through Google Play. If we cannot add the Sparks for a completed Google Play payment, we do not confirm the purchase to Google, and Google Play refunds it automatically after three days.",
+        },
+        {
+          type: "p",
+          text: "21.14. Refunded and reversed payments. If a payment for Sparks is refunded, charged back or otherwise reversed, we may remove the Sparks credited for it from your balance. For purchases made through Google Play, this happens automatically once Google reports the refund to us. If you have already used some of those Sparks, we remove as many as your balance still holds. Requesting refunds or chargebacks for Sparks you have already used, in order to get them for free, is a breach of section 6.3 and may lead to suspension under section 14.",
+        },
+        {
+          type: "p",
+          text: "21.15. Promo codes. We may hand out promo codes, for example on flyers, that add bonus Sparks to a new account. A promo code can only be redeemed when you create an account, by entering it in the sign-up form; it cannot be added to an account afterwards. Each code can be redeemed once, and each account can redeem one promo code. The bonus Sparks are added on top of the standard sign-up bonus. If a code is unknown, already used, paused or withdrawn, your account is still created, without the bonus. We may pause or withdraw codes that have not been redeemed at any time. Bonus Sparks are Sparks under this section 21: they have no cash value, cannot be exchanged for money or refunded, and cannot be transferred. You may not sell promo codes or create accounts only to collect bonus Sparks; we may remove bonus Sparks obtained in breach of these Terms.",
         },
       ],
     },

@@ -1,5 +1,12 @@
 // src/pages/CharacterImageSetup.test.jsx
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import CharacterImageSetup from "./CharacterImageSetup";
@@ -161,5 +168,91 @@ describe("CharacterImageSetup automatic avatar generation", () => {
     });
     // The manual button remains available for a retry.
     expect(screen.getByText("Generate Avatar Image")).toBeTruthy();
+  });
+});
+
+describe("CharacterImageSetup gallery and draft handling", () => {
+  const withAvatar = (overrides = {}) =>
+    draftCharacter({
+      avatar_url: "https://example.com/a.webp",
+      is_public: true,
+      ...overrides,
+    });
+
+  it("marks generated gallery pictures as part of the character's public gallery", async () => {
+    getCharacterById.mockResolvedValue(withAvatar());
+    generateGalleryImage.mockResolvedValue({ data: {} });
+
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText("Regenerate Avatar Image")).toBeTruthy();
+    });
+
+    // The gallery card's "Generate" opens the extra-details dialog, whose own
+    // "Generate" button starts the request.
+    fireEvent.click(screen.getByRole("button", { name: "Generate" }));
+    const dialog = (
+      await screen.findByText("Add extra details (optional)")
+    ).closest("div");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Generate" }));
+
+    await waitFor(() => {
+      expect(generateGalleryImage).toHaveBeenCalledWith(
+        "char-1",
+        expect.objectContaining({ publish_on_approval: true }),
+      );
+    });
+  });
+
+  it("labels pictures that wait for the character's approval", async () => {
+    getCharacterById.mockResolvedValue(withAvatar());
+    listGalleryImages.mockResolvedValue({
+      data: {
+        images: [
+          {
+            id: "i1",
+            image_url: "https://example.com/g1.webp",
+            publish_on_approval: true,
+          },
+          {
+            id: "i2",
+            image_url: "https://example.com/g2.webp",
+            publish_on_approval: false,
+          },
+        ],
+      },
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Public after approval")).toHaveLength(1);
+    });
+  });
+
+  it("explains that a public draft is not reviewed until setup is completed", async () => {
+    getCharacterById.mockResolvedValue(withAvatar());
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/stays a draft that only you can see/),
+      ).toBeTruthy();
+    });
+    expect(screen.getByText("Save as draft")).toBeTruthy();
+  });
+
+  it("does not show the draft hint for a private character", async () => {
+    getCharacterById.mockResolvedValue(withAvatar({ is_public: false }));
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("Regenerate Avatar Image")).toBeTruthy();
+    });
+    expect(
+      screen.queryByText(/stays a draft that only you can see/),
+    ).toBeNull();
   });
 });

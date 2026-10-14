@@ -12,7 +12,8 @@ from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models, router, transaction
 from capp.fields import EncryptedTextField
-from django.db.models import Q
+from django.db.models import Q, Value
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 from django.utils.text import slugify
 
@@ -255,6 +256,21 @@ class CustomUser(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
         help_text="Optional chat features the user has enabled (reminders, deepthink, websearch, memory_editor)",
     )
 
+    # Audience analytics: server-timestamped site-visit recording. Written only
+    # by the /api/v1/analytics/visit/ endpoint (see
+    # capp/classes/analytics/visit_service.py) — never by the auth or chat
+    # flows — so "visit" keeps its own meaning (the public app was opened),
+    # distinct from logins, token refreshes and chat activity. first_visit_at is
+    # set once and never rewritten; last_visit_at is coalesced server-side.
+    # Both stay null for accounts that never triggered a recorded visit after
+    # this feature shipped, which is an honest "unknown", not a zero.
+    first_visit_at = models.DateTimeField(blank=True, null=True)
+    last_visit_at = models.DateTimeField(blank=True, null=True)
+    # Approximate country of the latest recorded visit, taken from the trusted
+    # edge's country header (see VISIT_COUNTRY_HEADER in settings). Country
+    # level only — accounts have no IP stored for this. Nulled on erasure.
+    visit_country_code = models.CharField(max_length=2, blank=True, null=True)
+
     USERNAME_FIELD = "username"
     REQUIRED_FIELDS = []
 
@@ -335,7 +351,14 @@ class CustomUser(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
             type(self).objects.select_for_update().get(pk=self.pk)
             # Fence pending playground saves even on a soft-delete-only path.
             AgentPlaygroundHistory.objects.filter(user=self).delete()
-            AgentAPIKey.objects.filter(user=self).update(is_active=False)
+            # Stamp revoked_at so the revoked-key retention task can purge
+            # these keys; without it they would linger in the key list forever.
+            # Keep the original timestamp of keys that were already revoked
+            # (same rule as AgentKeyService.revoke_key) so their retention
+            # window does not restart.
+            AgentAPIKey.objects.filter(user=self).update(
+                is_active=False, revoked_at=Coalesce("revoked_at", Value(timezone.now()))
+            )
             self.is_deleted = True
             self.deleted_at = timezone.now()
             self.is_active = False
@@ -834,6 +857,14 @@ class Character(TimeStampedModel):
         GOTHIC = "gothic", "Gothic"
         PREPPY = "preppy", "Preppy"
         LINGERIE = "lingerie", "Lingerie / Underwear"
+        # Traditional Kenyan / East African attire. Values stay <= 20 chars
+        # (the column width) and double as the prompt-builder lookup keys.
+        KITENGE = "kitenge", "Kitenge"
+        KANGA = "kanga", "Kanga"
+        SWAHILI_COASTAL = "swahili_coastal", "Swahili Coastal"
+        MAASAI = "maasai", "Maasai Shuka"
+        GOMESI = "gomesi", "Gomesi (Uganda)"
+        HABESHA = "habesha", "Habesha Kemis (Ethiopia / Eritrea)"
 
     class AvatarSource(models.TextChoices):
         UPLOADED = "uploaded", "Uploaded by Admin"
@@ -1436,6 +1467,15 @@ class CharacterGalleryImage(TimeStampedModel):
         choices=VisibilityChoices.choices,
         default=VisibilityChoices.PUBLIC,
     )
+    # Set on images the owner generated for the character's own public gallery
+    # (creation-setup and edit pages) while the character was not yet approved.
+    # They stay PRIVATE until an admin approves the character, at which point
+    # they are published and this flag is cleared. Chat and detail-page images
+    # never carry it, so they stay private for good.
+    # db_default keeps a database-level DEFAULT on the column: during a rolling
+    # deploy, processes still running the previous release insert gallery rows
+    # without this column, and NOT NULL without a default would reject them.
+    publish_on_approval = models.BooleanField(default=False, db_default=False)
 
     class Meta:
         db_table = "character_gallery_images"
@@ -1991,6 +2031,22 @@ class GuestIdentity(TimeStampedModel):
     migrated_from_legacy_session_id = models.CharField(max_length=64, blank=True, null=True)
     migrated_at = models.DateTimeField(blank=True, null=True)
 
+    # Audience analytics: recorded site visits for this guest, written only by
+    # the /api/v1/analytics/visit/ endpoint (see
+    # capp/classes/analytics/visit_service.py). ``last_seen_at`` above is
+    # refreshed by ANY guest-credential API call, so it stays the broader
+    # "last activity" signal; these two fields mean specifically "the public
+    # app was opened". When a guest is claimed, first_visit_at is carried over
+    # to the account (see GuestClaimService) so the person's first recorded
+    # visit survives the merge.
+    first_visit_at = models.DateTimeField(blank=True, null=True)
+    last_visit_at = models.DateTimeField(blank=True, null=True)
+    # Approximate country of the latest recorded visit, from the trusted edge's
+    # country header. Country level only. The guest's IP is separately retained
+    # on GuestTokenQuota for abuse control; this field is what the admin
+    # audience view reads.
+    visit_country_code = models.CharField(max_length=2, blank=True, null=True)
+
     class Meta:
         db_table = "guest_identities"
         verbose_name_plural = "Guest identities"
@@ -2474,6 +2530,78 @@ class SparkTransaction(TimeStampedModel):
         return f"{name} - {self.entry_type} - sparks:{self.spark_amount} tokens:{self.token_amount}"  # noqa: E231
 
 
+class PromoCode(TimeStampedModel):
+    """
+    A single-use signup promo code that credits extra Sparks on top of the
+    normal sign-up bonus.
+
+    Codes are printed on physical flyers, so each code is unique and can be
+    redeemed exactly once. ``redeemed_at`` is the authoritative used state: a
+    code is consumed if and only if that timestamp is set. ``redeemed_by`` is
+    only a convenience link for the admin panel and is nulled when the account
+    is erased, while ``redeemed_at`` keeps the code consumed so a recycled
+    flyer can never be redeemed twice.
+
+    The database enforces two invariants that the redemption service also checks
+    under a row lock:
+
+    * one promo bonus per account — a unique constraint on ``redeemed_by``
+      (multiple NULLs are allowed, so unredeemed codes coexist), and
+    * a positive Sparks amount.
+
+    ``redeemed_by``/``redeemed_at`` are deliberately NOT tied together by a
+    check constraint: account erasure nulls ``redeemed_by`` while ``redeemed_at``
+    stays set, which is exactly what keeps a recycled flyer consumed.
+
+    ``is_active`` is reversible (a paused campaign); ``is_revoked`` permanently
+    withdraws a code and cannot be undone. Revoking never reverses Sparks
+    that were already credited — the ledger is append-only.
+    """
+
+    promo_code_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # Normalised by the service: uppercase, no separators, unambiguous alphabet.
+    code = models.CharField(max_length=32, unique=True)
+
+    sparks_amount = models.PositiveBigIntegerField()
+
+    is_active = models.BooleanField(default=True)
+    is_revoked = models.BooleanField(default=False)
+
+    redeemed_by = models.ForeignKey(
+        CustomUser,
+        on_delete=models.SET_NULL,
+        related_name="redeemed_promo_codes",
+        null=True,
+        blank=True,
+    )
+    redeemed_at = models.DateTimeField(null=True, blank=True)
+
+    # The admin who generated the code (audit convenience; may be NULL for
+    # codes created outside the admin panel).
+    created_by = models.ForeignKey(
+        CustomUser,
+        on_delete=models.SET_NULL,
+        related_name="created_promo_codes",
+        null=True,
+        blank=True,
+    )
+
+    note = models.TextField(blank=True, default="")
+
+    class Meta:
+        db_table = "promo_codes"
+        ordering = ["-created_at"]
+        constraints = [
+            models.CheckConstraint(condition=Q(sparks_amount__gt=0), name="promo_code_sparks_positive"),
+            models.UniqueConstraint(fields=["redeemed_by"], name="promo_code_one_per_account"),
+        ]
+        indexes = [models.Index(fields=["is_active"]), models.Index(fields=["redeemed_at"])]
+
+    def __str__(self):
+        return f"{self.code} ({self.sparks_amount} sparks)"
+
+
 class PaymentTransaction(TimeStampedModel):
     class PaymentMethod(models.TextChoices):
         MPESA = "mpesa", "M-Pesa"
@@ -2950,6 +3078,10 @@ class AdminActionLog(TimeStampedModel):
         SAFETY_EVENT_REVERSE = "safety_event_reverse", "Safety Event Reversal"
         SAFETY_ACCOUNT_UNLOCK = "safety_account_unlock", "Safety Account Unlock"
         SAFETY_MODEL_REFUSALS_RESET = "safety_model_refusals_reset", "Safety Model-Refusal Flags Reset"
+        PROMO_CODE_CREATE = "promo_code_create", "Promo Code Create"
+        PROMO_CODE_UPDATE = "promo_code_update", "Promo Code Update"
+        PROMO_CODE_REVOKE = "promo_code_revoke", "Promo Code Revoke"
+        PROMO_CODE_DELETE = "promo_code_delete", "Promo Code Delete"
 
     log_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
@@ -3196,6 +3328,14 @@ class AgentAPIKey(TimeStampedModel):
         blank=True,
         help_text="Last time this key was used for a successful request",
     )
+    # When the key was revoked (is_active=False). Drives the retention task
+    # that hard-deletes revoked keys after AGENT_KEY_REVOKED_RETENTION_DAYS;
+    # usage logs survive via SET_NULL plus the denormalized key_hint.
+    revoked_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When this key was revoked; NULL while the key is active",
+    )
 
     class Meta:
         db_table = "agent_api_keys"
@@ -3332,6 +3472,21 @@ class AgentUsageLog(TimeStampedModel):
         on_delete=models.CASCADE,
         related_name="agent_usage_logs",
         help_text="User who owns the key that made this call",
+    )
+
+    class Source(models.TextChoices):
+        API = "api", "Direct API"
+        PLAYGROUND = "playground", "Workspace Playground"
+
+    source = models.CharField(
+        max_length=16,
+        null=True,
+        blank=True,
+        choices=Source.choices,
+        help_text=(
+            "Whether this call came through the external API or the workspace "
+            "playground; NULL = logged before this field existed"
+        ),
     )
     provider = models.CharField(
         max_length=50,
@@ -3597,6 +3752,25 @@ class SafetyEvent(TimeStampedModel):
         CSAM = "csam", "Child sexual abuse material"
         MODEL_REFUSAL = "model_refusal", "Model refused a request (advisory, never punitive)"
         PHOTO_CHILD_SAFETY = "photo_child_safety", "Blocked child-safety photo upload"
+        GENERATED_IMAGE_CHILD_SAFETY = (
+            "generated_image_child_safety",
+            "Blocked child-safety AI-generated image",
+        )
+        PHOTO_BESTIALITY = "photo_bestiality", "Blocked bestiality photo upload"
+        PHOTO_GORE = "photo_gore", "Blocked gore photo upload"
+        PHOTO_DEATH = "photo_death", "Blocked death photo upload"
+        GENERATED_IMAGE_BESTIALITY = (
+            "generated_image_bestiality",
+            "Blocked bestiality AI-generated image",
+        )
+        GENERATED_IMAGE_GORE = (
+            "generated_image_gore",
+            "Blocked gore AI-generated image",
+        )
+        GENERATED_IMAGE_DEATH = (
+            "generated_image_death",
+            "Blocked death AI-generated image",
+        )
 
     class Severity(models.TextChoices):
         CRITICAL = "critical", "Critical"

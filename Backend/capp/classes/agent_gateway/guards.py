@@ -18,7 +18,7 @@ from capp.models import ComplianceConfirmationLog
 # developer workspace POSTs that constant as the consent version, and any
 # divergence is rejected with 409 consent_version_mismatch, locking keys and
 # the playground for every user. A regression test pins the two together.
-AGENT_GATEWAY_CONSENT_VERSION = "2026-10-07"
+AGENT_GATEWAY_CONSENT_VERSION = "2026-10-13"
 
 
 class GatewayUnavailable(APIException):

@@ -647,6 +647,172 @@ class AgentProviderTests(TestCase):
         if provider:
             self.assertFalse(provider.is_configured())
 
+    def test_normalize_message_content_shapes(self):
+        """normalize_message_content must keep string passthrough, flatten
+        text chunks, extract thinking, and drop non-text metadata chunks."""
+        from capp.classes.agent_gateway.providers.base import normalize_message_content
+
+        # Plain string stays untouched, no reasoning.
+        self.assertEqual(normalize_message_content("answer"), ("answer", None))
+        # None (tool_calls-only assistant messages) becomes empty text.
+        self.assertEqual(normalize_message_content(None), ("", None))
+        # Reasoning chunk shape (mistral-large-4 / magistral):
+        content = [
+            {
+                "type": "thinking",
+                "thinking": [{"type": "text", "text": "Trace part one."}, {"type": "text", "text": " Trace two."}],
+            },
+            {"type": "text", "text": "The final answer."},
+            {"type": "tool_reference", "tool": "web_search", "url": "https://example.com"},
+            "trailing string",
+        ]
+        text, reasoning = normalize_message_content(content)
+        self.assertEqual(text, "The final answer.trailing string")
+        self.assertEqual(reasoning, "Trace part one. Trace two.")
+        # Unknown scalar content never crashes.
+        self.assertEqual(normalize_message_content(42), ("", None))
+
+    @override_settings(MISTRAL_UWENZAI_AGENT_API_KEY="dummy")
+    def test_mistral_large_4_chunked_response_flattened_to_string(self):
+        """mistral-large-4 is a reasoning model: its upstream returns
+        message.content as a list of thinking/text chunks. The relayed
+        ProviderResult must keep content a plain string (with the trace in
+        reasoning_content) or OpenAI-compatible clients treat the response
+        as invalid."""
+        from capp.classes.agent_gateway.providers.mistral import MistralAgentProvider
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            class R:
+                def raise_for_status(self):
+                    pass
+
+                def json(self):
+                    return {
+                        "id": "mistral-1",
+                        "object": "chat.completion",
+                        "model": json["model"],
+                        "choices": [
+                            {
+                                "index": 0,
+                                "message": {
+                                    "role": "assistant",
+                                    "content": [
+                                        {
+                                            "type": "thinking",
+                                            "thinking": [{"type": "text", "text": "Thinking it through."}],
+                                        },
+                                        {"type": "text", "text": "Hello! How can I help?"},
+                                    ],
+                                },
+                                "finish_reason": "stop",
+                            }
+                        ],
+                        "usage": {"prompt_tokens": 8, "completion_tokens": 24},
+                    }
+
+            return R()
+
+        with mock.patch.object(MistralAgentProvider, "_get_headers", return_value={}):
+            with mock.patch("capp.classes.agent_gateway.providers.openai_base.httpx.post", side_effect=fake_post):
+                provider = MistralAgentProvider()
+                result = provider.chat_completion(
+                    model="mistral-large-4",
+                    messages=[{"role": "user", "content": "Hi"}],
+                    params={"max_tokens": 1024},
+                )
+        self.assertEqual(result.status, "success")
+        self.assertEqual(result.text, "Hello! How can I help?")
+        self.assertEqual(result.reasoning, "Thinking it through.")
+        response = result.to_openai_response("mistral-large-4")
+        message = response["choices"][0]["message"]
+        self.assertIsInstance(message["content"], str)
+        self.assertEqual(message["content"], "Hello! How can I help?")
+        self.assertEqual(message["reasoning_content"], "Thinking it through.")
+
+    @override_settings(MISTRAL_UWENZAI_AGENT_API_KEY="dummy")
+    def test_mistral_plain_string_response_has_no_reasoning_field(self):
+        """A plain-string upstream response (reasoning_effort=none) must not
+        grow a reasoning_content key."""
+        from capp.classes.agent_gateway.providers.mistral import MistralAgentProvider
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            class R:
+                def raise_for_status(self):
+                    pass
+
+                def json(self):
+                    return {
+                        "choices": [
+                            {
+                                "index": 0,
+                                "message": {"role": "assistant", "content": "Plain answer."},
+                                "finish_reason": "stop",
+                            }
+                        ],
+                        "usage": {"prompt_tokens": 5, "completion_tokens": 7},
+                    }
+
+            return R()
+
+        with mock.patch.object(MistralAgentProvider, "_get_headers", return_value={}):
+            with mock.patch("capp.classes.agent_gateway.providers.openai_base.httpx.post", side_effect=fake_post):
+                provider = MistralAgentProvider()
+                result = provider.chat_completion(
+                    model="mistral-large-4",
+                    messages=[{"role": "user", "content": "Hi"}],
+                    params={"max_tokens": 1024},
+                )
+        self.assertEqual(result.status, "success")
+        self.assertIsNone(result.reasoning)
+        message = result.to_openai_response("mistral-large-4")["choices"][0]["message"]
+        self.assertEqual(message["content"], "Plain answer.")
+        self.assertNotIn("reasoning_content", message)
+
+    def test_cortecs_chunked_response_flattened_to_string(self):
+        """Cortecs' own chat_completion override shares the normalization, so
+        chunked upstream content never leaks into the relayed response."""
+        from capp.classes.agent_gateway.providers.cortecs import CortecsAgentProvider
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            class R:
+                def raise_for_status(self):
+                    pass
+
+                def json(self):
+                    return {
+                        "choices": [
+                            {
+                                "index": 0,
+                                "message": {
+                                    "role": "assistant",
+                                    "content": [
+                                        {"type": "thinking", "thinking": [{"type": "text", "text": "hmm"}]},
+                                        {"type": "text", "text": "chunked answer"},
+                                    ],
+                                },
+                                "finish_reason": "stop",
+                            }
+                        ],
+                        "usage": {"prompt_tokens": 5, "completion_tokens": 9},
+                    }
+
+            return R()
+
+        with mock.patch.object(CortecsAgentProvider, "_get_headers", return_value={}):
+            with override_settings(CORTECS_UWENZAI_AGENT_API_KEY="dummy"):
+                with mock.patch("capp.classes.agent_gateway.providers.cortecs.httpx.post", side_effect=fake_post):
+                    provider = CortecsAgentProvider()
+                    result = provider.chat_completion(
+                        model="kimi-k3",
+                        messages=[{"role": "user", "content": "Hi"}],
+                        params={"max_tokens": 64},
+                    )
+        self.assertEqual(result.status, "success")
+        self.assertEqual(result.text, "chunked answer")
+        message = result.to_openai_response("kimi-k3")["choices"][0]["message"]
+        self.assertEqual(message["content"], "chunked answer")
+        self.assertEqual(message["reasoning_content"], "hmm")
+
 
 # ============================================================================
 # 6. Billing Integration Tests
@@ -707,6 +873,35 @@ class AgentGatewayBillingTests(TestCase):
 
         reservation = reservations.first()
         self.assertEqual(reservation.status, BillingReservation.Status.SETTLED)
+
+    @mock.patch.dict("os.environ", {"CORTECS_UWENZAI_AGENT_API_KEY": "dummy"})
+    @override_settings(CORTECS_UWENZAI_AGENT_API_KEY="dummy", AGENT_FX_EUR_KES=145, AGENT_MARKUP_PERCENT=10)
+    @mock.patch("capp.classes.agent_gateway.providers.cortecs.CortecsAgentProvider.chat_completion")
+    def test_execute_request_relays_string_content_with_reasoning(self, mock_chat_completion):
+        """The relayed response must always carry a plain-string
+        choices[0].message.content; a reasoning model's thinking trace rides
+        in a separate reasoning_content field, never as a chunk list."""
+        from capp.classes.agent_gateway.providers.base import ProviderResult
+
+        mock_chat_completion.return_value = ProviderResult(
+            text="Final answer.",
+            usage={"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+            status="success",
+            model="deepseek-v4-flash",
+            reasoning="Thinking trace.",
+        )
+
+        result = AgentProxyService.execute_request(
+            key=self.key_record,
+            model="deepseek-v4-flash",
+            messages=[{"role": "user", "content": "Hi"}],
+            params={"max_tokens": 256},
+        )
+
+        message = result["choices"][0]["message"]
+        self.assertEqual(message["content"], "Final answer.")
+        self.assertEqual(message["reasoning_content"], "Thinking trace.")
+        self.assertEqual(result["_uwenzai"]["sparks_charged"], 1)
 
     @mock.patch.dict("os.environ", {"CORTECS_UWENZAI_AGENT_API_KEY": "dummy"})
     @override_settings(CORTECS_UWENZAI_AGENT_API_KEY="dummy", AGENT_FX_EUR_KES=145, AGENT_MARKUP_PERCENT=10)

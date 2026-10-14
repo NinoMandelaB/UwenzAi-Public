@@ -274,9 +274,11 @@ BESTIALITY_TERMS: Tuple[str, ...] = (
 )
 
 DECEASED_TERMS: Tuple[str, ...] = (
+    # "carcass", "the dead" and "mzoga" are matched in _DEATH_PROXIMITY_PATTERNS
+    # instead, so an animal's carcass or a dead fish is not a deceased person.
     "corpse",
     "cadaver",
-    "carcass",
+    "human carcass",
     "dead body",
     "dead person",
     "dead people",
@@ -288,7 +290,6 @@ DECEASED_TERMS: Tuple[str, ...] = (
     "dead girl",
     "dead boy",
     "deceased",
-    "the dead",
     "dying person",
     "dying man",
     "dying woman",
@@ -358,7 +359,6 @@ DECEASED_TERMS: Tuple[str, ...] = (
     # _DEATH_PROXIMITY_PATTERNS when they appear near a person noun.
     # Kiswahili
     "maiti",
-    "mzoga",
     "marehemu",
     "amefariki",
     "amekufa",
@@ -567,10 +567,122 @@ _NUMERIC_AGE_PATTERNS: Tuple[Pattern[str], ...] = (
     re.compile(rf"(?<![a-z0-9])umri\s+(?:wa\s+)?{_UNDER_18}(?![0-9])"),
 )
 
+# Hunting, fishing, food and dead animals are allowed (product decision,
+# 2026-10-14); bestiality stays prohibited through its own category. A death
+# word that describes an animal is therefore not a deceased person:
+#   * a death word directly followed by an animal noun, optionally after
+#     "of"/"wa"/"ya" and one article, demonstrative or number: "a woman holding
+#     a dead fish", "the man who killed two deer", "mzoga wa mbuzi";
+#   * "carcass" directly after an animal noun: "a goat carcass".
+# Death words about people are unaffected: "a man killed by a lion", "the
+# carcass of a woman", "a human carcass".
+_ANIMAL_NOUNS: Tuple[str, ...] = (
+    "animal",
+    "dog",
+    "cat",
+    "horse",
+    "goat",
+    "sheep",
+    "lamb",
+    "pig",
+    "boar",
+    "warthog",
+    "cow",
+    "bull",
+    "ox",
+    "oxen",
+    "calf",
+    "calves",
+    "donkey",
+    "mule",
+    "camel",
+    "chicken",
+    "hen",
+    "rooster",
+    "duck",
+    "goose",
+    "geese",
+    "turkey",
+    "bird",
+    "rabbit",
+    "hare",
+    "deer",
+    "antelope",
+    "gazelle",
+    "impala",
+    "kudu",
+    "eland",
+    "buffalo",
+    "wildebeest",
+    "zebra",
+    "giraffe",
+    "elephant",
+    "lion",
+    "leopard",
+    "cheetah",
+    "hyena",
+    "crocodile",
+    "hippo",
+    "snake",
+    "fish",
+    "tilapia",
+    "catfish",
+    "trout",
+    "salmon",
+    "tuna",
+    "shark",
+    "prawn",
+    "shrimp",
+    "crab",
+    "lobster",
+    "octopus",
+    "livestock",
+    "cattle",
+    "poultry",
+    # Kiswahili
+    "mnyama",
+    "wanyama",
+    "mbuzi",
+    "ng'ombe",
+    "kuku",
+    "samaki",
+    "kondoo",
+    "nguruwe",
+    "swala",
+    "nyati",
+)
+_ANIMAL_FORMS: Tuple[str, ...] = tuple(
+    sorted(
+        {
+            form
+            for noun in _ANIMAL_NOUNS
+            for form in (_normalise_term(noun), _normalise_term(noun) + "s", _normalise_term(noun) + "es")
+        },
+        key=len,
+        reverse=True,
+    )
+)
+_ANIMAL_NOUN = (
+    r"(?:" + "|".join(r"\s+".join(re.escape(word) for word in form.split(" ")) for form in _ANIMAL_FORMS) + r")"
+)
+# Articles, demonstratives and numbers only. Possessives are left out on purpose:
+# punctuation is dropped during normalisation, so "a man killed, his dog nearby"
+# would otherwise read as an animal being killed.
+_ANIMAL_DETERMINER = r"(?:a|an|the|this|that|these|those|some|one|two|three|four|five|several|many|[0-9]+)"
+# Negative lookahead placed right after a death word: the word describes an animal.
+_DESCRIBES_ANIMAL = rf"(?!\s+(?:(?:of|wa|ya)\s+)?(?:{_ANIMAL_DETERMINER}\s+)?{_ANIMAL_NOUN}(?![a-z0-9]))"
+# "carcass" is a death word unless an animal noun comes right before it. Like
+# "mzoga", it is only prohibited near a person noun: on its own, a carcass is
+# an animal's.
+_CARCASS = "carcass" + "".join(f"(?<!{re.escape(form)} carcass)" for form in _ANIMAL_FORMS) + "(?:es)?"
+
 # Bare death words are ambiguous on their own ("dead leaves"), so they are only
 # prohibited when they sit within a few words of a person noun, in either
 # order: "dead woman", "the woman is dead", "her husband, recently deceased".
-_DEATH_WORD = r"(?:dead|dying|died|dies|lifeless|deceased|expired|slain|murdered|killed|amekufa|amefariki|wamekufa)"
+_DEATH_WORD = (
+    r"(?:dead|dying|died|dies|lifeless|deceased|expired|slain|murdered|killed|amekufa|amefariki|wamekufa|"
+    r"mi?zoga|" + _CARCASS + r")"
+)
 _PERSON_WORD = (
     r"(?:person|people|human|man|men|woman|women|male|female|body|bodies|guy|"
     r"lady|ladies|wife|wives|husband|father|mother|dad|mum|mom|parent|"
@@ -581,8 +693,11 @@ _PERSON_WORD = (
 )
 _GAP = r"(?:\s+[a-z0-9]+){0,3}\s+"
 _DEATH_PROXIMITY_PATTERNS: Tuple[Pattern[str], ...] = (
-    re.compile(rf"(?<![a-z0-9]){_DEATH_WORD}{_GAP}{_PERSON_WORD}(?![a-z0-9])"),
-    re.compile(rf"(?<![a-z0-9]){_PERSON_WORD}{_GAP}{_DEATH_WORD}(?![a-z0-9])"),
+    re.compile(rf"(?<![a-z0-9]){_DEATH_WORD}{_DESCRIBES_ANIMAL}{_GAP}{_PERSON_WORD}(?![a-z0-9])"),
+    re.compile(rf"(?<![a-z0-9]){_PERSON_WORD}{_GAP}{_DEATH_WORD}(?![a-z0-9]){_DESCRIBES_ANIMAL}"),
+    # "the dead" as a noun means dead people ("the dead rising"); "the dead
+    # fish" is an animal.
+    re.compile(rf"(?<![a-z0-9])the\s+dead(?![a-z0-9]){_DESCRIBES_ANIMAL}"),
 )
 
 # Checked in this order; the first match wins.
